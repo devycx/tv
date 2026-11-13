@@ -75,6 +75,19 @@ const liveSources = [
     name: '4K 专区',
     url: 'https://gist.githubusercontent.com/yifanwang-yet/c2c9263066c0c5d20f50ce9b31d40e7e/raw/libretv-4k.m3u',
   },
+  // 2026-11-14 扩容：8 个全部按「全量频道逐个探测 200/206 + ACAO」筛选，约 1398 频道，
+  // 与上面 4 个合计 ~2061 频道；粗略估算约 619 条可直连（混合内容 http 流已排除）。
+  { name: '海外 FAST 频道（akiralereal）', url: 'https://raw.githubusercontent.com/akiralereal/iptv/main/IPTV-overseas.m3u' },
+  { name: 'GNTV 港台/国际/地方（YueChan）', url: 'https://raw.githubusercontent.com/YueChan/Live/main/GNTV.m3u' },
+  {
+    name: 'Collect-IPTV 省台/轮播',
+    url: 'https://raw.githubusercontent.com/zilong7728/Collect-IPTV/refs/heads/main/best_sorted.m3u',
+  },
+  { name: 'ChinaIPTV 台湾', url: 'https://raw.githubusercontent.com/hujingguang/ChinaIPTV/main/TaiWan.m3u8' },
+  { name: 'ChinaIPTV cnTV 自动更新', url: 'https://raw.githubusercontent.com/hujingguang/ChinaIPTV/main/cnTV_AutoUpdate.m3u8' },
+  { name: 'iptv-org 台湾', url: 'https://iptv-org.github.io/iptv/countries/tw.m3u' },
+  { name: 'iptv-org 香港', url: 'https://iptv-org.github.io/iptv/countries/hk.m3u' },
+  { name: 'Guovin iptv-api IPv4', url: 'https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/ipv4/result.m3u' },
 ];
 
 const config = {
