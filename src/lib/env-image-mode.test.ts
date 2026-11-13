@@ -23,14 +23,16 @@ describe('getEnvImageMode', () => {
     }
   });
 
-  it('合法取值（大小写不敏感，自动去空白）', () => {
-    for (const [raw, expected] of [
-      ['direct', 'direct'],
-      ['PROXY', 'proxy'],
-      [' proxy ', 'proxy'],
-    ] as const) {
-      process.env[KEY] = raw;
-      expect(getEnvImageMode()).toBe(expected);
+  it('direct 正常返回；已废弃的 proxy 归一为 direct 并告警', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    process.env[KEY] = 'DIRECT';
+    expect(getEnvImageMode()).toBe('direct');
+
+    for (const v of ['PROXY', ' proxy ']) {
+      warn.mockClear();
+      process.env[KEY] = v;
+      expect(getEnvImageMode()).toBe('direct');
+      expect(warn).toHaveBeenCalled();
     }
   });
 

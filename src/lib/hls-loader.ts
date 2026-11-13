@@ -1,3 +1,4 @@
+import { FetchLoader } from 'hls.js';
 import type HlsType from 'hls.js';
 import { stripAdGroups } from './m3u8';
 import { buildSegmentCacheKey, readCachedSegment, touchMeta } from './video-cache';
@@ -15,6 +16,11 @@ import { buildSegmentCacheKey, readCachedSegment, touchMeta } from './video-cach
  *
  * hls.js 对每次请求都会 new 一个 loader 实例，因此实例上的 destroyed 标记
  * 生命周期安全（abort/destroy 后不再回调，防孤儿 onSuccess）。
+ *
+ * 直连优化：基类用 hls.js 的 FetchLoader（而不是默认的 XhrLoader），并在
+ * fetchSetup 里显式设置 `credentials: 'omit'` 与 `referrerPolicy: 'no-referrer'`。
+ * XHR 无法按请求控制 Referrer-Policy，而直连站外源时携带页面 Referer 正是
+ * 防盗链最常见的拦截依据；浏览器禁止伪造 Referer，这里只能如实置空。
  */
 interface LoaderOptions {
   blockAd?: boolean;
@@ -25,18 +31,32 @@ interface LoaderOptions {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type HlsLoaderCtor = new (config: any) => any;
 
+/** 直连源站的 fetch 初始化：不向源站暴露来源页，也不带 cookie */
+function directFetchSetup(context: { url: string }, initParams: RequestInit): Request {
+  return new Request(context.url, {
+    ...initParams,
+    credentials: 'omit',
+    referrerPolicy: 'no-referrer',
+  });
+}
+
 export function createHlsLoader(
   HlsCtor: typeof HlsType,
   options: LoaderOptions = {}
 ): HlsLoaderCtor {
   const { blockAd = false, onProbe } = options;
+  // fetch 不可用的老浏览器退回默认 loader（fetchSetup 会被忽略，只损失直连优化，
+  // 播放本身不受影响）
+  const BaseLoader = (
+    typeof fetch === 'function' ? FetchLoader : HlsCtor.DefaultConfig.loader
+  ) as HlsLoaderCtor;
 
-  return class CacheFirstHlsLoader extends (HlsCtor.DefaultConfig.loader as HlsLoaderCtor) {
+  return class CacheFirstHlsLoader extends BaseLoader {
     private destroyed = false;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     constructor(config: any) {
-      super(config);
+      super({ ...config, fetchSetup: directFetchSetup });
       const load = this.load.bind(this);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

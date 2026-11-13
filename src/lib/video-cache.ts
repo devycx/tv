@@ -14,8 +14,8 @@ import { documentBaseURI } from './m3u8';
  *
  * key 一致性是缓存命中的前提：hls.js loader 请求分片时的 context.url 与预取器
  * 解析出的分片地址，都必须经 `new URL()` 归一化（抹平默认端口/百分号编码差异）。
- * 播放列表走代理改写形式（/api/proxy?url=…）时分片也是**本站根相对串**，
- * 不带基址的 `new URL()` 会原样放过——必须锚到文档基址才与绝对形式收敛为同一个 key。
+ * 清单里的分片可能是**根相对串**，不带基址的 `new URL()` 会原样放过——
+ * 必须锚到文档基址才与绝对形式收敛为同一个 key。
  */
 
 export const VIDEO_CACHE_NAME = 'libretv-video-v1';
@@ -74,7 +74,7 @@ export function saveCacheSettings(next: Partial<CacheSettings>): CacheSettings {
 
 /**
  * 分片缓存 key：归一化成绝对地址（两侧一致，缓存命中的前提）。
- * 以文档基址作基线，本站根相对的代理形式与绝对形式才会收敛到同一个串。
+ * 以文档基址作基线，根相对形式与绝对形式才会收敛到同一个串。
  */
 export function buildSegmentCacheKey(segmentUrl: string): string {
   try {

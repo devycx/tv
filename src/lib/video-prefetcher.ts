@@ -35,7 +35,7 @@ export interface PrefetchStats {
 }
 
 export interface PrefetchOptions {
-  /** 当前集 m3u8 地址（与播放器 loadSource 一致，直接直连或代理改写形式均可） */
+  /** 当前集 m3u8 地址（与播放器 loadSource 一致，直连源站） */
   m3u8Url: string;
   currentTime: number;
   /** 剧集标识 `${source}:${vodId}:${episodeIndex}`（LRU 按集淘汰的分组键） */
@@ -97,6 +97,8 @@ export function computeWindow(
 }
 
 export function shouldPrefetch(): boolean {
+  // 非浏览器环境（SSR / Node 单测）没有 navigator：按「可以预取」处理
+  if (typeof navigator === 'undefined') return true;
   const conn = (navigator as { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
   if (!conn) return true;
   if (conn.saveData) return false;
@@ -271,7 +273,13 @@ export class VideoPrefetcher {
         const key = buildSegmentCacheKey(task.url);
         const started = performance.now();
         try {
-          const res = await fetch(task.url, { signal: this.abort.signal, headers: { Accept: '*/*' } });
+          const res = await fetch(task.url, {
+            signal: this.abort.signal,
+            headers: { Accept: '*/*' },
+            // 与 hls.js loader 一致：直连源站不带 Referer / cookie
+            credentials: 'omit',
+            referrerPolicy: 'no-referrer',
+          });
           if (!res.ok) continue;
           const buffer = await res.arrayBuffer();
           if (generation !== this.generation) return;

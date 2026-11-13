@@ -30,10 +30,11 @@ export function formatDisableTtl(ms: number): string {
 }
 
 /**
- * 封面图加载地址：direct 直连 / proxy 内置代理 / custom 自定义模板（{url} 占位符或直接拼接）。
- * 默认 proxy（内置代理），规避豆瓣防盗链与部分采集站图床直连失败。
- * 代理走查询串形式（/api/proxy?url=…）：路径里的 %2F 会被 EdgeOne 等网关
- * 在路由匹配前解码成 /，查询串不受影响，全平台行为一致。
+ * 封面图加载地址：direct 原站直连 / custom 自定义模板（{url} 占位符或直接拼接）。
+ *
+ * 旧版内置图片代理（/api/proxy）已删除：Cloudflare 只提供页面/静态资源/JSON API，
+ * 封面也由浏览器直连（豆瓣走公共镜像，见 buildImageCandidates）。
+ * 「proxy」参数仅为兼容旧设置/旧配置导入保留，行为等同 direct。
  */
 export function buildImageUrl(
   url: string | undefined,
@@ -41,7 +42,7 @@ export function buildImageUrl(
   customTemplate: string
 ): string | undefined {
   if (!url) return undefined;
-  if (mode === 'proxy') return `/api/proxy?url=${encodeURIComponent(url)}`;
+  // 「proxy」是旧版内置图片代理模式，现已移除：一律按直连处理，不再经过本站 Worker。
   if (mode === 'custom' && customTemplate) {
     return customTemplate.includes('{url}')
       ? customTemplate.replace('{url}', encodeURIComponent(url))
@@ -51,32 +52,47 @@ export function buildImageUrl(
 }
 
 /**
- * 封面图降级候选链，各模式首选地址失败后由 SmartImage 按序回退（onError 逐级尝试）：
- * - direct 模式：原站直连 → cmliussss 公共镜像（腾讯 / 阿里，仅豆瓣图）→ 内置代理。
- *   doubanio 反爬对外域与空 Referer 分别返回 403 / 418，纯前端无法绕过；
- *   公共镜像实测直连可用，置于自家代理之前以节省服务器流量。
- * - proxy 模式：内置代理 → 公共镜像（仅豆瓣图）→ 原站直连。
- *   代理是全站封面的公共依赖，不能单点——代理故障时自动落到直连/镜像。
+ * 封面图降级候选链（全部为浏览器直连，不经本站 Worker）：
+ * - 非 custom 模式：豆瓣图优先走 cmliussss 公共镜像（net / com），再回退原站；
+ *   非豆瓣图只有原站一个候选。
+ *   doubanio 原站对外域/空 Referer 会返回 403/418，纯前端无法绕过，所以镜像排在最前。
  * - custom 模式为单一地址：模板错误应显式暴露，不被静默回退掩盖。
+ *
+ * 旧版「内置 /api/proxy 图片代理」已删除：Cloudflare 只提供页面/静态资源/JSON API，
+ * 封面也由客户端直连（`<img referrerPolicy="no-referrer">`）。
  */
 export function buildImageCandidates(
   url: string | undefined,
   mode: 'direct' | 'proxy' | 'custom',
   customTemplate: string
 ): string[] {
-  const built = buildImageUrl(url, mode, customTemplate);
-  if (!built || !url) return [];
-  const mirrors = url.includes('doubanio.com')
+  if (!url) return [];
+  if (mode === 'custom') {
+    const built = buildImageUrl(url, mode, customTemplate);
+    return built ? [built] : [];
+  }
+  const isDoubanHost = /(?:^|\.)doubanio\.com$/i.test(safeHostname(url)) || /(?:^|\.)doubanio\.viki\.moe$/i.test(safeHostname(url));
+  const mirrors = isDoubanHost
     ? [
-        url.replace(/img\d+\.doubanio\.com/g, 'img.doubanio.cmliussss.net'),
-        url.replace(/img\d+\.doubanio\.com/g, 'img.doubanio.cmliussss.com'),
+        url.replace(
+          /^(https?:\/\/)(?:img\d+\.doubanio\.com|doubanio\.viki\.moe)(?=\/)/i,
+          '$1img.doubanio.cmliussss.net'
+        ),
+        url.replace(
+          /^(https?:\/\/)(?:img\d+\.doubanio\.com|doubanio\.viki\.moe)(?=\/)/i,
+          '$1img.doubanio.cmliussss.com'
+        ),
       ]
     : [];
-  if (mode === 'proxy') {
-    return [...new Set([built, ...mirrors, url])];
+  return [...new Set([...mirrors, url])];
+}
+
+function safeHostname(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
   }
-  if (mode !== 'direct') return [built];
-  return [...new Set([built, ...mirrors, `/api/proxy?url=${encodeURIComponent(url)}`])];
 }
 
 export function validateSourceUrl(url: string): boolean {

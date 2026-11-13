@@ -20,36 +20,47 @@
 - 静态资源（`/_next/`、`/icons/`、favicon、manifest）匿名可访问，否则登录页会白屏；
 - 未配置 `PASSWORD` 时门禁 fail-open（页面放行，由前端提示管理员配置），避免误删 secret 把站点锁死。
 
+## 客户端直连（合规）
+
+Cloudflare 明确限制「站外托管的视频/大文件经其 CDN 分发给访客」
+（[Delivering Videos with Cloudflare](https://developers.cloudflare.com/fundamentals/reference/policies-compliances/delivering-videos-with-cloudflare/)）。
+因此本站 Worker **只提供页面、静态资源、JSON API**，所有视频与封面都由浏览器直连源站：
+
+- 点播/直播播放器只走直连；直连失败直接提示换源，不再回退 `/api/proxy` / `/api/live/stream`；
+- 「下载本集」也只走浏览器直连，CORS 失败提示换源；
+- `/api/proxy` 与 `/api/live/stream` 路由已删除（访问返回 404）；
+- 封面：豆瓣图优先走 `img.doubanio.cmliussss.net/.com` 公共镜像，再回退原站；
+  `referrerPolicy="no-referrer"` 规避部分图床的 Referer 校验；
+- 因此**不能改第三方 CORS**：源站不允许跨域（无 `Access-Control-Allow-Origin`）、
+  防盗链、或 `http://` 混合内容时，只能换源/换频道。这是合规改造的代价。
+
 ## 预置数据源
 
 `wrangler.jsonc` 的 `vars` 里预置了两类源，登录后自动勾选 / 启用，开箱即用：
 
 | 变量 | 内容 |
 | --- | --- |
-| `DEFAULT_SOURCES` | 15 个点播源（苹果CMS 采集站），其中前 5 个经线上 `/api/quality` 实测能返回清晰度 |
+| `DEFAULT_SOURCES` | 35 个点播源（苹果CMS 采集站），全部经线上 search + detail 复验通过；其中 2 个可测出画质 |
 | `DEFAULT_LIVE_SOURCES` | 4 个直播源（iptv-org 中国大陆 / zbds IPTV4 / aptv 综合 / 4K 专区） |
 
-- 画质实测通过（`height` 有数值）：无尽资源 720、极速资源 1080、爱坤资源 1080、电影天堂 1080、飘零资源 720。
-- 其余 10 个为补充覆盖（搜索/详情可用）。注意：Cloudflare 边缘访问部分源站的 m3u8 CDN 会 **HTTP 525（TLS 握手失败）**，这类源的个别影片可能无法播放，这是 Workers 出网限制，不是配置错误；站内健康度/换源会兜底。
+- 画质实测通过（`height` 有数值）：电影天堂 1080、飘零资源 720。
+- 其余源只验证到「搜索 + 详情有播放地址」；能否播放取决于源站 CORS / 防盗链 / 协议（见上一节），失败请换源。
 - 直播源：`/live` 页实测加载 600+ 频道。
 - 修改源：编辑 `scripts/gen-wrangler.mjs` 里的数组 → `node scripts/gen-wrangler.mjs` →
   `npx wrangler deploy`（只改变量，不用重新 build）。
 - 这些是**第三方公开接口**，可用性、内容与合规责任都不在本仓库。
 
-### 源调研结论（2026-11-14）
+### 源调研与合并结论（2026-11-14）
 
-按「线上 `/api/quality` 能返回 height」这一硬标准，可用源已经挖到平台天花板：
+| 轮次 | 输入 | 结果 |
+| --- | --- | --- |
+| qist/tvbox | 257 个配置 / 1779 条 sites → 39 个去重 CMS | 2 个可测画质（电影天堂、飘零）；其余多卡在 m3u8 CDN 的 525/530 |
+| gao / box / 2hacc / xianyuyimu 等 5 仓库 | 276 个配置 → 35 个新候选 | 0 个可测画质 |
+| 全量合并（放宽标准） | 101 条素材 → 83 组去重 → 68 组复验 | **35 个源 search+detail 通过**；整表聚合 177 条结果 / 0 失败 |
 
-| 来源 | 配置数 | 去重后 CMS 候选 | 通过画质 | 说明 |
-| --- | --- | --- | --- | --- |
-| qist/tvbox | 257 | 39 | 电影天堂 1080、飘零 720 | 其余主要卡在 m3u8 CDN 的 525/530 |
-| gao / box / 2hacc / xianyuyimu 等 5 个仓库 | 276 | 35（新） | 0 | 30 个搜索阶段就 525/530；3 个搜索+详情通过但画质 525 |
+失败原因以 525/530（源站 TLS）为主，另有 403/404/超时/非 JSON。Cloudflare 边缘访问
+部分源站 m3u8 CDN 的 525 问题，在直连模式下由浏览器网络决定，Worker 不再参与。
 
-结论：**卡点不是搜索/详情，而是 m3u8 CDN 的 TLS 在 Cloudflare 边缘不可用**（HTTP 525）。
-同一源换 http、换片种、换集数 CDN host 复测均不翻转。想再扩容只有两条路（未实施）：
-
-1. 放宽标准到「搜索+详情通过」，可再加约 12 个 near-miss 源，画质显示「未测到」；
-2. 把媒体代理放到非 Cloudflare 出口（VPS / 本机 cloudflared），可救回大部分 525 源。
 
 ## 日常命令
 
@@ -90,8 +101,9 @@ npm run cf:preview        # 默认 http://127.0.0.1:8787
 Next.js 15（App Router）+ OpenNext → 单个 Worker：
 
 - 页面（`/`、`/live`、`/watch`、`/about`）是静态预渲染，由 Workers Assets 直接出；
-- 所有 `/api/*` 是 Worker 里的 Route Handler（Node 兼容运行时，`nodejs_compat`）；
-- 首页推荐 / 搜索 / 代理等出网请求走 Cloudflare 边缘网络。
+- 所有 `/api/*` 是 Worker 里的 Route Handler（Node 兼容运行时，`nodejs_compat`），只出 JSON / 少量图片元数据；
+- 首页推荐 / 搜索 / 详情 / 直播列表等**文本请求**走 Cloudflare 边缘网络；
+- **媒体流量（m3u8 / ts / mp4 / flv）与封面图都不经过 Worker**，由浏览器直连源站。
 
 ## 为 Workers 改了什么
 
@@ -118,7 +130,10 @@ Node 版（Docker / `npm start`）继续用原来的 `src/lib/ssrf.ts`：undici 
 - **限流是单 isolate 内存实现**（登录 10 次 / 10 分钟）：多 isolate 时只是近似限流。
 - **内存缓存**（搜索短缓存、豆瓣推荐、直播列表）只活在单个 isolate 内，命中率看流量分布，属正常。
 - **实测 CPU**：`/` 约 17–26ms，`/api/status` 约 6–40ms，直播列表解析约 30ms，
-  13 源聚合搜索约 2.1s（其中 CPU 很小），均未被 CPU 限制掐断。
+  35 源聚合搜索约 2.7s（其中 CPU 很小），均未被 CPU 限制掐断。
+- **直连播放依赖源站 CORS**：没有 `Access-Control-Allow-Origin`、防盗链、或 `http://` 混合内容
+  的源只能换源；直播对这个更敏感（部分频道是 http 流）。
+- **封面依赖 cmliussss 公共镜像**：镜像不可用时豆瓣原站会返回 418/403，此时显示占位图。
 - `workers_dev: true` 保留了 `tv.ycxdev.workers.dev` 入口；不想要就把它设为 `false` 重新部署。
 - 站点源已预置；用户仍可在「设置 → 源管理」里自行增删、订阅或测活。
 

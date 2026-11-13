@@ -16,10 +16,9 @@ interface SmartImageProps {
 }
 
 /**
- * 带降级链的封面图组件：direct 模式按 buildImageCandidates 的顺序加载，
- * onError 逐级回退（豆瓣图：直连 → 公共镜像 → 内置代理）；
- * 全部失败后触发 onExhausted 并停止渲染，由调用方展示占位图。
- * referrerPolicy=no-referrer：不向图床暴露来源页，规避部分站点的 Referer 校验。
+ * 带降级链的封面图组件：按 buildImageCandidates 的顺序加载，onError 逐级回退
+ * （豆瓣图：公共镜像 → 原站直连）。全部失败后触发 onExhausted 并停止渲染，由调用方展示占位图。
+ * 封面全部由浏览器直连，不经本站 Worker；referrerPolicy=no-referrer 规避部分图床的 Referer 校验。
  */
 export function SmartImage({
   url,

@@ -35,6 +35,12 @@ import {
 const round1 = (v: number) => Math.round(v * 10) / 10;
 
 /**
+ * 直连失败的唯一出路：媒体字节不经 Worker（Cloudflare 不允许 CDN/Workers 分发站外视频），
+ * CORS / 防盗链拒绝没有代理兜底，只能明确提示用户换源。
+ */
+const DIRECT_ONLY_FAILURE = '该源不允许跨域直连（CORS / 防盗链），请更换来源';
+
+/**
  * 播放器外壳：ArtPlayer + hls.js（旧版 player.js 的 React 化）。
  * 保留：广告分片过滤、自动连播回调、进度回调、快捷键、移动端长按倍速、错误恢复。
  * 移除：DOM 手工操作、watch.html 跳转链、localStorage 状态总线。
@@ -177,15 +183,13 @@ export function PlayerShell({
   const playbackStartedRef = useRef(false);
   // 起播阶段的 video 元素级错误允许自愈重试一次（重建 hls/MSE）
   const videoErrorRetryUsedRef = useRef(false);
-  // 进度恢复每集只执行一次（MANIFEST_PARSED 可能因代理回退再次触发）
+  // 进度恢复每集只执行一次（MANIFEST_PARSED 可能因重建播放链路再次触发）
   const restoredRef = useRef(false);
   // 某些 HLS 源在 MANIFEST_PARSED 时 duration 仍未就绪，延迟到媒体元数据可用后恢复
   const restoreCleanupRef = useRef<(() => void) | null>(null);
   // timeupdate 续跑预取的游标：必须按集清零，否则会沿用上一集的时间戳推迟首次续跑
   const lastPrefetchEnsureRef = useRef(0);
-  // setupHls 可能改走代理形式，video:error 重试要用最近一次的地址
-  const currentMediaUrlRef = useRef(url);
-  // 本集的恢复策略实例：跨直连/代理两级重建共享计数
+  // 本集的恢复策略实例：video:error 重建播放链路时共享同一份计数
   const recoveryRef = useRef<PlaybackRecovery | null>(null);
   // 自然播完标记，卸载时不回写进度（避免覆盖「已看完」记录）
   const endedRef = useRef(false);
@@ -308,7 +312,7 @@ export function PlayerShell({
       return false;
     }
     lastSampleRef.current = seconds;
-    ensurePrefetch(currentMediaUrlRef.current, seconds);
+    ensurePrefetch(propsRef.current.url, seconds);
     return true;
   };
 
@@ -355,15 +359,15 @@ export function PlayerShell({
   };
 
   /**
-   * 初始化/切换 HLS。allowProxyFallback：直连致命网络错误（CORS/防盗链/分片被拒）时，
-   * 自动改走同源 cookie 鉴权的 /api/proxy 重试一次。
+   * 初始化/切换 HLS。
+   * 只直连源站：CORS / 防盗链失败不做任何服务器中转，直接提示换源（媒体字节不得经过
+   * Cloudflare Worker，见 Cloudflare 视频分发政策）。
    * 注意：不销毁 ArtPlayer，只销毁并重建 hls，从而保留网页全屏等播放器状态。
    */
-  const setupHls = (video: HTMLVideoElement, mediaUrl: string, allowProxyFallback: boolean) => {
+  const setupHls = (video: HTMLVideoElement, mediaUrl: string) => {
     restoreCleanupRef.current?.();
     restoreCleanupRef.current = null;
     hlsRef.current?.destroy();
-    currentMediaUrlRef.current = mediaUrl;
     const hls = new Hls(buildHlsConfig());
     hlsRef.current = hls;
 
@@ -440,17 +444,7 @@ export function PlayerShell({
         case 'ignore':
           break;
         case 'retry': {
-          // 前两次重试保留直连；达到退避阈值或清单级错误时升级为代理形式
-          // （同源 cookie 鉴权，规避 CORS/防盗链/分片被拒）
-          if (
-            allowProxyFallback &&
-            !mediaUrl.startsWith('/api/proxy') &&
-            (decision.attempt >= 2 || data.details === 'manifestLoadError')
-          ) {
-            showHint('直连失败，改用代理重试...');
-            setupHls(video, `/api/proxy?url=${encodeURIComponent(mediaUrl)}`, false);
-            return;
-          }
+          // 只重试直连本身：不构造任何代理地址，重试耗尽后由 switch-source 提示换源
           showHint(`${decision.reason}（第 ${decision.attempt} 次）...`);
           recovery.schedule(decision.delayMs, () => hls.startLoad());
           break;
@@ -463,11 +457,18 @@ export function PlayerShell({
         }
         case 'switch-source': {
           // 覆盖播放开始后的场景：起播失败走 setError 遮罩；
-          // 播放中失败走回调弹换源面板（父级未提供回调时同样 setError）
-          const message = `${describeHlsError(data.type, data.details)}：${decision.reason}`;
+          // 播放中失败走回调弹换源面板（父级未提供回调时只留 hint）。
+          // 网络类硬失败（含 manifestLoadError 重试耗尽）几乎都是 CORS / 防盗链，
+          // 直连是唯一路径，所以文案必须把「换源」讲清楚。
+          const networkFailure = data.type === Hls.ErrorTypes.NETWORK_ERROR;
+          const message = networkFailure
+            ? `${describeHlsError(data.type, data.details)}，${DIRECT_ONLY_FAILURE}`
+            : `${describeHlsError(data.type, data.details)}：${decision.reason}`;
           if (playbackStartedRef.current) {
             showHint(message);
-            propsRef.current.onRequestSwitchSource?.(decision.reason);
+            propsRef.current.onRequestSwitchSource?.(message);
+          } else if (networkFailure) {
+            setError(message);
           } else {
             setError(`视频加载失败，${message}，请尝试其他视频源`);
           }
@@ -499,7 +500,7 @@ export function PlayerShell({
     setShowPoster(true);
     const art = artRef.current;
     if (!art) return;
-    setupHls(art.video, targetUrl, true);
+    setupHls(art.video, targetUrl);
   };
 
   // —— 创建播放器（仅一次，挂载即创建） ——
@@ -578,7 +579,7 @@ export function PlayerShell({
       ],
       customType: {
         m3u8: (video: HTMLVideoElement, mediaUrl: string) => {
-          setupHls(video, mediaUrl, true);
+          setupHls(video, mediaUrl);
         },
       },
     });
@@ -618,9 +619,9 @@ export function PlayerShell({
      * 换源会让媒体元素重新走一遍 load 算法，而该算法只动一个播放属性：
      * `playbackRate = defaultPlaybackRate`。所以只要让 defaultPlaybackRate 始终
      * 等于用户选的倍速，这次「归位」就变成空操作——而且一次覆盖全部重载路径：
-     * 换集、直连失败转代理、video:error 重建，以及 hls.js 内部
-     * recoverMediaError 的 detach/attach（那条路径不经过 setupHls，只在
-     * loadEpisode 里补写 playbackRate 是够不着的）。
+     * 换集、video:error 重建，以及 hls.js 内部 recoverMediaError 的
+     * detach/attach（那条路径不经过 setupHls，只在 loadEpisode 里补写
+     * playbackRate 是够不着的）。
      *
      * 判断依据：归位时新值必然等于 defaultPlaybackRate，跳过即可。必须跳过——
      * 归位确实会派发 ratechange，无差别同步会把默认值自己写成 1，机制当场失效。
@@ -699,7 +700,7 @@ export function PlayerShell({
       if (!playbackStartedRef.current && !videoErrorRetryUsedRef.current) {
         videoErrorRetryUsedRef.current = true;
         showHint('播放异常，正在重试...');
-        setupHls(art.video, currentMediaUrlRef.current, true);
+        setupHls(art.video, propsRef.current.url);
         return;
       }
       setError('视频播放失败，请尝试其他视频源');
@@ -713,9 +714,7 @@ export function PlayerShell({
       // 每 30s 续跑一次前向预取窗口（ensure 幂等，窗口未覆盖足够余量才会重建）
       if (now - lastPrefetchEnsureRef.current > 30_000) {
         lastPrefetchEnsureRef.current = now;
-        // 用 currentMediaUrlRef（代理回退后的实际地址）：否则预取的 key 与
-        // loader 读取的 key 不一致，缓存永不命中且直连 fetch 白耗流量
-        ensurePrefetch(currentMediaUrlRef.current, art.currentTime);
+        ensurePrefetch(propsRef.current.url, art.currentTime);
       }
 
       // —— 跳过片段判定 ——
@@ -767,7 +766,7 @@ export function PlayerShell({
       updateSkipPrompt(prompt);
     });
     art.on('video:seeked', () => {
-      ensurePrefetch(currentMediaUrlRef.current, art.currentTime);
+      ensurePrefetch(propsRef.current.url, art.currentTime);
       // seek 是用户主动行为：拉平采样基准，避免下一拍被误判为「连续越过片尾」。
       // 暂停中 seek 不会触发 timeupdate，这里也同步刷新按钮的显隐。
       const current = art.currentTime;
@@ -784,7 +783,7 @@ export function PlayerShell({
       // 暂停 = 预取黄金窗口：解除限速并无限铺满整集（用户主动行为，带宽占用可接受）
       // waiting 触发的限速在此解除，否则黄金窗口会被 500ms 轮询冻结
       getVideoPrefetcher().setThrottled(false);
-      ensurePrefetch(currentMediaUrlRef.current, art.currentTime, 0);
+      ensurePrefetch(propsRef.current.url, art.currentTime, 0);
     });
     art.on('video:waiting', () => {
       // 卡顿：预取临时让出带宽给播放
@@ -1057,8 +1056,7 @@ export function PlayerShell({
   useEffect(() => {
     if (firstAdFilterRef.current) { firstAdFilterRef.current = false; return; }
     if (artRef.current && hlsRef.current) {
-      // 用当前实际媒体地址：代理回退生效时切广告过滤不应跳回直连形式
-      loadEpisode(currentMediaUrlRef.current || propsRef.current.url);
+      loadEpisode(propsRef.current.url);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [adFilter]);

@@ -233,7 +233,7 @@ describe('runDownloadJob · 源站缺片与存储错误', () => {
     expect(progress.at(-1)?.status).toBe('done');
   });
 
-  it('proxy 开启：m3u8 经 /api/proxy 拉取（直连被 CORS / 混合内容拦下时的兜底）', async () => {
+  it('全部直连：播放列表始终从源站地址拉取，不经过任何代理', async () => {
     stubCaches();
     const calls: string[] = [];
     vi.stubGlobal(
@@ -241,18 +241,18 @@ describe('runDownloadJob · 源站缺片与存储错误', () => {
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         calls.push(url);
-        if (url.startsWith('/api/proxy?')) return new Response(PLAYLIST, { status: 200 });
+        if (url.endsWith('index.m3u8')) return new Response(PLAYLIST, { status: 200 });
         return new Response(new Uint8Array([0x47]), { status: 200 });
       })
     );
 
-    await runDownloadJob(jobOptions({ proxy: true }));
+    await runDownloadJob(jobOptions());
 
-    expect(calls[0]).toBe(`/api/proxy?url=${encodeURIComponent('https://cdn.example.com/index.m3u8')}`);
-    expect(calls).not.toContain('https://cdn.example.com/index.m3u8');
+    expect(calls[0]).toBe('https://cdn.example.com/index.m3u8');
+    expect(calls.some((u) => u.startsWith('/api/proxy'))).toBe(false);
   });
 
-  it('跨域或域名不可达导致的 Failed to fetch 翻译成「建议更换来源」', async () => {
+  it('跨域或域名不可达导致的 Failed to fetch 翻译成「该源不允许跨域下载」', async () => {
     stubCaches();
     vi.stubGlobal(
       'fetch',
@@ -262,7 +262,7 @@ describe('runDownloadJob · 源站缺片与存储错误', () => {
     );
 
     await expect(runDownloadJob(jobOptions())).rejects.toThrow(
-      /无法直连该来源（跨域限制或域名不可达），建议更换来源/
+      /该源不允许跨域下载（跨域限制或域名不可达），请更换来源/
     );
   });
 

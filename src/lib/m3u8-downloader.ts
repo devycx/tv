@@ -1,4 +1,3 @@
-import { isProxiedUri, PROXY_BASE } from './m3u8';
 import { parseM3u8Playlist, type ParsedPlaylist } from './m3u8-parse';
 import { StreamingTransmuxer } from './mp4-transmuxer';
 
@@ -8,7 +7,9 @@ import { StreamingTransmuxer } from './mp4-transmuxer';
  *   （`libretv-dl-v1` 桶）实现网络层断点——中断后续传不再耗流量；
  * - AES-128 解密用 WebCrypto AES-CBC（HLS 标准），不引入 CryptoJS；
  * - 输出：TS 直接顺序拼接；MP4 经 mux.js 流式转封装（边下边写，不聚整集）；
- * - 保存目标（FS Access / 内存）由调用方在用户手势内选好传入，本模块只管写。
+ * - 保存目标（FS Access / 内存）由调用方在用户手势内选好传入，本模块只管写；
+ * - 全部直连源站：CORS / 防盗链拒绝不做服务器中转（媒体字节不得经过 Worker），
+ *   失败时明确提示换源。
  *
  * 文件层断点的现实约束：FS Access 句柄与内存 Blob 都活不过页面刷新，
  * 因此「断点续传」指网络层——刷新后重试同一任务会跳过已下载的分片，
@@ -102,7 +103,13 @@ class SegmentFetchError extends Error {
 }
 
 async function fetchSegment(url: string, signal: AbortSignal): Promise<ArrayBuffer> {
-  const res = await fetch(url, { signal: AbortSignal.any([AbortSignal.timeout(SEGMENT_TIMEOUT_MS), signal]), headers: { Accept: '*/*' } });
+  const res = await fetch(url, {
+    signal: AbortSignal.any([AbortSignal.timeout(SEGMENT_TIMEOUT_MS), signal]),
+    headers: { Accept: '*/*' },
+    // 直连源站：不带 Referer / cookie，减少防盗链误伤（浏览器禁止伪造 Referer）
+    credentials: 'omit',
+    referrerPolicy: 'no-referrer',
+  });
   if (!res.ok) {
     // 5xx / 408 / 429 多为源站抖动或限流，值得退避重试；其余 4xx 视为确定性缺失
     const retryable = res.status >= 500 || res.status === 408 || res.status === 429;
@@ -177,12 +184,6 @@ export interface DownloadJobOptions {
   onProgress: (p: DownloadProgress) => void;
   /** 在用户手势内选好的保存目标 */
   target: import('./download-saver').SaveTarget;
-  /**
-   * 经服务器中转下载：m3u8 改由 /api/proxy 拉取，返回内容里的分片/key 已按代理
-   * 地址重写，于是整集流量同源经过服务器——源站跨域 / 防盗链 / 混合内容导致
-   * 直连失败时的兜底。默认关闭（服务器带宽成本由部署者承担）。
-   */
-  proxy?: boolean;
 }
 
 /** 无 Cache Storage 的降级：串行下载并立即写出，不落缓存（无断点、并发 1） */
@@ -219,18 +220,18 @@ async function runStreamingJob(ctx: {
 
 /**
  * 把解析阶段的失败翻译成可操作的原因。浏览器直连被 CORS / 混合内容 / DNS 拦下时，
- * fetch 只会给出 `TypeError: Failed to fetch`——对用户没有任何信息量。而下载链路
- * 没有播放器那样的代理回退（player-shell 遇直连致命错误会改走 /api/proxy），
- * 所以「能播不能下」多半卡在这里，必须把下一步该做什么讲清楚。
+ * fetch 只会给出 `TypeError: Failed to fetch`——对用户没有任何信息量。下载链路
+ * 不做任何服务器中转（媒体字节不得经过 Worker），所以「能播不能下」多半卡在这里，
+ * 必须明确告诉用户唯一的出路是换源。
  */
 function describeParseFailure(url: string, err: unknown): string {
   const reason = err instanceof Error ? err.message : '未知错误';
   const base = `播放列表解析失败：${reason}`;
   if (!/failed to fetch|networkerror|load failed/i.test(reason)) return base;
   if (isMixedContentBlocked(url)) {
-    return `${base}——该来源是 HTTP 地址，HTTPS 页面无法直连下载（混合内容被拦截），建议更换来源`;
+    return `${base}——该来源是 HTTP 地址，HTTPS 页面无法直连下载（混合内容被拦截），请更换来源`;
   }
-  return `${base}——无法直连该来源（跨域限制或域名不可达），建议更换来源`;
+  return `${base}——该源不允许跨域下载（跨域限制或域名不可达），请更换来源`;
 }
 
 /** 页面是 HTTPS 而目标是 http:// 时，浏览器按混合内容策略直接拦截 */
@@ -264,16 +265,12 @@ export async function runDownloadJob(opts: DownloadJobOptions): Promise<void> {
     });
   };
 
-  // —— 解析（重试 2 次） ——
-  // 代理模式：m3u8 经 /api/proxy 拉取，代理会把内容里的分片/key 一并重写为代理
-  // 地址，因此后续分片请求自动同源——这是直连被 CORS / 混合内容拦下时的兜底
-  // （与播放器一致：player-shell 遇致命直连错误也会改走代理）。
-  const playlistUrl = opts.proxy && !isProxiedUri(url) ? `${PROXY_BASE}${encodeURIComponent(url)}` : url;
+  // —— 解析（重试 2 次，全部直连源站） ——
   let parsed: ParsedPlaylist;
   let lastErr: unknown;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      parsed = await parseM3u8Playlist(playlistUrl, 0, undefined, { stripLeadAd: true });
+      parsed = await parseM3u8Playlist(url, 0, undefined, { stripLeadAd: true });
       lastErr = undefined;
       break;
     } catch (err) {
@@ -291,7 +288,11 @@ export async function runDownloadJob(opts: DownloadJobOptions): Promise<void> {
   // —— AES key 预取 ——
   let aesKey: ArrayBuffer | undefined;
   if (parsed.aesConf) {
-    const res = await fetch(parsed.aesConf.uri, { signal: jobSignal });
+    const res = await fetch(parsed.aesConf.uri, {
+      signal: jobSignal,
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
+    });
     if (!res.ok) throw new Error(`解密密钥加载失败：HTTP ${res.status}`);
     aesKey = await res.arrayBuffer();
   }

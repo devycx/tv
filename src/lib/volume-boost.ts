@@ -38,7 +38,7 @@ export const VOLUME_BOOST_GAIN = 1.8;
  * 判断当前媒体源能否安全接入 Web Audio。
  *
  * - blob: / data:：hls.js、mpegts.js 的 MediaSource 产物，或本地数据 → 安全
- * - 同源（含 /api/proxy、/api/live/stream 等本地代理路径）→ 安全
+ * - 同源（本站接口 / 静态资源路径）→ 安全
  * - 跨域：仅当 <video crossOrigin="anonymous"> 已启用时才安全
  *   （点播 player-shell 已设 crossOrigin；直播直连跨域流未设，跳过）
  */
@@ -54,7 +54,7 @@ export function isWebAudioSafeForVideo(video: HTMLVideoElement): boolean {
   try {
     const url = new URL(src, typeof window !== 'undefined' ? window.location.href : undefined);
     const origin = typeof window !== 'undefined' ? window.location.origin : undefined;
-    // 相对/无协议 URL（如 /api/proxy?url=…）解析后同源，安全
+    // 相对/无协议 URL（如 /player-poster.png）解析后同源，安全
     if (url.protocol === 'http:' || url.protocol === 'https:') {
       if (origin && url.origin === origin) return true;
     }

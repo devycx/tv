@@ -12,7 +12,7 @@ export interface FetchOptions extends RequestInit {
   safeRedirects?: boolean;
   /**
    * 直播场景放行内网地址（自建 IPTV）：仅在部署者设置 LIVE_ALLOW_PRIVATE=1 时生效。
-   * 校验复用 checkLiveUrlAllowed，与直播流代理使用同一把尺子。
+   * 校验复用 checkLiveUrlAllowed，与直播源探活/订阅拉取使用同一把尺子。
    */
   allowPrivate?: boolean;
 }
@@ -30,15 +30,9 @@ export interface FetchResult {
 export interface SafeRedirectOptions {
   /**
    * 直播场景放行内网地址（自建 IPTV）：仅在部署者设置 LIVE_ALLOW_PRIVATE=1 时生效。
-   * 校验复用 checkLiveUrlAllowed，与直播流代理使用同一把尺子。
+   * 校验复用 checkLiveUrlAllowed，与直播源探活/订阅拉取使用同一把尺子。
    */
   allowPrivate?: boolean;
-  /**
-   * 仅对「响应头等待」限时（直播流专用）：对整个 body 限时会切断
-   * HTTP-FLV 单一无限长连接，故拿到响应头后立即清除计时器，body 不再受限。
-   * 超时触发即整链失败（内部 controller 已 abort，对齐直播路由原行为）。
-   */
-  headerTimeoutMs?: number;
 }
 
 /** 归一化连接层 SSRF 拦截错误为用户友好提示 */
@@ -68,10 +62,10 @@ export async function fetchWithSafeRedirects(
   init: Omit<RequestInit, 'redirect'> = {},
   options: SafeRedirectOptions = {}
 ): Promise<FetchResult> {
-  const { allowPrivate = false, headerTimeoutMs } = options;
+  const { allowPrivate = false } = options;
   return runWithSSRFProtection({ allowPrivate }, async () => {
     let current = url;
-    // headerTimeout 超时即 abort 内部 controller；外部 signal（调用方死线/客户端断开）链入同一 controller
+    // 外部 signal（调用方死线/客户端断开）链入内部 controller，保证可统一中断
     const controller = new AbortController();
     if (init.signal) {
       if (init.signal.aborted) controller.abort(init.signal.reason);
@@ -84,14 +78,11 @@ export async function fetchWithSafeRedirects(
       if (!verdict.ok) {
         throw new Error(`跳转目标被拒绝: ${verdict.reason}`);
       }
-      const timer = headerTimeoutMs ? setTimeout(() => controller.abort(), headerTimeoutMs) : null;
       let res: Response;
       try {
         res = await fetch(current, { ...init, signal: controller.signal, redirect: 'manual' });
       } catch (err: unknown) {
         normalizeSSRFError(err);
-      } finally {
-        if (timer) clearTimeout(timer);
       }
       if (!REDIRECT_STATUSES.has(res.status)) return { res, finalUrl: current };
       const location = res.headers.get('location');

@@ -685,11 +685,11 @@ function VideoCachePanel() {
 
 function ImagePanel() {
   const store = useAppStore();
-  const mode = store.imageProxyMode;
-  const description: Record<'direct' | 'proxy' | 'custom', string> = {
-    direct: '原站直连；豆瓣封面自动换公共镜像，仍失败回退内置代理。最省服务器流量',
-    proxy: '封面优先经本站服务器转发并伪装来源，失败自动回退公共镜像/直连。最稳定，消耗服务器流量',
-    custom: '使用你填写的模板转发封面图',
+  // 旧版「内置图片代理」已移除：持久化里的 'proxy' 一律按直连展示与处理
+  const mode = store.imageProxyMode === 'custom' ? 'custom' : 'direct';
+  const description: Record<'direct' | 'custom', string> = {
+    direct: '浏览器直连；豆瓣封面自动走公共镜像（cmliussss），封面流量不经本站',
+    custom: '使用你填写的模板转发封面图（第三方服务，不经本站）',
   };
   return (
     <section>
@@ -699,10 +699,9 @@ function ImagePanel() {
           label="加载方式"
           value={mode}
           description={description[mode]}
-          onChange={(v) => store.updateSettings({ imageProxyMode: v as 'direct' | 'proxy' | 'custom' })}
+          onChange={(v) => store.updateSettings({ imageProxyMode: v as 'direct' | 'custom' })}
           options={[
-            { value: 'direct', label: '直连优先', hint: '最省服务器流量' },
-            { value: 'proxy', label: '内置代理', hint: '最稳定' },
+            { value: 'direct', label: '直连（推荐）', hint: '封面不经本站' },
             { value: 'custom', label: '自定义', hint: '自建转发模板' },
           ]}
         />

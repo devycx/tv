@@ -13,15 +13,10 @@ import { attachVolumeBoost, type VolumeBoostHandle } from '@/lib/volume-boost';
  * - 引擎分发：.m3u8 → hls.js（直播参数）；.flv → mpegts.js（动态加载，按需 ~150KB）；
  *   mp4/webm 等原生容器 → <video> 直接播放；
  * - 无扩展名的地址（如 /channel/xxx?token=...）默认按 HLS 处理，
- *   HLS 直连与代理均失败后**回退原生播放**一次（覆盖"内容是 MP4 却无 .m3u8 后缀"的源）；
- * - 每级直连失败自动切换到 /api/live/stream 代理通道重试一次；
+ *   HLS 直连失败后**回退原生播放**一次（覆盖"内容是 MP4 却无 .m3u8 后缀"的源）；
+ * - 只直连源站：CORS / 防盗链失败不经过任何服务器中转，直接提示换频道；
  * - 直播态 UI：无进度条、无倍速、无截图、无连播。
  */
-
-/** 代理地址前缀（新旧形式 /api/live/stream/… 与 /api/live/stream?url=… 的共同前缀，用于防二次代理） */
-const STREAM_PROXY_PREFIX = '/api/live/stream';
-/** 代理地址（查询串形式：路径里的 %2F 会被 EdgeOne 等网关归一化，查询串不受影响） */
-const STREAM_PROXY_BASE = '/api/live/stream?url=';
 
 export function isFlvUrl(url: string): boolean {
   return /\.flv(\?|$)/i.test(url);
@@ -38,12 +33,14 @@ function engineOf(url: string): Engine {
   return 'hls';
 }
 
-function proxyUrl(url: string): string {
-  return STREAM_PROXY_BASE + encodeURIComponent(url);
-}
+/**
+ * 直连失败的唯一出路：媒体字节不经 Worker（Cloudflare 不允许 CDN/Workers 分发站外视频），
+ * CORS / 防盗链拒绝没有代理兜底，只能明确提示用户换频道。
+ */
+const DIRECT_ONLY_FAILURE = '该源不允许跨域直连（CORS / 防盗链）或已失效，请更换频道';
 
 interface LivePlayerProps {
-  /** 上游直播流地址（直连优先，失败自动走代理） */
+  /** 上游直播流地址（只直连源站） */
   url: string;
   title: string;
   /** 上一台/下一台：传入时注册为播放器控制条按钮（全屏内也可操作） */
@@ -122,13 +119,12 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
 
     /**
      * 原生播放：mp4/webm 等容器交给 <video> 直接播放。
-     * 也作为 HLS 两级都失败后的兜底——覆盖"地址没有 .m3u8 后缀但内容其实是 MP4"的源。
-     * 直连失败（CORS/混合内容）时再走一次代理。
+     * 也作为 HLS 直连失败后的兜底——覆盖"地址没有 .m3u8 后缀但内容其实是 MP4"的源。
+     * 失败即报错：不经过任何代理。
      */
     const setupNative = (
       video: HTMLVideoElement,
       mediaUrl: string,
-      allowProxyFallback: boolean,
       failMessage?: string
     ) => {
       cleanupEngines();
@@ -136,11 +132,6 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
         video.removeEventListener('error', onError);
         nativeCleanup = null;
         if (disposed || destroyed) return;
-        if (allowProxyFallback && !mediaUrl.startsWith(STREAM_PROXY_PREFIX)) {
-          showHint('直连失败，改用代理重试...');
-          setupNative(video, proxyUrl(url), false, failMessage);
-          return;
-        }
         setError(failMessage || '该地址不是可播放的直播流（内容可能是文件或错误提示）');
       };
       video.addEventListener('error', onError);
@@ -151,7 +142,7 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
     };
 
     /** HLS 直播参数：小缓冲、快速追帧；与点播（大缓冲、进度恢复）刻意区分 */
-    const setupHls = (video: HTMLVideoElement, mediaUrl: string, stage: 'direct' | 'proxy') => {
+    const setupHls = (video: HTMLVideoElement, mediaUrl: string) => {
       cleanupEngines();
       let liveNetRetryCount = 0;
       let mediaRecoverCount = 0;
@@ -199,19 +190,14 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
           return;
         }
         if (!playbackStarted) {
-          if (
-            stage === 'direct' &&
-            !mediaUrl.startsWith(STREAM_PROXY_PREFIX) &&
-            (data.details === 'manifestLoadError' || data.type === Hls.ErrorTypes.NETWORK_ERROR)
-          ) {
-            showHint('直连失败，改用代理重试...');
-            // 直播 manifest 重写需要本站前缀，交给代理通道
-            setupHls(video, proxyUrl(url), 'proxy');
-            return;
-          }
-          // HLS 直连与代理均失败：可能是"无 .m3u8 后缀但内容是 MP4"的源，回退原生播放
+          // HLS 直连失败：可能是"无 .m3u8 后缀但内容是 MP4"的源，回退原生播放一次；
+          // 原生也失败就明确报错，不再经过任何代理。
           showHint('HLS 解析失败，尝试原生播放...');
-          setupNative(video, url, true, `直播流加载失败${codeHint}，可能该频道已失效，请尝试其他频道`);
+          setupNative(
+            video,
+            url,
+            `直播流加载失败${codeHint}，${DIRECT_ONLY_FAILURE}`
+          );
           return;
         }
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
@@ -226,11 +212,7 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
       });
     };
 
-    const setupFlv = async (
-      video: HTMLVideoElement,
-      mediaUrl: string,
-      allowProxyFallback: boolean
-    ) => {
+    const setupFlv = async (video: HTMLVideoElement, mediaUrl: string) => {
       cleanupEngines();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let Mpegts: any;
@@ -264,12 +246,7 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
       player.load();
       player.on(Mpegts.Events.ERROR, (errType: string) => {
         if (disposed || destroyed) return;
-        if (!playbackStarted && allowProxyFallback && !mediaUrl.startsWith(STREAM_PROXY_PREFIX)) {
-          showHint('直连失败，改用代理重试...');
-          void setupFlv(video, proxyUrl(url), false);
-          return;
-        }
-        setError(`直播流加载失败（${errType}），请尝试其他频道`);
+        setError(`直播流加载失败（${errType}），${DIRECT_ONLY_FAILURE}`);
       });
       player.play().catch(() => {});
     };
@@ -332,13 +309,13 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
       moreVideoAttr: { playsInline: true },
       customType: {
         m3u8: (video: HTMLVideoElement) => {
-          setupHls(video, url, 'direct');
+          setupHls(video, url);
         },
         flv: (video: HTMLVideoElement) => {
-          void setupFlv(video, url, true);
+          void setupFlv(video, url);
         },
         mp4: (video: HTMLVideoElement) => {
-          setupNative(video, url, true);
+          setupNative(video, url);
         },
       },
     });
@@ -355,7 +332,7 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
       setShowPoster(false);
       setError('');
       // 音量放大：起播后（src 已就绪）才挂增益图。默认关闭时完全不接入；
-      // 跨域直连流会自动跳过，代理/hls.js 的 blob: 源可安全放大；失败一律原样播放。
+      // 跨域直连流会自动跳过，hls.js 的 blob: 源可安全放大；失败一律原样播放。
       if (volumeBoostSettingRef.current && !volumeBoostRef.current) {
         volumeBoostRef.current = attachVolumeBoost(art.video);
       }
@@ -375,7 +352,7 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
     // 15s 内未起播则提示
     const startTimer = setTimeout(() => {
       if (!playbackStarted && !disposed && !destroyed) {
-        setError('频道加载超时，可能该源已失效，请尝试其他频道');
+        setError(`频道加载超时，${DIRECT_ONLY_FAILURE}`);
       }
     }, 15000);
 

@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeWindow, indexAtTime, VideoPrefetcher } from './video-prefetcher';
 import { buildSegmentCacheKey, clearVideoCache } from './video-cache';
 import { parseM3u8Playlist } from './m3u8-parse';
-import { rewriteM3u8 } from './m3u8';
 
 afterEach(async () => {
   vi.unstubAllGlobals();
@@ -174,28 +173,24 @@ describe('VideoPrefetcher.ensure 幂等', () => {
   });
 });
 
-describe('缓存 key 归一（代理形态根相对地址）', () => {
+describe('缓存 key 归一（根相对地址）', () => {
   const APP = 'https://app.example.com';
-  const UPSTREAM = 'https://cdn.example.com/live/index.m3u8';
-  const MANIFEST = `/api/proxy?url=${encodeURIComponent(UPSTREAM)}`;
 
   beforeEach(() => {
     vi.stubGlobal('document', { baseURI: `${APP}/watch` });
   });
 
-  it('同一分片的相对形式与绝对形式收敛为同一个 key', () => {
-    const rel = '/api/proxy?url=https%3A%2F%2Fcdn.example.com%2Flive%2Fseg1.ts';
+  it('同一分片的根相对形式与绝对形式收敛为同一个 key', () => {
+    const rel = '/segments/seg1.ts';
     expect(buildSegmentCacheKey(rel)).toBe(buildSegmentCacheKey(`${APP}${rel}`));
   });
 
-  it('代理回退下预取解析出的分片地址与 hls.js 解析同一行完全一致', async () => {
-    // 服务端 /api/proxy 下发给播放器的正是这个改写后的 body（分片为本站根相对地址）
-    const proxied = rewriteM3u8('#EXTM3U\n#EXTINF:5,\nseg1.ts', UPSTREAM);
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(proxied, { status: 200 })));
-
-    const parsed = await parseM3u8Playlist(MANIFEST);
-    const loaderUrl = new URL(proxied.split('\n')[2], `${APP}${MANIFEST}`).href;
-
-    expect(parsed.segments[0].url).toBe(loaderUrl);
+  it('清单里的相对分片按清单地址绝对化，与播放器解析结果一致', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('#EXTM3U\n#EXTINF:5,\nseg1.ts', { status: 200 })));
+    const parsed = await parseM3u8Playlist('https://cdn.example.com/live/index.m3u8');
+    expect(parsed.segments[0].url).toBe('https://cdn.example.com/live/seg1.ts');
+    expect(buildSegmentCacheKey(parsed.segments[0].url)).toBe(
+      buildSegmentCacheKey('https://cdn.example.com/live/seg1.ts')
+    );
   });
 });

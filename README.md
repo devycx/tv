@@ -18,7 +18,7 @@ LibreTV Next.js 迁移版：免费在线视频聚合搜索与观看平台。基�
 - **聚合搜索**：多采集站服务端并行搜索
 - **跨源同名聚合**：同名影片合并为一张卡片，展开即可比较和选择各来源
 - **HLS 播放**：ArtPlayer + hls.js，广告分片过滤、跳过片段（片头/中段/片尾标记与自动跳过）、自动连播、倍速、快捷键、移动端长按 3 倍速
-- **直播 / IPTV**：M3U 订阅解析，`/live` 页面按分组浏览、搜索频道并站内播放（HLS + HTTP-FLV），支持 XMLTV 节目单（EPG）与频道收藏；直播流经专用长连接代理（`/api/live/stream`）转发
+- **直播 / IPTV**：M3U 订阅解析，`/live` 页面按分组浏览、搜索频道并站内播放（HLS + HTTP-FLV），支持 XMLTV 节目单（EPG）与频道收藏；直播流由浏览器直连源站，不经过服务器中转
 - **进度同步**：播放进度与观看历史存于本机 IndexedDB，精确到秒的续播
 - **换源测速**：跨源搜索同名资源并测速排序，一键切换保留集数位置
 - **源测试与订阅**：一键探活点播源与直播源（支持批量测活）；搜索时自动记录各源健康度，连续失败的源按阶梯时长自动停用（30 分钟 → 24 小时 → 长期），可一键恢复；订阅远程源列表（一份 LibreTV-SourceList JSON 可同时下发点播源与直播源，也可直接填 TVBOX 配置地址，自动导入其中可直接使用的接口），可导出分享
@@ -91,7 +91,7 @@ PASSWORD=your-password PORT=8080 node server.js
 
 > 不传 `PORT` 时监听 **3000**（standalone 的 `server.js` 默认值），与 Docker 镜像内的 8080 不同，按需显式指定即可。
 
-包内是 Next.js standalone 产物（`server.js` + `public` + 静态资源 + 运行时依赖），**与 CPU 架构无关**，x86_64 / arm64 / armv7 都能跑，适合用不了 Docker 的设备（如 ARMv7 路由器）。环境变量与 Docker 部署一致（`PASSWORD`、`PORT` 等），需要 Node 18+；包内不含 `sharp`（本项目不开图片优化，封面走代理原图）。
+包内是 Next.js standalone 产物（`server.js` + `public` + 静态资源 + 运行时依赖），**与 CPU 架构无关**，x86_64 / arm64 / armv7 都能跑，适合用不了 Docker 的设备（如 ARMv7 路由器）。环境变量与 Docker 部署一致（`PASSWORD`、`PORT` 等），需要 Node 18+；包内不含 `sharp`（本项目不开图片优化，封面由浏览器直连原图）。
 
 ### 手动运行
 
@@ -119,7 +119,7 @@ PASSWORD=your-password npm start   # 监听 8080
 | `DEFAULT_LIVE_SOURCES` | 否 | 预置直播源（M3U 订阅），JSON 数组：`[{"name":"源名","url":"https://.../list.m3u","epg":"https://.../epg.xml.gz"}]`，`epg` 为可选的 XMLTV 节目单地址 |
 | `DEFAULT_SUBSCRIPTIONS` | 否 | 预置数据源订阅（LibreTV-SourceList JSON 链接，也接受 TVBOX 配置与接口目录地址），JSON 数组：`["https://.../sources.json", {"url":"https://.../list.json","name":"名称","refreshDays":10}]`。首次访问自动导入点播源与直播源，之后按 `refreshDays`（1-365，缺省 1 天）静默刷新；用户删除后不再自动加回。`refreshDays` 只是初始值，用户在源管理面板改过之后以面板设置为准 |
 | `DEFAULT_RECOMMEND_SOURCE` | 否 | 首页推荐数据源的默认值（`douban` / `bangumi` / `hot-list`，出厂默认 `hot-list`）；仅对未在设置中主动选择过的用户生效，用户的选择始终优先 |
-| `LIVE_ALLOW_PRIVATE` | 否 | 设为 `1` 时允许直播流代理访问内网/保留地址（自建 IPTV 场景），默认关闭以维持 SSRF 防护 |
+| `LIVE_ALLOW_PRIVATE` | 否 | 设为 `1` 时允许直播源探活 / 订阅 / 节目单拉取访问内网/保留地址（自建 IPTV 场景），默认关闭以维持 SSRF 防护 |
 
 ## 使用说明
 
@@ -132,7 +132,7 @@ PASSWORD=your-password npm start   # 监听 8080
 ## 直播 / IPTV
 
 1. **添加直播源**：设置 → 源管理 → 直播源 → 填入 M3U/M3U8 地址（可选填 XMLTV 节目单地址），添加后自动探活并显示频道数量；也可在「源管理 → 数据源订阅」中与点播源一起订阅导入；部署者还可用 `DEFAULT_LIVE_SOURCES` 环境变量预置。
-2. **观看**：进入「直播」页，按分组标签筛选或搜索频道，点击即播；支持 HLS（m3u8）与 HTTP-FLV 两种直播流，直连失败自动走代理通道重试。
+2. **观看**：进入「直播」页，按分组标签筛选或搜索频道，点击即播；支持 HLS（m3u8）与 HTTP-FLV 两种直播流，浏览器直连源站——源站不允许跨域（CORS / 防盗链）时直接提示换频道，不做服务器中转。
 3. **节目单**：频道带 `tvg-id` 且订阅配置了 EPG 地址时，展示当前/接下来节目与播放进度。
 4. **收藏与导出**：频道可收藏；订阅可一键导出为标准 M3U 文件，供 PotPlayer / VLC 等外部播放器使用。
 
@@ -254,8 +254,9 @@ CI 校验通过后自动构建并推送 `ghcr.io/librespark/libretv:<版本>`（
 
 - 密码只保存在服务端环境变量中，前端不持有任何可重放凭证。
 - 登录接口有 IP 速率限制（10 次 / 10 分钟）。
-- 代理内置 SSRF 防护：拒绝内网/保留地址（含 DNS 解析后校验），仅放行 http(s)。
-- 未登录会话仅允许代理图片类目标（豆瓣封面防盗链需要）。
+- 媒体流量（m3u8 / ts / mp4 / flv）与封面图都由浏览器直连源站，不经过本站 Worker：
+  直连失败（CORS / 防盗链 / 混合内容）时提示换源，不再提供服务器中转。
+- 服务端只代理「豆瓣 / Bangumi 推荐数据」等文本接口，且内置 SSRF 防护（拒绝内网/保留地址）。
 
 ## 衍生作品
 
