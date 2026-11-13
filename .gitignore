@@ -12,3 +12,9 @@ vitest-results.json
 .zcode/
 .codebuddy/
 generated-images/
+# OpenNext / Wrangler
+.open-next/
+.wrangler/
+.dev.vars
+.tmp/
+

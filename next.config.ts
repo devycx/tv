@@ -22,6 +22,22 @@ const nextConfig: NextConfig = {
   env: { APP_VERSION: readAppVersion() },
   // 采集站/豆瓣等上游地址在运行时由用户配置，构建期无法枚举，关闭图片优化改用 <img>
   images: { unoptimized: true },
+  /**
+   * Cloudflare Workers 构建（BUILD_TARGET=workers）时把 Node 版 SSRF 层换成 Workers 版：
+   * Node 版依赖 undici Agent + node:dns，Workers 运行时没有这些能力，
+   * 静态打入会让 worker 模块加载即失败（详见 src/lib/ssrf-workers.ts 头部注释）。
+   */
+  webpack: (config, { webpack }) => {
+    if (process.env.BUILD_TARGET === 'workers') {
+      const workersSSRF = path.join(process.cwd(), 'src', 'lib', 'ssrf-workers.ts');
+      config.plugins.push(
+        new webpack.NormalModuleReplacementPlugin(/^(?:\.\/ssrf|@\/lib\/ssrf)$/, (resource: { request: string }) => {
+          resource.request = workersSSRF;
+        })
+      );
+    }
+    return config;
+  },
 };
 
 export default nextConfig;
