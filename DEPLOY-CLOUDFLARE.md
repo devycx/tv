@@ -8,23 +8,33 @@
 - 自定义域：`tv.ycxdev.com`（`wrangler.jsonc` 的 `routes[].custom_domain`，部署时自动建 DNS 记录与证书）
 - 访问密码：存为 Worker Secret `PASSWORD`（**不在仓库、不在 `wrangler.jsonc`**）
 
+## 访问控制（服务端门禁）
+
+密码不再只是首页的客户端弹窗，而是由 [src/middleware.ts](src/middleware.ts) 在请求进入 Next 之前拦截：
+
+- 未认证访问任何页面（`/`、`/live`、`/watch`、`/about`，含 RSC 导航与深链 query）→ **302 到 `/login?next=<原路径>`**，HTML 不下发；
+- 未认证访问 `/api/*` → **401 JSON**（`/api/auth`、`/api/status` 除外）；
+- `/login` 是独立登录页（`src/app/login/page.tsx`），登录成功后 `location.replace(next)`；
+- 已登录访问 `/login` → 302 回 `next`（只接受站内相对路径，防开放重定向）；
+- 会话校验用 WebCrypto 复刻 `src/lib/auth.ts` 的 HMAC-SHA256，旧 cookie 继续有效；
+- 静态资源（`/_next/`、`/icons/`、favicon、manifest）匿名可访问，否则登录页会白屏；
+- 未配置 `PASSWORD` 时门禁 fail-open（页面放行，由前端提示管理员配置），避免误删 secret 把站点锁死。
+
 ## 预置数据源
 
 `wrangler.jsonc` 的 `vars` 里预置了两类源，登录后自动勾选 / 启用，开箱即用：
 
 | 变量 | 内容 |
 | --- | --- |
-| `DEFAULT_SOURCES` | 13 个点播源（苹果CMS 采集站） |
+| `DEFAULT_SOURCES` | 15 个点播源（苹果CMS 采集站），其中前 5 个经线上 `/api/quality` 实测能返回清晰度 |
 | `DEFAULT_LIVE_SOURCES` | 4 个直播源（iptv-org 中国大陆 / zbds IPTV4 / aptv 综合 / 4K 专区） |
 
-- 点播源：暴风、无尽、优酷、极速、新狼、豪华、魔都、百度、艾旦、爱坤、速播、速博、茅台。
-  选源标准：**从 Cloudflare 边缘实测可连通**（本地能通但边缘 TLS 握手失败、返回 525 的源已剔除），
-  且 `ac=videolist&wd=流浪地球` 能返回可播放的 m3u8 详情。
-- 直播源：`/live` 页实测加载 600+ 频道；4K 专区是第三方维护的小列表。
+- 画质实测通过（`height` 有数值）：无尽资源 720、极速资源 1080、爱坤资源 1080、电影天堂 1080、飘零资源 720。
+- 其余 10 个为补充覆盖（搜索/详情可用）。注意：Cloudflare 边缘访问部分源站的 m3u8 CDN 会 **HTTP 525（TLS 握手失败）**，这类源的个别影片可能无法播放，这是 Workers 出网限制，不是配置错误；站内健康度/换源会兜底。
+- 直播源：`/live` 页实测加载 600+ 频道。
 - 修改源：编辑 `scripts/gen-wrangler.mjs` 里的数组 → `node scripts/gen-wrangler.mjs` →
   `npx wrangler deploy`（只改变量，不用重新 build）。
-- 这些是**第三方公开接口**，可用性、内容与合规责任都不在本仓库；失效的源会被站内健康度机制自动停用，
-  也可以在「设置 → 源管理」里手动取消勾选。
+- 这些是**第三方公开接口**，可用性、内容与合规责任都不在本仓库。
 
 ## 日常命令
 
@@ -74,6 +84,9 @@ Next.js 15（App Router）+ OpenNext → 单个 Worker：
 | --- | --- |
 | `next.config.ts` | `BUILD_TARGET=workers` 时用 `NormalModuleReplacementPlugin` 把 `./ssrf` / `@/lib/ssrf` 换成 `ssrf-workers.ts` |
 | `src/lib/ssrf-workers.ts` | 新增。Workers 版 SSRF 校验：协议白名单 + 字面量私网 IP 拦截；**不做 DNS 解析**（Workers 没有 `node:dns`，也没有通往内网/云元数据的网络路径） |
+| `src/middleware.ts` | 新增。服务端访问门禁：未认证页面 302 `/login`、API 401 |
+| `src/app/login/page.tsx` | 新增。独立登录页（不依赖首页弹窗） |
+| `src/lib/session-webcrypto.ts` / `src/lib/safe-next.ts` | 新增。WebCrypto 会话校验（与 `auth.ts` 同算法）与回跳路径校验 |
 | `open-next.config.ts` | 新增。OpenNext Cloudflare 默认配置 |
 | `wrangler.jsonc` | 新增。Worker 入口、Assets 绑定、`nodejs_compat`、自定义域、预置源 vars |
 | `scripts/gen-wrangler.mjs` | 新增。生成 `wrangler.jsonc`（源列表的唯一维护点） |

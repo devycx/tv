@@ -74,7 +74,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const setup = (event as CustomEvent).detail === 'setup';
         setSetupRequired(setup);
         setVerified(false);
-        setModalOpen(true);
+        // /login 页自己就是密码入口：再叠一层弹窗会挡住输入框
+        // （middleware 拦截后首屏会落在 /login，此时任何 401 都不该弹窗）
+        const onLoginPage = window.location.pathname === '/login' || window.location.pathname === '/login/';
+        if (!onLoginPage) setModalOpen(true);
       }),
     []
   );

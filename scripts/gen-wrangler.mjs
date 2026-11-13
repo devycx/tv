@@ -10,17 +10,24 @@ import fs from 'node:fs';
  * 修改源列表后重跑本脚本 + `npx wrangler deploy` 即可。
  */
 
+/**
+ * 点播源：前 5 个经线上 /api/quality 实测能返回 height（清晰度），优先展示；
+ * 其余为补充覆盖（搜索/详情可用，个别影片的 CDN 从 Cloudflare 边缘可能 525）。
+ * 验证时间：2026-11-14。
+ */
 const sources = [
-  { name: '暴风资源', url: 'https://bfzyapi.com/api.php/provide/vod' },
   { name: '无尽资源', url: 'https://api.wujinapi.me/api.php/provide/vod' },
-  { name: '优酷资源', url: 'https://api.ukuapi88.com/api.php/provide/vod' },
   { name: '极速资源', url: 'https://jszyapi.com/api.php/provide/vod' },
+  { name: '爱坤资源', url: 'https://ikunzyapi.com/api.php/provide/vod' },
+  { name: '电影天堂', url: 'http://caiji.dyttzyapi.com/api.php/provide/vod' },
+  { name: '飘零资源', url: 'https://p2100.net/api.php/provide/vod' },
+  { name: '暴风资源', url: 'https://bfzyapi.com/api.php/provide/vod' },
+  { name: '优酷资源', url: 'https://api.ukuapi88.com/api.php/provide/vod' },
   { name: '新狼资源', url: 'https://api.xinlangapi.com/xinlangapi.php/provide/vod' },
   { name: '豪华资源', url: 'https://hhzyapi.com/api.php/provide/vod' },
   { name: '魔都资源', url: 'https://www.mdzyapi.com/api.php/provide/vod' },
   { name: '百度资源', url: 'https://api.apibdzy.com/api.php/provide/vod' },
   { name: '艾旦影视', url: 'https://lovedan.net/api.php/provide/vod' },
-  { name: '爱坤资源', url: 'https://ikunzyapi.com/api.php/provide/vod' },
   { name: '速播资源', url: 'https://subocj.com/api.php/provide/vod' },
   { name: '速博资源', url: 'https://subocaiji.com/api.php/provide/vod' },
   { name: '茅台资源', url: 'https://caiji.maotaizy.cc/api.php/provide/vod' },
