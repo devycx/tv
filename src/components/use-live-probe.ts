@@ -34,11 +34,11 @@ export interface ProbeResult {
  */
 const CHUNK_SIZE = 8;
 /**
- * 同时在途的批次数：与 CHUNK_SIZE 相乘即最大并发探测规模。
- * 每个批次是独立的 invocation，subrequest 预算互不叠加，所以这里只影响墙钟速度：
- * 2 → 4 等于测活吞吐翻倍（源站侧另有全局 per-host 闸门兜底）。
+ * 同时在途的批次数。
+ * 注意：全量测活本身在免费版 10ms CPU 下就容易超限（一批 8 个频道要被解析 + 4 次上游），
+ * 并发调高只会让更多 invocation 同时挤 CPU；这里保持 2，且直播页已不再进页面自动全量测活。
  */
-const CHUNK_CONCURRENCY = 4;
+const CHUNK_CONCURRENCY = 2;
 /**
  * 单轮测活目标数上限（保险阀）：正常几千个频道分批排队都能跑完，不设人为瓶颈；
  * 只防病态超大列表（如数十万行的脏 M3U）拖死浏览器与服务端，超出部分提示后丢弃。

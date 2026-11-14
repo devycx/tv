@@ -1,6 +1,7 @@
 import { buildLivePlaylist } from './m3u-parser';
 import type { LivePlaylistResponse } from './types';
 import { UNAUTHORIZED_EVENT } from './unauthorized-event';
+import { isPasswordSetupResponse } from './api-failure';
 
 /**
  * 直播 M3U 列表的客户端直连层。
@@ -70,13 +71,20 @@ async function fetchLivePlaylistViaServer(
     throw new Error('直播列表拉取失败：网络请求失败');
   }
 
-  if (res.status === 401 || res.status === 503) {
+  if (res.status === 401) {
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent(UNAUTHORIZED_EVENT, { detail: res.status === 503 ? 'setup' : undefined })
-      );
+      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
     }
-    throw new Error(res.status === 401 ? '需要登录' : '服务器未配置密码');
+    throw new Error('需要登录');
+  }
+
+  // 503 必须区分来源：本站 JSON = 未配置密码；Cloudflare 错误页（1102 等）是 HTML，
+  // 按状态码一律弹「需要配置密码」会把 Worker 超限误报成配置问题。
+  if (isPasswordSetupResponse(res)) {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: 'setup' }));
+    }
+    throw new Error('服务器未配置密码');
   }
 
   if (!res.ok) {

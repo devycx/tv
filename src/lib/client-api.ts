@@ -3,6 +3,7 @@
 import type { SearchResponse, SearchStreamEvent, SourceSearchOutcome, VideoDetail, DoubanResponse, BangumiCalendarResponse, SourceConfig, SearchResultItem, LivePlaylistResponse, LiveEpgResponse, SourceListPayload, QualityProbeItem, QualityProbeResult } from './types';
 import { fetchLivePlaylistDirect, livePlaylistApiUrl } from './live-playlist';
 import { UNAUTHORIZED_EVENT } from './unauthorized-event';
+import { isPasswordSetupResponse } from './api-failure';
 
 /** 401/503 全局事件名；对外导出保持兼容（事件常量已抽到 unauthorized-event，避免循环依赖） */
 export { UNAUTHORIZED_EVENT };
@@ -50,7 +51,9 @@ function throwForAuthStatus(res: Response): void {
     window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
     throw new ApiError('需要登录', 401);
   }
-  if (res.status === 503) {
+  // 只有本站 JSON 503 才是「未配置密码」；Cloudflare 的 1102 等错误页是 HTML 503，
+  // 误判会让用户看到莫名其妙的「需要配置密码」弹窗。
+  if (isPasswordSetupResponse(res)) {
     window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: 'setup' }));
     throw new ApiError('服务器未配置密码', 503);
   }
