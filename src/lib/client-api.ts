@@ -3,6 +3,7 @@
 import type { SearchResponse, SearchStreamEvent, SourceSearchOutcome, VideoDetail, DoubanResponse, BangumiCalendarResponse, SourceConfig, SearchResultItem, LivePlaylistResponse, LiveEpgResponse, SourceListPayload, QualityProbeItem, QualityProbeResult } from './types';
 import { fetchLivePlaylistDirect, livePlaylistApiUrl } from './live-playlist';
 import { UNAUTHORIZED_EVENT } from './unauthorized-event';
+import { isWorkerResourceLimit, reportWorkerResourceLimit } from './adaptive-batch';
 
 /** 401/503 全局事件名；对外导出保持兼容（事件常量已抽到 unauthorized-event，避免循环依赖） */
 export { UNAUTHORIZED_EVENT };
@@ -14,9 +15,12 @@ export { UNAUTHORIZED_EVENT };
 
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  /** Cloudflare Worker 资源超限（1102）：调用方可据此提示或降低后续批次 */
+  resourceLimit?: boolean;
+  constructor(message: string, status: number, options?: { resourceLimit?: boolean }) {
     super(message);
     this.status = status;
+    this.resourceLimit = options?.resourceLimit;
   }
 }
 
@@ -50,11 +54,31 @@ function throwForAuthStatus(res: Response): void {
     window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
     throw new ApiError('需要登录', 401);
   }
-  if (res.status === 503) {
+  // 只有本站登录接口的 JSON 503 才代表「未配置 PASSWORD」；
+  // Cloudflare 1102 等网关错误页也可能是 503（HTML），不能误弹登录框。
+  if (res.status === 503 && (res.headers.get('content-type') || '').includes('application/json')) {
     window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: 'setup' }));
     throw new ApiError('服务器未配置密码', 503);
   }
 }
+
+/** 读失败响应正文（clone 一份，不影响后续 JSON 解析/流消费） */
+async function readErrorBody(res: Response): Promise<string> {
+  try {
+    return await res.clone().text();
+  } catch {
+    return '';
+  }
+}
+
+/** 识别 Cloudflare 1102 并上报全局降批；返回是否资源超限 */
+function noteWorkerResourceLimit(res: Response, body: string): boolean {
+  const limited = isWorkerResourceLimit(res.status, body, res.headers);
+  if (limited) reportWorkerResourceLimit();
+  return limited;
+}
+
+const RESOURCE_LIMIT_MESSAGE = '服务器资源超限（Cloudflare 1102），已自动降低批次，请稍后重试';
 
 /** NDJSON 流读取：按行解析 JSON 并回调，坏行跳过不影响其余结果 */
 async function consumeNdjson<T>(res: Response, onEvent: (event: T) => void): Promise<void> {
@@ -95,12 +119,18 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   }
   throwForAuthStatus(res);
   if (!res.ok) {
-    let msg = `请求失败 (${res.status})`;
-    try {
-      const data = (await res.json()) as { error?: string };
-      if (data?.error) msg = data.error;
-    } catch { /* 忽略解析失败 */ }
-    throw new ApiError(msg, res.status);
+    const text = await readErrorBody(res);
+    const limited = noteWorkerResourceLimit(res, text);
+    let msg = limited ? RESOURCE_LIMIT_MESSAGE : `请求失败 (${res.status})`;
+    if (!limited) {
+      try {
+        const data = JSON.parse(text) as { error?: string };
+        if (data?.error) msg = data.error;
+      } catch {
+        /* 忽略解析失败 */
+      }
+    }
+    throw new ApiError(msg, res.status, { resourceLimit: limited });
   }
   return (await res.json()) as T;
 }
@@ -170,7 +200,15 @@ export const api = {
       throw new ApiError('探测请求没能送达服务器（网络或反向代理中断）', 0);
     }
     throwForAuthStatus(res);
-    if (!res.ok || !res.body) throw new ApiError(`请求失败 (${res.status})`, res.status);
+    if (!res.ok || !res.body) {
+      const text = res.ok ? '' : await readErrorBody(res);
+      const limited = !res.ok && noteWorkerResourceLimit(res, text);
+      throw new ApiError(
+        limited ? RESOURCE_LIMIT_MESSAGE : `请求失败 (${res.status})`,
+        res.status,
+        { resourceLimit: limited }
+      );
+    }
 
     let firstByte = false;
     try {
@@ -309,7 +347,15 @@ export const api = {
       signal,
     });
     throwForAuthStatus(res);
-    if (!res.ok || !res.body) throw new ApiError(`请求失败 (${res.status})`, res.status);
+    if (!res.ok || !res.body) {
+      const text = res.ok ? '' : await readErrorBody(res);
+      const limited = !res.ok && noteWorkerResourceLimit(res, text);
+      throw new ApiError(
+        limited ? RESOURCE_LIMIT_MESSAGE : `请求失败 (${res.status})`,
+        res.status,
+        { resourceLimit: limited }
+      );
+    }
 
     await consumeNdjson<LiveProbeResult>(res, onResult);
   },
@@ -336,7 +382,15 @@ async function searchStream(
     signal,
   });
     throwForAuthStatus(res);
-    if (!res.ok || !res.body) throw new ApiError(`请求失败 (${res.status})`, res.status);
+    if (!res.ok || !res.body) {
+      const text = res.ok ? '' : await readErrorBody(res);
+      const limited = !res.ok && noteWorkerResourceLimit(res, text);
+      throw new ApiError(
+        limited ? RESOURCE_LIMIT_MESSAGE : `请求失败 (${res.status})`,
+        res.status,
+        { resourceLimit: limited }
+      );
+    }
 
     // done 事件缺失（流被截断）时退化为空结果，不让整次搜索报错
     let final: SearchResponse = { list: [], failures: [] };

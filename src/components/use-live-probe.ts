@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '@/lib/client-api';
+import { getAdaptiveBatchLimit, onAdaptiveBatchDownscale } from '@/lib/adaptive-batch';
 import { LIVE_PROBE_TTL_MS, useAppStore, type LiveProbeEntry } from '@/lib/store';
 
 /**
@@ -28,12 +29,12 @@ export interface ProbeResult {
 }
 
 /**
- * 每批探测的频道数：单频道最多 4 次上游请求（manifest → variant → media → 分片），
+ * 每批探测的基准频道数：单频道最多 4 次上游请求（manifest → variant → media → 分片），
  * 8 × 4 = 32 次，留在 Workers 免费版 50 subrequest/invocation 的预算内。
- * 之前 50 条一批在 Workers 上会撞 subrequest 上限，失败会被误判成「源不可用」。
+ * 实际每批大小由全局 adaptive-batch 控制：撞到 1102 会从 8 自动降到 4/2/1。
  */
-const CHUNK_SIZE = 8;
-/** 同时在途的批次数：与 CHUNK_SIZE 相乘即最大并发探测规模 */
+const DEFAULT_CHUNK_SIZE = 8;
+/** 同时在途的批次数：与批大小相乘即最大并发探测规模 */
 const CHUNK_CONCURRENCY = 2;
 /**
  * 单轮测活目标数上限（保险阀）：正常几千个频道分批排队都能跑完，不设人为瓶颈；
@@ -63,6 +64,12 @@ export function useLiveProbe() {
     if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
     abortRef.current?.abort();
   }, []);
+
+  // 任一 API 撞到 Cloudflare 1102 都会全局降批；测活这边给用户一个明确提示
+  useEffect(
+    () => onAdaptiveBatchDownscale(() => showHint('服务器资源紧张，已自动降低测活批次')),
+    [showHint]
+  );
 
   // 仅暴露 6 小时内的结果，过期条目对 UI 不可见。
   // 结果对象按 (url, timestamp) 复用身份：节流写回只更新被探测到的频道，
@@ -144,10 +151,6 @@ export function useLiveProbe() {
       const controller = new AbortController();
       abortRef.current = controller;
 
-      const chunks: string[][] = [];
-      for (let i = 0; i < stale.length; i += CHUNK_SIZE) {
-        chunks.push(stale.slice(i, i + CHUNK_SIZE));
-      }
       // startedAt 供 UI 按已完成均速估算剩余时间
       const startedAt = Date.now();
       setProgress({ done: 0, total: stale.length, startedAt });
@@ -173,13 +176,15 @@ export function useLiveProbe() {
         if (!flushTimer) flushTimer = setTimeout(flush, FLUSH_INTERVAL_MS);
       };
 
-      let nextChunk = 0;
+      // 批大小每轮重新读取：某个请求撞到 1102 后，下一批立刻按降档后的 limit 切
+      let cursor = 0;
       const worker = async () => {
         for (;;) {
           if (runIdRef.current !== runId) return;
-          const index = nextChunk++;
-          if (index >= chunks.length) return;
-          const chunk = chunks[index];
+          const start = cursor;
+          if (start >= stale.length) return;
+          const chunk = stale.slice(start, start + getAdaptiveBatchLimit(DEFAULT_CHUNK_SIZE));
+          cursor = start + chunk.length;
           const received = new Set<string>();
           try {
             await api.liveProbeStream(
@@ -211,7 +216,7 @@ export function useLiveProbe() {
         }
       };
       await Promise.all(
-        Array.from({ length: Math.min(CHUNK_CONCURRENCY, chunks.length) }, worker)
+        Array.from({ length: Math.min(CHUNK_CONCURRENCY, stale.length) }, worker)
       );
 
       if (flushTimer) clearTimeout(flushTimer);

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, api } from '@/lib/client-api';
+import { getAdaptiveBatchLimit } from '@/lib/adaptive-batch';
 import { QUALITY_FAIL_TTL_MS, isRetryableTimeout, qualityKey, summarizeQuality } from '@/lib/quality';
 import { createProbeQueue, type ProbeQueue } from '@/lib/quality-probe-queue';
 import { readQualities, useAppStore } from '@/lib/store';
@@ -37,6 +38,8 @@ let sharedQueue: ProbeQueue | null = null;
 function getSharedQueue(): ProbeQueue {
   sharedQueue ??= createProbeQueue({
     run: (items, onResult, signal) => api.qualityProbeStream(items, onResult, signal),
+    // 每批发出前重新读全局降批后的上限（1102 后从 8 → 4 → 2 → 1）
+    batchSize: () => getAdaptiveBatchLimit(8),
   });
   return sharedQueue;
 }
