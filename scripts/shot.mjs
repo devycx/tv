@@ -17,6 +17,7 @@
  *   --selector       等这个 CSS 选择器出现再继续（默认只等 --wait）
  *   --js             "..." 截图前执行的 JS（函数体，可 await，可 return）
  *   --log            "..." 执行并打印的 JS 表达式（返回 JSON）
+ *   --init-js        "..." 在每个新文档加载前注入的 JS（可 mock fetch / 预置状态）
  *   --open-settings  点第一个可见的 aria-label="设置" 按钮
  *   --wait           页面就绪后的固定等待（ms，默认 1200）
  *   --wait2          --js 执行后的等待（ms，默认 0）
@@ -60,6 +61,7 @@ const HELP = `真机视口截图 / DOM 断言（CDP + 本机 Chrome）
   --full                 整页截图（默认仅视口）
   --log <expr>           执行并打印的 JS 表达式，结果 JSON 化
   --js <body>            截图前执行的 JS 函数体（可 await / return）
+  --init-js <code>       每个新文档加载前注入的 JS（可 mock fetch / 预置状态）
 
 等待 / 交互:
   --selector <css>       轮询等待元素出现（最长 30s）
@@ -279,6 +281,10 @@ async function main() {
     await send('Page.enable');
     await send('Runtime.enable');
     await send('Network.enable');
+    // 在页面脚本之前注入（用于 mock fetch / 预置 localStorage；对后续导航同样生效）
+    if (args['init-js']) {
+      await send('Page.addScriptToEvaluateOnNewDocument', { source: String(args['init-js']) });
+    }
 
     const isMobile = Number(args.width) < 640;
     await send('Emulation.setDeviceMetricsOverride', {
