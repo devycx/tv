@@ -11,7 +11,7 @@ import { Icon, type IconName } from './icon';
 import { SearchHistoryDropdown, useSearchHistory } from './search-history';
 import { cn } from '@/lib/utils';
 
-/** 顶部导航：Logo、搜索框（首页外）、历史、设置 */
+/** 顶部导航：Logo（首页外）、搜索框（首页外）、历史、设置 */
 export function Header({ showSearch = false }: { showSearch?: boolean }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -24,6 +24,10 @@ export function Header({ showSearch = false }: { showSearch?: boolean }) {
   const searchHistory = useSearchHistory(query);
 
   const closeMenu = () => setMenuOpen(false);
+
+  // 首页已有居中的大标题「夜幕影视」，顶栏再放徽标 + 字标属于重复品牌，
+  // 因此仅非首页渲染（直播/关于页仍需左上角这个回首页的入口）
+  const showBrand = pathname !== '/';
 
   const submitSearch = (text: string) => {
     const q = text.trim().slice(0, 100);
@@ -44,12 +48,14 @@ export function Header({ showSearch = false }: { showSearch?: boolean }) {
     <>
       <header className="sticky top-0 z-40 bg-surface/90 backdrop-blur border-b border-line">
         <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-2 sm:gap-3">
-          <Link href="/" aria-label="夜幕影视 首页" className="flex items-center gap-2 shrink-0">
-            {/* 品牌徽标：YouTube 风格的蓝色圆角播放键；矢量透明底，24px 高也清晰 */}
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/icons/brand-mark.svg" alt="" width={34} height={24} className="h-6 w-auto" />
-            <span className="text-base font-bold tracking-tight text-content">夜幕影视</span>
-          </Link>
+          {showBrand && (
+            <Link href="/" aria-label="夜幕影视 首页" className="flex items-center gap-2 shrink-0">
+              {/* 品牌徽标：YouTube 风格的蓝色圆角播放键；矢量透明底，24px 高也清晰 */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/icons/brand-mark.svg" alt="" width={34} height={24} className="h-6 w-auto" />
+              <span className="text-base font-bold tracking-tight text-content">夜幕影视</span>
+            </Link>
+          )}
 
           {showSearch && (
             <form
