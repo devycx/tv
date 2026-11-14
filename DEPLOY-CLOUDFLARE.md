@@ -77,8 +77,35 @@ Cloudflare 明确限制「站外托管的视频/大文件经其 CDN 分发给访
 直播尤其明显：现有 4 源只有约 26.8% 的频道可直连，扩容后约 30%（≈619 条）；分片级复核约 430 条能真正起播。
 
 
-## 日常命令
+## 自动部署（标准流程，2026-11-14 起）
 
+**日常发布只走 GitHub**：push 到 `main` → [ci](.github/workflows/ci.yml)（typecheck/lint/test）通过 →
+[deploy-cloudflare](.github/workflows/deploy-cloudflare.yml) 自动执行 `npm run cf:build` + `npx wrangler deploy`，
+线上 tv.ycxdev.com 随每次 main 提交自动更新。**不要再从本地手动部署**（本地命令只保留给预览、热修复、回滚）。
+
+一次性配置（`CLOUDFLARE_ACCOUNT_ID` 已写入仓库 Secrets，还差 API Token）：
+
+1. Cloudflare Dashboard → My Profile → API Tokens → Create Token，用 **Edit Cloudflare Workers** 模板
+   （或自定义权限：`Account·Workers Scripts:Edit`、`Account·Account Settings:Read`、
+   `Zone·Workers Routes:Edit`、`Zone·Zone:Read`；Account 资源选本账号，Zone 资源选 `ycxdev.com`）；
+2. 把 Token 存到仓库 Secret（不要写进仓库/聊天记录）：
+
+```powershell
+gh secret set CLOUDFLARE_API_TOKEN -R devycx/tv   # 按提示粘贴 token
+```
+
+3. 验证：`gh workflow run deploy-cloudflare.yml -R devycx/tv`，或随便 push 一次 `main`。
+
+说明：
+
+- 未配置 `CLOUDFLARE_API_TOKEN` 时，deploy 工作流只输出 warning 并跳过部署，不会让 CI 变红；配置后立即生效；
+- Worker Secret `PASSWORD` 与这个 API Token 无关，自动部署不会覆盖它；
+- 部署失败排查：`gh run list -R devycx/tv --workflow deploy-cloudflare.yml`、`gh run view --log-failed`；
+  线上回滚仍用 `npx wrangler rollback`（GitHub 侧不会自动回滚）。
+
+## 日常命令（本地预览 / 热修复）
+
+> 常规发布请用上面的自动部署，本地 `wrangler deploy` 只用于热修复/回滚。
 > Node 版本要求 **≥ 22.12**（wrangler 4.162）。本机已把便携版 Node 24
 > （`C:\Users\ycx\tools\node-v24.22.3`）设为**新 PowerShell / Git Bash 的默认 node**：
 > 用户环境变量 `NODE24_HOME` + PowerShell profile + `~/.bash_profile`。

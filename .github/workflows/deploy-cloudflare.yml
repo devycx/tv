@@ -1,0 +1,86 @@
+name: deploy-cloudflare
+
+# 标准发布流程（2026-11-14 起）：push 到 main → ci 通过 → 本工作流自动构建并部署到
+# Cloudflare Workers，线上 tv.ycxdev.com 随每次 main 变更自动更新。
+#
+# 一次性配置（仓库 Settings → Secrets and variables → Actions）：
+# - CLOUDFLARE_API_TOKEN：Cloudflare API Token（My Profile → API Tokens → Create Token，
+#   「Edit Cloudflare Workers」模板即可），资源范围限定本账号 + ycxdev.com 区域；
+# - CLOUDFLARE_ACCOUNT_ID：Cloudflare 账号 ID（24c59299b11a61eed6fc8902524e0515）。
+# 命令行添加：gh secret set CLOUDFLARE_API_TOKEN -R devycx/tv
+#             gh secret set CLOUDFLARE_ACCOUNT_ID -R devycx/tv
+#
+# 未配置 CLOUDFLARE_API_TOKEN 时只在日志里提示并跳过部署，不会让 CI 变红；
+# 配置后无需再改任何东西。本地手动部署仅保留给热修复/回滚场景（见 DEPLOY-CLOUDFLARE.md）。
+
+on:
+  workflow_run:
+    workflows: ['ci']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cloudflare
+  cancel-in-progress: false
+
+jobs:
+  # 先探测部署凭据是否存在：job 级 if 不能用 secrets，所以用 needs 输出中转
+  check:
+    # 仅 main 的 push 触发的 ci 成功后才部署；PR 的 ci 不部署；手动 dispatch 始终允许
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - id: check
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -n "$CF_TOKEN" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Cloudflare 凭据已配置，继续构建部署。"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::未配置 CLOUDFLARE_API_TOKEN，跳过自动部署。"
+            echo "配置方法：gh secret set CLOUDFLARE_API_TOKEN -R devycx/tv"
+            exit 0
+          fi
+
+  deploy:
+    needs: check
+    if: needs.check.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 部署触发 ci 的那个 commit（手动触发时用当前分支 HEAD），而不是默认分支最新
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build (next build + OpenNext → .open-next)
+        run: npm run cf:build
+
+      - name: Deploy Worker tv
+        run: npx wrangler deploy
