@@ -23,7 +23,8 @@ import type { PlayerSkipApi } from '@/components/player-shell';
 import { useToast } from '@/components/toast';
 import { enqueueDownload } from '@/components/download-manager';
 import { Icon } from '@/components/icon';
-import { useAuth } from '@/components/auth';import { Header } from '@/components/header';
+import { useAuth } from '@/components/auth';
+import { Header } from '@/components/header';
 import { resolveSource, useAppStore } from '@/lib/store';
 import { qualityKey } from '@/lib/quality';
 import {
@@ -236,6 +237,19 @@ function WatchContent() {
     [sourceKey, vodId, currentIndex, currentUrl]
   );
 
+  // 下载本集：入口在播放器控制条里（挂 playerApi 之前就要能用，所以放在页面层）
+  const handleDownload = useCallback(() => {
+    if (!currentUrl) return;
+    enqueueDownload({
+      url: currentUrl,
+      // 多集才带集数后缀；单集影片（含电影）文件名就是纯标题
+      title: `${videoTitle}${episodes.length > 1 ? ` 第${currentIndex + 1}集` : ''}`,
+      format: 'MP4',
+    });
+    // 「已加入下载队列」由 DownloadManager 在真正入队后提示：
+    // 这里先提示的话，用户随后取消保存位置会出现「已加入→已取消」的矛盾
+  }, [currentUrl, videoTitle, episodes.length, currentIndex]);
+
   // 自动连播的 800ms 延迟切集要在卸载时取消，避免离开页面后跳转
   const autoNextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
@@ -316,48 +330,23 @@ function WatchContent() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      {/* 与全站同一个顶栏：播放页也不能丢导航（直播/关于/历史/设置），
-          标题与「下载本集 / 切换资源」通过插槽并进同一行，不额外占高度 */}
-      <Header
-        leading={<BackButton />}
-        title={videoTitle}
-        subtitle={
-          <>
-            {source.name}
-            {episodes.length > 0 && ` · 第 ${currentIndex + 1}/${episodes.length} 集`}
-          </>
-        }
-        actions={
-          <>
-            <button
-              className="btn-ghost btn-sm"
-              onClick={() => {
-                if (!currentUrl) return;
-                enqueueDownload({
-                  url: currentUrl,
-                  // 多集才带集数后缀；单集影片（含电影）文件名就是纯标题
-                  title: `${videoTitle}${episodes.length > 1 ? ` 第${currentIndex + 1}集` : ''}`,
-                  format: 'MP4',
-                });
-                // 「已加入下载队列」由 DownloadManager 在真正入队后提示：
-                // 这里先提示的话，用户随后取消保存位置会出现「已加入→已取消」的矛盾
-              }}
-            >
-              {/* 手机上顶栏放不下完整按钮：只留图标，aria-label 保证可访问性 */}
-              <Icon name="download" className="w-4 h-4 sm:hidden" />
-              <span className="hidden sm:inline">下载本集</span>
-              <span className="sr-only sm:hidden">下载本集</span>
-            </button>
-            <button className="btn-ghost btn-sm" onClick={() => setSwitchOpen(true)}>
-              切换资源
-            </button>
-          </>
-        }
-      />
+      {/* 与全站（首页搜索结果态）同一个顶栏：只保留返回 + 导航，
+          标题挪到播放器上方——手机窄屏不再把标题、下载、切源全挤进一行 */}
+      <Header leading={<BackButton />} />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-4">
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-4">
           <div>
+            {/* 视频名称：导航栏下方、播放器上方，单独成块（不再塞进顶栏） */}
+            <div className="mb-2.5">
+              <h1 className="text-base sm:text-lg font-semibold text-content truncate" title={videoTitle}>
+                {videoTitle}
+              </h1>
+              <p className="text-xs text-faint truncate">
+                {source.name}
+                {episodes.length > 0 && ` · 第 ${currentIndex + 1}/${episodes.length} 集`}
+              </p>
+            </div>
             <div ref={playerFrameRef} className="aspect-video bg-black rounded-lg overflow-hidden">
               {currentUrl && !resolvingLatest ? (
                 <PlayerShell
@@ -380,6 +369,8 @@ function WatchContent() {
                   onTimeUpdate={handleProgress}
                   onPause={handleProgress}
                   onEnded={handleEnded}
+                  onDownload={handleDownload}
+                  onAutoplayChange={(next) => store.updateSettings({ autoplayNext: next })}
                   hasPrevEpisode={currentIndex > 0}
                   hasNextEpisode={episodes.length > 0 && currentIndex < episodes.length - 1}
                   onPrevEpisode={() => goEpisode(currentIndex - 1)}
@@ -437,15 +428,11 @@ function WatchContent() {
                   <span className="ml-1 inline-block size-1.5 rounded-full bg-faint" aria-label="本剧跳过已关闭" />
                 )}
               </button>
-              <label className="flex items-center gap-1.5 text-xs text-muted ml-auto cursor-pointer">
-                <input
-                  type="checkbox"
-                  className="h-3.5 w-3.5 accent-[#2563eb]"
-                  checked={store.autoplayNext}
-                  onChange={(e) => store.updateSettings({ autoplayNext: e.target.checked })}
-                />
-                自动连播
-              </label>
+              {/* 与「跳过标记」并列；整行 flex-wrap，窄屏放不下时自动折成两行。
+                  「自动连播」已收进播放器齿轮菜单，这里不再占一行 */}
+              <button className="btn-ghost btn-sm" onClick={() => setSwitchOpen(true)}>
+                切换资源
+              </button>
             </div>
 
             <SkipMarkPanel

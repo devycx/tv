@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Artplayer from 'artplayer';
+import type { SettingOption } from 'artplayer';
 import Hls, { type HlsConfig } from 'hls.js';
 
 import { PlaybackRecovery, describeHlsError } from '@/lib/playback-recovery';
@@ -102,6 +103,10 @@ interface PlayerShellProps {
   onTimeUpdate?: (position: number, duration: number) => void;
   onEnded?: () => void;
   onPause?: (position: number, duration: number) => void;
+  /** 下载本集：走播放页的下载队列（控制条按钮）；未传时点击无动作 */
+  onDownload?: () => void;
+  /** 自动连播开关（播放器设置菜单里的 switch）：写回全局设置 */
+  onAutoplayChange?: (value: boolean) => void;
   /**
    * 实测画质（视频高度，像素）。
    * 单码率 m3u8 / 直链的分辨率只能等解码后才知道，播放一次后回写缓存，
@@ -137,6 +142,8 @@ export function PlayerShell({
   onTimeUpdate,
   onEnded,
   onPause,
+  onDownload,
+  onAutoplayChange,
   onQuality,
   onRequestSwitchSource,
   onPrevEpisode,
@@ -160,14 +167,14 @@ export function PlayerShell({
     url, title, adFilter, autoplayNext, skipMark, autoSkipSegments, volumeBoost, miniProgressBar,
     pendingStart, onPendingStart, onPlayerApi, onRecordSegment,
     episodeKey, nextUrl, nextEpisodeKey,
-    getRestorePosition, onTimeUpdate, onEnded, onPause, onQuality, onRequestSwitchSource,
+    getRestorePosition, onTimeUpdate, onEnded, onPause, onDownload, onAutoplayChange, onQuality, onRequestSwitchSource,
     onPrevEpisode, onNextEpisode, hasPrevEpisode, hasNextEpisode,
   });
   propsRef.current = {
     url, title, adFilter, autoplayNext, skipMark, autoSkipSegments, volumeBoost, miniProgressBar,
     pendingStart, onPendingStart, onPlayerApi, onRecordSegment,
     episodeKey, nextUrl, nextEpisodeKey,
-    getRestorePosition, onTimeUpdate, onEnded, onPause, onQuality, onRequestSwitchSource,
+    getRestorePosition, onTimeUpdate, onEnded, onPause, onDownload, onAutoplayChange, onQuality, onRequestSwitchSource,
     onPrevEpisode, onNextEpisode, hasPrevEpisode, hasNextEpisode,
   };
 
@@ -584,6 +591,33 @@ export function PlayerShell({
             if (propsRef.current.hasNextEpisode) propsRef.current.onNextEpisode?.();
           },
         },
+        {
+          // 下载本集从顶栏挪进播放器控制条：手机顶栏只留导航，动作跟着画面走
+          name: 'download',
+          index: 25,
+          position: 'right',
+          html: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><path d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>',
+          tooltip: '下载本集',
+          click: () => propsRef.current.onDownload?.(),
+        },
+      ],
+      // 播放器齿轮菜单里的「自动连播」：artplayer 原生 switch 设置项，
+      // 与设置抽屉里的同名开关共用同一份 store 状态（双向同步见下方 effect）。
+      settings: [
+        {
+          name: 'autoplay-next',
+          html: '自动连播',
+          // 用「下一集」同款图标，和左侧上/下集控件的语义对齐
+          icon: '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24"><path fill="currentColor" d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>',
+          switch: propsRef.current.autoplayNext,
+          onSwitch: (item: SettingOption) => {
+            // 返回值会成为新的 switch 状态：没有回调时保持原状，避免“看起来拨动了但没生效”
+            if (!propsRef.current.onAutoplayChange) return item.switch;
+            const next = !item.switch;
+            propsRef.current.onAutoplayChange(next);
+            return next;
+          },
+        },
       ],
       customType: {
         m3u8: (video: HTMLVideoElement, mediaUrl: string) => {
@@ -995,6 +1029,17 @@ export function PlayerShell({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // —— 自动连播：设置菜单里的 switch 跟随全局设置 ——
+  // 菜单项在播放器创建时按当次 props 初始化；如果用户从设置抽屉（偏好设置）改了开关，
+  // 这里把 artplayer 里的 switch 同步到最新值，避免下次打开菜单还显示旧状态。
+  // 从菜单里拨动时 onSwitch 会先更新 item.switch，再写回 store，此时两者已相等，不会重复重建。
+  useEffect(() => {
+    const setting = artRef.current?.setting;
+    const item = setting?.find('autoplay-next');
+    if (!setting || !item || item.switch === autoplayNext) return;
+    setting.update({ name: 'autoplay-next', html: '自动连播', switch: autoplayNext });
+  }, [autoplayNext]);
+
   // —— 音量放大开关：播放中改设置即时生效，不必等重新起播 ——
   // 关闭走「单位增益直通」而不是拆链：createMediaElementSource 之后元素输出只走
   // 音频图，拆链会永久静音且无法恢复直连，所以只旁路增益与限幅。
@@ -1075,7 +1120,7 @@ export function PlayerShell({
   }, [adFilter]);
 
   return (
-    <div className="relative w-full h-full">
+    <div className="player-stage relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" style={{ WebkitTouchCallout: 'none' }} />
       {showPoster && !error && (
         <div className="absolute inset-0 bg-black pointer-events-none flex flex-col items-center justify-center gap-3 px-6">
@@ -1134,11 +1179,6 @@ export function PlayerShell({
               撤销
             </button>
           )}
-        </div>
-      )}
-      {autoplayNext && !error && (
-        <div className="absolute bottom-16 right-3 text-[10px] text-muted bg-black/50 px-2 py-0.5 rounded pointer-events-none">
-          自动连播已开启
         </div>
       )}
     </div>

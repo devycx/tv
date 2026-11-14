@@ -14,27 +14,19 @@ import { cn } from '@/lib/utils';
 
 /**
  * 顶部导航：Logo、搜索框（直播页）、历史、设置。
- * 播放页复用同一个顶栏（通过 title/leading/actions 插槽），避免各页各写一套导航。
+ * 播放页复用同一个顶栏、只额外给一个返回按钮（leading 插槽）；
+ * 标题、下载、切源都属于页面内容，不放回顶栏——否则手机上一行挤不下。
  */
 export function Header({
   showSearch = false,
   showBrand = true,
   leading,
-  title,
-  subtitle,
-  actions,
 }: {
   showSearch?: boolean;
   /** 空白首页不显示品牌（页面中间已有大标题），其它页面/搜索态保留 */
   showBrand?: boolean;
   /** 页面级前置操作（播放页的返回按钮） */
   leading?: ReactNode;
-  /** 页面级标题：提供后占据中间的弹性区（替换搜索框/占位），窄屏隐藏品牌腾地方 */
-  title?: ReactNode;
-  /** 标题下的次要信息（来源 · 第 N/M 集） */
-  subtitle?: ReactNode;
-  /** 页面级操作（下载本集 / 切换资源），渲染在导航之前 */
-  actions?: ReactNode;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -80,8 +72,7 @@ export function Header({
             <Link
               href="/"
               aria-label="夜幕影视 首页"
-              // 带页面标题时窄屏没有余量同时放品牌与标题，品牌留给 ≥sm
-              className={cn('flex items-center gap-2 shrink-0', Boolean(title) && 'hidden sm:flex')}
+              className="flex items-center gap-2 shrink-0"
             >
               {/* 品牌徽标：YouTube 风格的蓝色圆角播放键；矢量透明底，24px 高也清晰 */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -90,14 +81,8 @@ export function Header({
             </Link>
           )}
 
-          {title ? (
-            <div className="min-w-0 flex-1">
-              <p className="text-sm font-medium text-content truncate">{title}</p>
-              {subtitle && <p className="text-[11px] text-faint truncate">{subtitle}</p>}
-            </div>
-          ) : (
-            showSearch && (
-              <form
+          {showSearch && (
+            <form
               className="flex-1 max-w-xl hidden sm:block"
               onSubmit={(e) => {
                 e.preventDefault();
@@ -144,14 +129,10 @@ export function Header({
                 )}
               </div>
             </form>
-            )
           )}
 
-          {/* 窄屏占位：把导航推到右侧（有标题时标题自己占位，这里只为无标题且无搜索框的窄屏留白） */}
-          {!title && !showSearch && <div className="flex-1 sm:hidden" />}
-
-          {/* 页面级操作（播放页：下载本集 / 切换资源） */}
-          {actions && <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">{actions}</div>}
+          {/* 窄屏占位：把导航推到右侧（无搜索框时留白，桌面端靠 nav 的 ml-auto） */}
+          {!showSearch && <div className="flex-1 sm:hidden" />}
 
           {/* 桌面 / 平板：完整导航 */}
           <nav className="hidden sm:flex items-center gap-1 ml-auto">
