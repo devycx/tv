@@ -28,22 +28,31 @@ export function RecommendSection({ onPick }: { onPick: (title: string) => void }
  * 豆瓣推荐：影视切换 + 标签筛选。
  * 首批 50 条，滚动接近列表末尾时获取下一批真实数据；分类之间隔离缓存。
  * 空页/完全重复页停止；下一页失败时保留现有卡片，用户可以重试。
+ *
+ * 默认不选中任何标签（首页推荐区收起）：点标签才拉数据/展示封面，再次点击当前标签收起。
  */
 function DoubanView({ onPick }: { onPick: (title: string) => void }) {
   const [type, setType] = useState<'movie' | 'tv'>('movie');
-  const [tag, setTag] = useState('热门');
+  const [tag, setTag] = useState<string | null>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
   const query = useInfiniteQuery({
     queryKey: ['douban-scroll', type, tag, RECOMMEND_PAGE_SIZE],
+    enabled: tag !== null,
     initialPageParam: 0,
-    queryFn: ({ pageParam, signal }) => api.douban(type, tag, pageParam, RECOMMEND_PAGE_SIZE, signal),
+    queryFn: ({ pageParam, signal }) => {
+      if (tag === null) throw new Error('未选择推荐标签');
+      return api.douban(type, tag, pageParam, RECOMMEND_PAGE_SIZE, signal);
+    },
     getNextPageParam: (last, pages, offset) => nextRecommendationOffset(last, pages, offset),
     retry: false,
   });
 
   const tags = type === 'movie' ? MOVIE_TAGS : TV_TAGS;
-  const items = useMemo(() => mergeRecommendationPages(query.data?.pages ?? []), [query.data]);
+  const items = useMemo(
+    () => (tag === null ? [] : mergeRecommendationPages(query.data?.pages ?? [])),
+    [tag, query.data]
+  );
   const { hasNextPage, isFetching, isFetchNextPageError, fetchNextPage } = query;
 
   useEffect(() => {
@@ -59,7 +68,8 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
   const switchType = (t: 'movie' | 'tv') => {
     if (t === type) return;
     setType(t);
-    setTag('热门');
+    // 换类型后回到收起态：旧标签在新类型下可能不存在，也让推荐区保持「点开才看」的交互
+    setTag(null);
   };
 
   return (
@@ -77,7 +87,7 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-1.5 mb-4">
+      <div className={cn('flex flex-wrap gap-1.5', tag === null ? 'mb-0' : 'mb-4')}>
         {tags.map((t) => (
           <button
             key={t}
@@ -85,14 +95,15 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
               'px-2.5 py-1 rounded-full text-xs transition-colors',
               t === tag ? 'bg-accent text-on-accent' : 'bg-chip text-muted hover:text-content hover:bg-hover'
             )}
-            onClick={() => setTag(t)}
+            onClick={() => setTag((prev) => (prev === t ? null : t))}
+            aria-pressed={t === tag}
           >
             {t}
           </button>
         ))}
       </div>
 
-      {query.isError && items.length === 0 ? (
+      {tag === null ? null : query.isError && items.length === 0 ? (
         <div className="text-center text-sm text-faint py-8">
           <p>推荐内容加载失败</p>
           <button className="btn-ghost btn-sm mt-2" onClick={() => void query.refetch()}>重试</button>
@@ -108,7 +119,7 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
           ))}
         </div>
       )}
-      {items.length > 0 && (
+      {tag !== null && items.length > 0 && (
         <div ref={loadMoreRef} data-recommendation-more className="text-center text-sm text-muted py-6">
           {query.isFetchingNextPage ? (
             <p role="status">正在加载更多推荐...</p>
@@ -128,36 +139,42 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
   );
 }
 
-/** Bangumi 每日放送：星期筛选，一次拉全量无分页 */
+/**
+ * Bangumi 每日放送：星期筛选，一次拉全量无分页。
+ * 默认不选中星期（首页推荐区收起），点星期/全部才展示封面，再次点击当前项收起。
+ */
 function BangumiView({ onPick }: { onPick: (title: string) => void }) {
-  const [weekday, setWeekday] = useState<number | 'all'>('all');
+  const [weekday, setWeekday] = useState<number | 'all' | null>(null);
 
   const query = useQuery({
     queryKey: ['bangumi-calendar'],
     queryFn: ({ signal }) => api.bangumiCalendar(signal),
+    enabled: weekday !== null,
   });
 
   let items: DoubanItem[] = [];
-  if (query.data) {
+  if (query.data && weekday !== null) {
     items = weekday === 'all'
       ? query.data.days.flatMap((d) => d.items)
       : (query.data.days.find((d) => d.weekday === weekday)?.items ?? []);
   }
 
+  const toggleWeekday = (value: number | 'all') => setWeekday((prev) => (prev === value ? null : value));
+
   return (
     <section aria-label="新番放送推荐">
-      <div className="flex flex-wrap gap-1.5 mb-4">
-        <ChipButton active={weekday === 'all'} onClick={() => setWeekday('all')}>
+      <div className={cn('flex flex-wrap gap-1.5', weekday === null ? 'mb-0' : 'mb-4')}>
+        <ChipButton active={weekday === 'all'} onClick={() => toggleWeekday('all')}>
           全部
         </ChipButton>
         {WEEKDAYS.map((name, i) => (
-          <ChipButton key={name} active={weekday === i + 1} onClick={() => setWeekday(i + 1)}>
+          <ChipButton key={name} active={weekday === i + 1} onClick={() => toggleWeekday(i + 1)}>
             {name}
           </ChipButton>
         ))}
       </div>
 
-      {query.isError ? (
+      {weekday === null ? null : query.isError ? (
         <p className="text-center text-sm text-faint py-8">推荐内容加载失败，可稍后重试或在设置中关闭</p>
       ) : query.isLoading ? (
         <GridSkeleton />
@@ -181,28 +198,39 @@ const HOT_LISTS = [
   { id: 'baidu_teleplay', label: '百度热播剧' },
 ];
 
-/** 影视热榜（60s API）：豆瓣五个周榜 + 百度热播剧，chips 切换 */
+/**
+ * 影视热榜（60s API）：豆瓣五个周榜 + 百度热播剧，chips 切换。
+ * 默认不展开任何榜单（首页只显示标签）：点标签才拉数据/展示封面，再次点击当前标签收起。
+ */
 function HotListView({ onPick }: { onPick: (title: string) => void }) {
-  const [listId, setListId] = useState(HOT_LISTS[0].id);
+  const [listId, setListId] = useState<string | null>(null);
 
   const query = useQuery({
     queryKey: ['hot-list', listId],
-    queryFn: ({ signal }) => api.hotList(listId, signal),
+    queryFn: ({ signal }) => {
+      if (listId === null) throw new Error('未选择榜单');
+      return api.hotList(listId, signal);
+    },
+    enabled: listId !== null,
   });
 
-  const items = query.data?.items ?? [];
+  const items = listId === null ? [] : (query.data?.items ?? []);
 
   return (
     <section aria-label="影视榜单推荐">
-      <div className="flex flex-wrap gap-1.5 mb-4">
+      <div className={cn('flex flex-wrap gap-1.5', listId === null ? 'mb-0' : 'mb-4')}>
         {HOT_LISTS.map((l) => (
-          <ChipButton key={l.id} active={listId === l.id} onClick={() => setListId(l.id)}>
+          <ChipButton
+            key={l.id}
+            active={listId === l.id}
+            onClick={() => setListId((prev) => (prev === l.id ? null : l.id))}
+          >
             {l.label}
           </ChipButton>
         ))}
       </div>
 
-      {query.isError ? (
+      {listId === null ? null : query.isError ? (
         <p className="text-center text-sm text-faint py-8">推荐内容加载失败，可稍后重试或在设置中关闭</p>
       ) : query.isLoading ? (
         <GridSkeleton />
