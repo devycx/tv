@@ -158,7 +158,7 @@ export function SwitchSourceModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTitle, store.yellowFilter]);
 
-  const { qualities, probing, progress, probe, retry } = useQualityProbe(sources);
+  const { qualities, probing, progress, probe, retry, notice } = useQualityProbe(sources);
 
   // 测速完成后补探画质：用户正是在这里比较来源，「快」和「清楚」要能一起看。
   // 只探测速成功的候选——详情接口都打不通的源，再花 8s 探 m3u8 没有意义。
@@ -290,12 +290,17 @@ export function SwitchSourceModal({
             </p>
             {phase === 'done' && progress.total > 0 && (
               <p className="text-xs text-faint tabular-nums mt-0.5">
-                {progress.done < progress.total
-                  ? `画质探测中 ${progress.done}/${progress.total}`
-                  : progress.known > 0
-                    ? `画质已探到 ${progress.known}/${progress.total}`
-                    : // 一个都没探到不等于失败：多为单码率/直链，说清楚省得用户以为坏了
-                      '源站未提供画质'}
+                {notice ? (
+                  // 撞到 1102 提前收手：剩下的是「没探」而不是「探失败」，如实说明
+                  <span className="text-warning">{notice}</span>
+                ) : progress.done < progress.total ? (
+                  `画质探测中 ${progress.done}/${progress.total}`
+                ) : progress.known > 0 ? (
+                  `画质已探到 ${progress.known}/${progress.total}`
+                ) : (
+                  // 一个都没探到不等于失败：多为单码率/直链，说清楚省得用户以为坏了
+                  '源站未提供画质'
+                )}
               </p>
             )}
           </div>

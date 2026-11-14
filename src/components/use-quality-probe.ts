@@ -35,11 +35,15 @@ export interface QualityProbeProgress {
  * 队列只在浏览器里跑，模块级单例足够（SSR 不会调用 push）。
  */
 let sharedQueue: ProbeQueue | null = null;
+
+/** 画质探测的基准批大小：队列与直连路径共用，全局 1102 降批后再按比例收 */
+const BASE_BATCH_SIZE = 8;
+
 function getSharedQueue(): ProbeQueue {
   sharedQueue ??= createProbeQueue({
     run: (items, onResult, signal) => api.qualityProbeStream(items, onResult, signal),
     // 每批发出前重新读全局降批后的上限（1102 后从 8 → 4 → 2 → 1）
-    batchSize: () => getAdaptiveBatchLimit(8),
+    batchSize: () => getAdaptiveBatchLimit(BASE_BATCH_SIZE),
   });
   return sharedQueue;
 }
@@ -77,6 +81,8 @@ export function useQualityProbe(sources?: SourceConfig[]) {
   const [qualities, setQualities] = useState<Record<string, QualityEntry>>({});
   const [probing, setProbing] = useState<Record<string, true>>({});
   const [targets, setTargets] = useState<QualityProbeTarget[]>([]);
+  /** 资源超限等原因提前收手时的说明：不给结论，但也不能让界面一直显示「探测中」 */
+  const [notice, setNotice] = useState('');
 
   /** 在飞键：防同一个键并发重复请求 */
   const inflightRef = useRef<Set<string>>(new Set());
@@ -223,44 +229,64 @@ export function useQualityProbe(sources?: SourceConfig[]) {
       const collected: Record<string, QualityEntry> = {};
       for (const key of keys) inflightRef.current.add(key);
       batchRef.current = batch;
+      // 新一轮开始：上一轮的资源超限提示作废
+      setNotice('');
       mark(keys, true);
 
       const controller = new AbortController();
       abortRef.current = controller;
 
-      api
-        .qualityProbeStream(
-          mapped.map((m) => m.item),
-          (result) => {
-            const key = qualityKey(result.sourceKey, result.vodId);
-            const entry = toEntry(result);
-            setQualities((prev) => ({ ...prev, [key]: entry }));
-            collected[key] = entry;
-            inflightRef.current.delete(key);
-            settledRef.current.set(key, Date.now());
-            // 探成功就忘掉「已重试过」：下次再超时仍然值得补一次
-            if (!entry.error) retriedRef.current.delete(key);
-            mark([key], false);
-          },
-          controller.signal
-        )
-        .catch((err: unknown) => {
-          // 主动中止（新批接管 / 组件卸载）不是探测结论，保持「未知」
-          if (err instanceof DOMException && err.name === 'AbortError') return;
-          // 未登录：登录框已弹出，把每个源都标成失败只会误导
-          if (err instanceof ApiError && (err.status === 401 || err.status === 503)) return;
-          // 传输层失败（网关拦截 / 容器重启 / 断网）：逐条落成失败结论，徽章上能看出原因。
-          // 原先这里静默吞掉，界面只剩一片「未测到」，线上无从判断是哪一环挂了。
-          const message = err instanceof Error && err.message ? err.message : '探测请求失败';
-          const at = Date.now();
-          for (const key of keys) {
-            if (collected[key]) continue;
-            collected[key] = { from: 'probe', error: message, timestamp: at };
-            settledRef.current.set(key, at);
+      // 直连路径同样要受全局降批约束：换源面板常把 30+ 个源一次塞进同一个 invocation，
+      // 正是最容易撞 Workers 资源上限的入口。按当前批大小分片串行发，撞到 1102 立即停手。
+      void (async () => {
+        try {
+          let cursor = 0;
+          while (cursor < mapped.length) {
+            if (!mountedRef.current || controller.signal.aborted) return;
+            const slice = mapped.slice(cursor, cursor + getAdaptiveBatchLimit(BASE_BATCH_SIZE));
+            cursor += slice.length;
+            try {
+              await api.qualityProbeStream(
+                slice.map((m) => m.item),
+                (result) => {
+                  const key = qualityKey(result.sourceKey, result.vodId);
+                  const entry = toEntry(result);
+                  setQualities((prev) => ({ ...prev, [key]: entry }));
+                  collected[key] = entry;
+                  inflightRef.current.delete(key);
+                  settledRef.current.set(key, Date.now());
+                  // 探成功就忘掉「已重试过」：下次再超时仍然值得补一次
+                  if (!entry.error) retriedRef.current.delete(key);
+                  mark([key], false);
+                },
+                controller.signal
+              );
+            } catch (err) {
+              // 主动中止（新批接管 / 组件卸载）不是探测结论，保持「未知」
+              if (err instanceof DOMException && err.name === 'AbortError') return;
+              // 1102：源本身没问题，是 Worker 资源超限。绝不写失败结论（否则整屏「失败」正好
+              // 误导用户删源），剩余分片停发；全局已降档，下次打开/重试会用更小的批。
+              if (err instanceof ApiError && err.resourceLimit) {
+                if (mountedRef.current) setNotice('服务器资源紧张，画质探测已暂停，稍后重试');
+                return;
+              }
+              // 未登录 / 未配置密码：登录框已弹出，把每个源都标成失败只会误导
+              if (err instanceof ApiError && (err.status === 401 || err.status === 503)) return;
+              // 传输层失败（网关拦截 / 容器重启 / 断网）：剩余目标逐条落成失败结论，
+              // 徽章上能看出原因（原先这里静默吞掉，界面只剩一片「未测到」）。
+              const message = err instanceof Error && err.message ? err.message : '探测请求失败';
+              const at = Date.now();
+              for (let i = cursor - slice.length; i < mapped.length; i++) {
+                const key = mapped[i].key;
+                if (collected[key]) continue;
+                collected[key] = { from: 'probe', error: message, timestamp: at };
+                settledRef.current.set(key, at);
+              }
+              setQualities((prev) => ({ ...prev, ...collected }));
+              return;
+            }
           }
-          setQualities((prev) => ({ ...prev, ...collected }));
-        })
-        .finally(() => {
+        } finally {
           if (Object.keys(collected).length > 0) useAppStore.getState().setQuality(collected);
           // 超时补一次放在接管守卫之前：结果已经拿到，是否被接管都不影响这一批的补探测
           scheduleTimeoutRetry(collected, targetByKey);
@@ -269,7 +295,8 @@ export function useQualityProbe(sources?: SourceConfig[]) {
           for (const key of batch) inflightRef.current.delete(key);
           batchRef.current.clear();
           mark(keys, false);
-        });
+        }
+      })();
     },
     [mark, resolveItem, scheduleTimeoutRetry]
   );
@@ -366,5 +393,5 @@ export function useQualityProbe(sources?: SourceConfig[]) {
     };
   }, [targets, qualities]);
 
-  return { qualities, probing, progress, prime, probe, probeQueued, retry };
+  return { qualities, probing, progress, prime, probe, probeQueued, retry, notice };
 }
