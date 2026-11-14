@@ -13,6 +13,7 @@ import type { SearchResultItem, SourceSearchOutcome } from '@/lib/types';
 import { SearchHistoryDropdown, useSearchHistory } from '@/components/search-history';
 import { cn, buildWatchUrl, formatDisableTtl, validateSourceUrl } from '@/lib/utils';
 import { addSearchHistory } from '@/lib/db';
+import { compareSearchResults } from '@/lib/relevance';
 import { applyFrozenOrder, orderDiffers } from '@/lib/result-paging';
 import { useToast } from '@/components/toast';
 import { EmptyState } from '@/components/states';
@@ -163,10 +164,19 @@ function HomeContent() {
   };
 
   const isSearching = Boolean(urlQuery) && searchQuery.isFetching && !searchQuery.data;
-  // 聚合数据未就绪时，用已结算源的结果增量渲染（健康源不再等坏源超时）
+  /**
+   * 聚合数据未就绪时，用已结算源的结果增量渲染（健康源不再等坏源超时）。
+   *
+   * 这里用与服务端完全相同的比较器就地排序：服务端逐源推送的是「每个源自己排好的列表」，
+   * 客户端按到达顺序拼接会得到「源1的一批、源2的一批…」，首屏在 done 之前并不是全局相关性顺序。
+   * 就地排序后，任何时刻展示的都是「已到达结果里的最优顺序」，done 只会插入新条目、不会整体重排。
+   */
   const streamedList = useMemo(
-    () => streamedOutcomes.flatMap((o) => o.list),
-    [streamedOutcomes]
+    () =>
+      streamedOutcomes
+        .flatMap((o) => o.list)
+        .sort((a, b) => compareSearchResults(a, b, urlQuery)),
+    [streamedOutcomes, urlQuery]
   );
   const list = useMemo(
     () => searchQuery.data?.list ?? (isSearching ? streamedList : []),

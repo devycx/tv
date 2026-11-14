@@ -23,7 +23,7 @@ import type { PlayerSkipApi } from '@/components/player-shell';
 import { useToast } from '@/components/toast';
 import { enqueueDownload } from '@/components/download-manager';
 import { Icon } from '@/components/icon';
-import { useAuth } from '@/components/auth';
+import { useAuth } from '@/components/auth';import { Header } from '@/components/header';
 import { resolveSource, useAppStore } from '@/lib/store';
 import { qualityKey } from '@/lib/quality';
 import {
@@ -36,7 +36,6 @@ import {
   upsertHistory,
   db,
 } from '@/lib/db';
-import { useScrolled } from '@/components/use-scrolled';
 import { cn } from '@/lib/utils';
 
 /**
@@ -58,8 +57,6 @@ function WatchContent() {
   const store = useAppStore();
   const { verified } = useAuth();
   const { toast } = useToast();
-  // 与首页顶栏一致：静止无框线，滚动后才出阴影
-  const scrolled = useScrolled();
 
   const sourceKey = searchParams.get('source') || '';
   const vodId = searchParams.get('id') || '';
@@ -319,23 +316,19 @@ function WatchContent() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <header
-        className={cn(
-          'sticky top-0 z-40 bg-surface/90 backdrop-blur transition-shadow',
-          scrolled && 'shadow-[0_1px_12px_rgba(0,0,0,0.35)]'
-        )}
-      >
-        <div className="max-w-7xl mx-auto px-3 sm:px-4 h-14 flex items-center gap-1.5 sm:gap-3">
-          <BackButton />
-          <HomeButton />
-          <div className="min-w-0">
-            <h1 className="text-sm font-medium text-content truncate">{videoTitle}</h1>
-            <p className="text-xs text-faint">
-              {source.name}
-              {episodes.length > 0 && ` · 第 ${currentIndex + 1}/${episodes.length} 集`}
-            </p>
-          </div>
-          <div className="ml-auto flex items-center gap-1.5 sm:gap-2 shrink-0">
+      {/* 与全站同一个顶栏：播放页也不能丢导航（直播/关于/历史/设置），
+          标题与「下载本集 / 切换资源」通过插槽并进同一行，不额外占高度 */}
+      <Header
+        leading={<BackButton />}
+        title={videoTitle}
+        subtitle={
+          <>
+            {source.name}
+            {episodes.length > 0 && ` · 第 ${currentIndex + 1}/${episodes.length} 集`}
+          </>
+        }
+        actions={
+          <>
             <button
               className="btn-ghost btn-sm"
               onClick={() => {
@@ -358,9 +351,9 @@ function WatchContent() {
             <button className="btn-ghost btn-sm" onClick={() => setSwitchOpen(true)}>
               切换资源
             </button>
-          </div>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-4">
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-4">
@@ -573,16 +566,3 @@ function BackButton() {
   );
 }
 
-/** 首页按钮：直达首页，避免从外链进入时逐级 back */
-function HomeButton() {
-  return (
-    <Link
-      href="/"
-      className="p-2 rounded-md text-muted hover:text-content hover:bg-hover transition-colors"
-      aria-label="回首页"
-      title="回首页"
-    >
-      <Icon name="home" className="w-5 h-5" />
-    </Link>
-  );
-}
