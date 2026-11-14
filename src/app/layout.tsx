@@ -21,14 +21,15 @@ export const metadata: Metadata = {
   description:
     '夜幕TV 是一个私人影视聚合平台：汇聚多个公开点播源与直播源，提供搜索、播放、收藏与观看记录，仅供个人学习使用。',
   manifest: '/manifest.webmanifest',
-  // 同一套品牌矢量（YouTube 风格蓝色播放徽标）导出的多尺寸 PNG + 根目录 favicon.ico 兜底。
-  // 只声明单张 512 时，抓取端只能拿大图缩放，小尺寸下易糊、看起来「没填满」。
+  // 页面/标签页图标用**透明背景**的徽标（YouTube 风格）：深色底的 icon-*.png 只留给
+  // manifest 里的 PWA 安装图标。此前把深色底 PNG 声明为页面 icon，浏览器的标签页/书签
+  // 会显示成一个黑底方块；透明徽标 contain 到正方形后会水平铺满、上下留透明边。
   icons: {
     icon: [
-      { url: '/favicon.ico', sizes: '48x48' },
-      { url: '/icons/icon-96.png', sizes: '96x96', type: 'image/png' },
-      { url: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-      { url: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/icons/favicon-32.png', sizes: '32x32', type: 'image/png' },
+      { url: '/icons/favicon-96.png', sizes: '96x96', type: 'image/png' },
+      { url: '/icons/favicon-192.png', sizes: '192x192', type: 'image/png' },
     ],
     apple: [{ url: '/icons/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
   },
