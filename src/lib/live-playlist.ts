@@ -1,6 +1,12 @@
 import { buildLivePlaylist } from './m3u-parser';
 import type { LivePlaylistResponse } from './types';
 import { UNAUTHORIZED_EVENT } from './unauthorized-event';
+import {
+  isPasswordSetupResponse,
+  noteWorkerResourceLimit,
+  readErrorBody,
+  RESOURCE_LIMIT_MESSAGE,
+} from './api-failure';
 
 /**
  * 直播 M3U 列表的客户端直连层。
@@ -52,7 +58,10 @@ function looksLikeM3u(text: string): boolean {
 
 /**
  * 服务端回退：走 `/api/live/playlist`（服务端无 CORS 限制，并带 10 分钟缓存）。
- * 与其他客户端 API 一样，401/503 时触发全局未授权事件（打开登录框 / 提示配置密码）。
+ * 401/503 时触发全局未授权事件（打开登录框 / 提示配置密码）。
+ *
+ * 503 必须与 client-api 使用同一套判定：本站「未配置 PASSWORD」返回的是 JSON，
+ * 而 Cloudflare 的错误页（1102 等）是 HTML——后者是资源问题，不能弹登录框。
  */
 async function fetchLivePlaylistViaServer(
   url: string,
@@ -70,19 +79,27 @@ async function fetchLivePlaylistViaServer(
     throw new Error('直播列表拉取失败：网络请求失败');
   }
 
-  if (res.status === 401 || res.status === 503) {
+  if (res.status === 401) {
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent(UNAUTHORIZED_EVENT, { detail: res.status === 503 ? 'setup' : undefined })
-      );
+      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
     }
-    throw new Error(res.status === 401 ? '需要登录' : '服务器未配置密码');
+    throw new Error('需要登录');
+  }
+
+  if (isPasswordSetupResponse(res)) {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: 'setup' }));
+    }
+    throw new Error('服务器未配置密码');
   }
 
   if (!res.ok) {
+    const body = await readErrorBody(res);
+    // 1102：上报全局降批并给出资源超限文案（这条主路径原先完全识别不到，也不会降批）
+    if (noteWorkerResourceLimit(res, body)) throw new Error(RESOURCE_LIMIT_MESSAGE);
     let message = `直播列表拉取失败 (${res.status})`;
     try {
-      const data = (await res.json()) as { error?: string };
+      const data = JSON.parse(body) as { error?: string };
       if (data?.error) message = data.error;
     } catch {
       // 非 JSON 响应（网关错误页等）：保留状态码文案

@@ -3,7 +3,12 @@
 import type { SearchResponse, SearchStreamEvent, SourceSearchOutcome, VideoDetail, DoubanResponse, BangumiCalendarResponse, SourceConfig, SearchResultItem, LivePlaylistResponse, LiveEpgResponse, SourceListPayload, QualityProbeItem, QualityProbeResult } from './types';
 import { fetchLivePlaylistDirect, livePlaylistApiUrl } from './live-playlist';
 import { UNAUTHORIZED_EVENT } from './unauthorized-event';
-import { isWorkerResourceLimit, reportWorkerResourceLimit } from './adaptive-batch';
+import {
+  isPasswordSetupResponse,
+  noteWorkerResourceLimit,
+  readErrorBody,
+  RESOURCE_LIMIT_MESSAGE,
+} from './api-failure';
 
 /** 401/503 全局事件名；对外导出保持兼容（事件常量已抽到 unauthorized-event，避免循环依赖） */
 export { UNAUTHORIZED_EVENT };
@@ -56,29 +61,11 @@ function throwForAuthStatus(res: Response): void {
   }
   // 只有本站登录接口的 JSON 503 才代表「未配置 PASSWORD」；
   // Cloudflare 1102 等网关错误页也可能是 503（HTML），不能误弹登录框。
-  if (res.status === 503 && (res.headers.get('content-type') || '').includes('application/json')) {
+  if (isPasswordSetupResponse(res)) {
     window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: 'setup' }));
     throw new ApiError('服务器未配置密码', 503);
   }
 }
-
-/** 读失败响应正文（clone 一份，不影响后续 JSON 解析/流消费） */
-async function readErrorBody(res: Response): Promise<string> {
-  try {
-    return await res.clone().text();
-  } catch {
-    return '';
-  }
-}
-
-/** 识别 Cloudflare 1102 并上报全局降批；返回是否资源超限 */
-function noteWorkerResourceLimit(res: Response, body: string): boolean {
-  const limited = isWorkerResourceLimit(res.status, body, res.headers);
-  if (limited) reportWorkerResourceLimit();
-  return limited;
-}
-
-const RESOURCE_LIMIT_MESSAGE = '服务器资源超限（Cloudflare 1102），已自动降低批次，请稍后重试';
 
 /** NDJSON 流读取：按行解析 JSON 并回调，坏行跳过不影响其余结果 */
 async function consumeNdjson<T>(res: Response, onEvent: (event: T) => void): Promise<void> {
