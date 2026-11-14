@@ -653,6 +653,7 @@ function VideoCachePanel() {
   const [summary, setSummary] = useState<CacheSummary>({ segments: 0, bytes: 0, episodes: 0 });
   const [estimate, setEstimate] = useState<StorageEstimateInfo>({ usage: 0, quota: 0, persisted: false });
   const [cap, setCap] = useState(() => loadCacheSettings().maxTotalBytes);
+  const [prefetchNext, setPrefetchNext] = useState(() => loadCacheSettings().prefetchNextEpisode);
   const [clearing, setClearing] = useState(false);
 
   const refresh = useCallback(() => {
@@ -680,6 +681,15 @@ function VideoCachePanel() {
         onChange={(v) => {
           const next = saveCacheSettings({ enabled: v });
           setEnabled(next.enabled);
+        }}
+      />
+      <ToggleRow
+        label="预取下一集"
+        description="当前集预取完成后，提前缓存下一集前 7 分钟：自动连播几乎秒开，但只看一集就离开时这部分流量是白费的。手机/省流环境始终不预取。"
+        checked={prefetchNext}
+        onChange={(v) => {
+          const next = saveCacheSettings({ prefetchNextEpisode: v });
+          setPrefetchNext(next.prefetchNextEpisode);
         }}
       />
       <div className="flex items-center justify-between text-xs text-faint">
@@ -796,6 +806,33 @@ function HomePanel() {
             { value: 'bangumi', label: 'Bangumi', hint: '每日新番放送（免 key）' },
             { value: 'hot-list', label: '影视榜单', hint: '豆瓣周榜 / 百度热播' },
           ]}
+        />
+      </div>
+
+      <SectionTitle title="搜索与画质" hint="减少搜索页无谓的后台请求" />
+      <div className="space-y-3">
+        <SelectRow
+          label="画质探测范围"
+          value={store.searchProbe}
+          description={
+            store.searchProbe === 'first'
+              ? '只自动探测搜索结果第一张卡片（多来源时探完该卡全部来源）；其余卡片在悬停、展开来源或点画质徽章重试时才探测。匹配「点首卡最优源」的习惯，请求最少。'
+              : store.searchProbe === 'visible'
+                ? '单源卡片滚入可视区域 500ms 后自动探测（旧行为）：信息最全，但滚动列表会持续触发请求。'
+                : '不自动探测：只在展开来源列表或手动点画质徽章重试时探测。'
+          }
+          onChange={(v) => store.updateSettings({ searchProbe: v as 'first' | 'visible' | 'off' })}
+          options={[
+            { value: 'first', label: '仅第一张卡片', hint: '推荐 · 请求最少' },
+            { value: 'visible', label: '可视卡片', hint: '旧行为 · 信息最全' },
+            { value: 'off', label: '关闭', hint: '只在展开/重试时探测' },
+          ]}
+        />
+        <ToggleRow
+          label="点击卡片直达最高画质"
+          description="多来源卡片已探到最高画质时，点击卡片直接打开该来源的详情（右侧箭头仍可展开全部来源）；尚未探到画质时先展开并开始探测。关闭后恢复「点击卡片展开来源列表」。"
+          checked={store.quickOpenBest}
+          onChange={(v) => store.updateSettings({ quickOpenBest: v })}
         />
       </div>
     </section>

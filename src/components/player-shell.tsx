@@ -249,7 +249,14 @@ export function PlayerShell({
       onProgress: (stats) => {
         // 当前集预取完成且存在下一集：用独立预取器预热下一集前 7 分钟。
         // 手机/省流环境不预热下一集：断点续播收益小于多占的几百 MB 与流量。
-        if (stats.state === 'done' && p.nextUrl && p.nextEpisodeKey && !isConstrainedCacheProfile()) {
+        // 用户也可在「设置 → 偏好设置 → 播放与过滤」里关闭「预取下一集」省流量。
+        if (
+          stats.state === 'done' &&
+          p.nextUrl &&
+          p.nextEpisodeKey &&
+          !isConstrainedCacheProfile() &&
+          loadCacheSettings().prefetchNextEpisode
+        ) {
           getNextEpisodePrefetcher().ensure({
             m3u8Url: p.nextUrl,
             currentTime: 0,

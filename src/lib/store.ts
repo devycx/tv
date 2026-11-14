@@ -47,6 +47,19 @@ export interface AppSettings {
   /** 用户是否在设置中主动选择过封面图加载方式；为 false 时部署者的 DEFAULT_IMAGE_MODE 默认值可生效 */
   imageProxyModeTouched: boolean;
   customImageProxy: string;
+  /**
+   * 搜索页自动画质探测的范围（探测会请求源站详情 + m3u8，有额外流量与耗时）：
+   * - `first`（默认）：只自动探测搜索结果第一张卡片（多来源时探完该卡所有来源），
+   *   其余卡片等用户展开来源 / 点徽章重试时才探测——匹配「点第一张卡的最高画质源」习惯；
+   * - `visible`：单源卡片进入视口 500ms 后自动探测（旧行为，信息最全但请求最多）；
+   * - `off`：不自动探测，只在展开来源或手动重试时探测。
+   */
+  searchProbe: 'first' | 'visible' | 'off';
+  /**
+   * 点击多来源卡片时直接打开最高画质来源的详情（省掉「展开 → 找最高 → 点击」两步）。
+   * 尚未探测到画质时退化为展开来源列表并开始探测；关闭后恢复「点击展开来源列表」的旧行为。
+   */
+  quickOpenBest: boolean;
 }
 
 /** 一次订阅同步导入的数量（点播 / 直播），用于列表内展示同步结果 */
@@ -362,6 +375,10 @@ export const useAppStore = create<AppState>()(
       imageProxyMode: 'direct',
       imageProxyModeTouched: false,
       customImageProxy: '',
+      // 默认只探第一张卡片：用户通常只点首卡的最优来源，避免一屏卡片同时打源站
+      searchProbe: 'first',
+      // 首卡探到画质后，点卡片直接进最高画质来源，省掉展开+二次点击
+      quickOpenBest: true,
 
       addCustomApi: (api) => {
         const list = get().customAPIs;
@@ -884,8 +901,10 @@ export const useAppStore = create<AppState>()(
       // v7：片尾结束也并入同一开关（不再单独提供 autoSkipOutro）。
       // v8：订阅新增 refreshDays / failStreak——两者都缺省即「纯手动 + 无失败记录」，
       //     与旧行为完全一致，因此无需改写存量数据，仅借版本号让 migrate 跑一遍。
+      // v9：新增搜索页设置 searchProbe / quickOpenBest——缺省由初始状态补齐
+      //     （searchProbe='first'、quickOpenBest=true），旧快照无需改写。
       // 此前未声明 version 的存量数据会被视为 v0 并走 migrate 补齐。
-      version: 8,
+      version: 9,
       migrate: (persisted, version) => {
         const state = { ...((persisted ?? {}) as Partial<AppState>) };
         if (!Array.isArray(state.liveRecent)) state.liveRecent = [];
@@ -970,6 +989,8 @@ export const useAppStore = create<AppState>()(
         imageProxyMode: s.imageProxyMode,
         imageProxyModeTouched: s.imageProxyModeTouched,
         customImageProxy: s.customImageProxy,
+        searchProbe: s.searchProbe,
+        quickOpenBest: s.quickOpenBest,
       }),
       // 同步 storage 会在模块加载时立即 rehydrate（早于 React hydration），
       // 一旦首屏渲染依赖持久化状态就会与 SSR 输出不一致。

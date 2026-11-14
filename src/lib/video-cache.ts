@@ -29,6 +29,12 @@ export interface CacheSettings {
   maxBytesPerEpisode: number;
   /** 全局缓存上限（字节） */
   maxTotalBytes: number;
+  /**
+   * 当前集预取完成后，是否继续用独立预取器提前缓存下一集的前 7 分钟。
+   * 默认开启（连播体验最好）；关闭可显著省流量——只看一集就走的场景下，
+   * 那 7 分钟（约 100–300MB）全是无用功。手机/省流环境本身就会跳过（见 player-shell）。
+   */
+  prefetchNextEpisode: boolean;
 }
 
 /** 桌面默认：暂停时可铺满整集，2GB 总量上限 */
@@ -37,6 +43,7 @@ export const DEFAULT_CACHE_SETTINGS: CacheSettings = {
   horizonSeconds: 300,
   maxBytesPerEpisode: 800 * 1024 * 1024,
   maxTotalBytes: 2 * 1024 * 1024 * 1024,
+  prefetchNextEpisode: true,
 };
 
 /**
@@ -49,6 +56,8 @@ const MOBILE_CACHE_SETTINGS: CacheSettings = {
   horizonSeconds: 120,
   maxBytesPerEpisode: 160 * 1024 * 1024,
   maxTotalBytes: 400 * 1024 * 1024,
+  // 手机本来就不预热下一集（player-shell 用 isConstrainedCacheProfile 兜住），这里是显式默认
+  prefetchNextEpisode: false,
 };
 
 const SETTINGS_KEY = 'libretv-video-cache-settings';
@@ -91,6 +100,7 @@ export function normalizeCacheSettings(input: unknown): CacheSettings {
     horizonSeconds: raw.horizonSeconds === 0 ? 0 : clamp(raw.horizonSeconds ?? DEFAULT_CACHE_SETTINGS.horizonSeconds, 60, 7200),
     maxBytesPerEpisode: clamp(raw.maxBytesPerEpisode ?? DEFAULT_CACHE_SETTINGS.maxBytesPerEpisode, 50 * 1024 * 1024, 8 * 1024 * 1024 * 1024),
     maxTotalBytes: clamp(raw.maxTotalBytes ?? DEFAULT_CACHE_SETTINGS.maxTotalBytes, 100 * 1024 * 1024, 20 * 1024 * 1024 * 1024),
+    prefetchNextEpisode: raw.prefetchNextEpisode !== false,
   };
 }
 

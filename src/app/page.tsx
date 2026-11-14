@@ -45,6 +45,9 @@ function HomeContent() {
   const yellowFilter = useAppStore((s) => s.yellowFilter);
   const sourceHealth = useAppStore((s) => s.sourceHealth);
   const subscriptions = useAppStore((s) => s.subscriptions);
+  // 搜索页后台请求控制：画质探测范围 + 点卡片直达最高画质来源
+  const searchProbe = useAppStore((s) => s.searchProbe);
+  const quickOpenBest = useAppStore((s) => s.quickOpenBest);
   const [input, setInput] = useState(urlQuery);
   const [detailItem, setDetailItem] = useState<SearchResultItem | null>(null);
   /** 流式搜索中已结算的源（data 就绪前用于增量渲染） */
@@ -158,10 +161,11 @@ function HomeContent() {
   // 跨源同名聚合：同名影片合并为一张卡片，展开后可选择具体来源
   const groups = useMemo(() => aggregateResults(list), [list]);
 
-  // 分批渲染：新一次搜索（groups 变化）时重置回首批
+  // 分批渲染：新一次搜索（查询/源选择/过滤条件变化）时重置回首批。
+  // 不能依赖 groups：流式搜索每追加一个源就会重建数组，会把「加载更多」反复重置。
   const [visibleCount, setVisibleCount] = useState(RESULT_PAGE_SIZE);
   const visibleGroups = useMemo(() => groups.slice(0, visibleCount), [groups, visibleCount]);
-  useEffect(() => setVisibleCount(RESULT_PAGE_SIZE), [groups]);
+  useEffect(() => setVisibleCount(RESULT_PAGE_SIZE), [urlQuery, selectedKeys, yellowFilter]);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -295,7 +299,9 @@ function HomeContent() {
                 ) : (
                   searchQuery.data && (
                     <span className="text-faint">
-                      （{groups.length} 部影片 · {list.length} 条结果{failures.length > 0 && `，${failures.length} 个源失败`}）
+                      （{groups.length} 部影片 · {list.length} 条来源结果
+                      {list.length > groups.length ? '，同名已聚合' : ''}
+                      {failures.length > 0 && `，${failures.length} 个源失败`}）
                     </span>
                   )
                 )}
@@ -333,14 +339,28 @@ function HomeContent() {
             ) : list.length > 0 ? (
               <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 items-start">
-                  {visibleGroups.map((group) => (
-                    <AggregatedCard
-                      key={group.key}
-                      group={group}
-                      sources={selectedSources}
-                      onOpen={(item) => setDetailItem(item)}
-                    />
-                  ))}
+                  {visibleGroups.map((group, index) => {
+                    // 画质探测范围：默认只探第一张卡片；visible 模式恢复「单源卡进视口即探」；
+                    // off 模式完全交给用户展开/点重试触发。多来源卡片在 first 模式下也自动探，
+                    // 探完即可「点卡片直达最高画质来源」。
+                    const singleSource = group.items.length === 1;
+                    const autoProbe =
+                      searchProbe === 'first'
+                        ? index === 0
+                        : searchProbe === 'visible'
+                          ? singleSource
+                          : false;
+                    return (
+                      <AggregatedCard
+                        key={group.key}
+                        group={group}
+                        sources={selectedSources}
+                        autoProbe={autoProbe}
+                        quickOpenBest={quickOpenBest}
+                        onOpen={(item) => setDetailItem(item)}
+                      />
+                    );
+                  })}
                 </div>
                 {groups.length > visibleCount && (
                   <div className="flex justify-center mt-4">
