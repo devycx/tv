@@ -15,13 +15,13 @@ const bootstrap = generatedBootstrap as BootstrapConfig;
 
 export const metadata: Metadata = {
   title: {
-    default: 'LibreTV - 免费在线视频搜索与观看平台',
-    template: '%s - LibreTV',
+    default: '夜幕TV - 私人影视聚合',
+    template: '%s - 夜幕TV',
   },
   description:
-    'LibreTV 是一个免费的在线视频搜索平台，无广告、安全，提供来自多个视频源的内容搜索与观看服务，无需注册即可使用。',
+    '夜幕TV 是一个私人影视聚合平台：汇聚多个公开点播源与直播源，提供搜索、播放、收藏与观看记录，仅供个人学习使用。',
   manifest: '/manifest.webmanifest',
-  // 图标与门户站（LibreTV-portal）同一套：同一张 artwork 导出的多尺寸 + 根目录 favicon.ico 兜底。
+  // 同一张品牌 artwork（由 Gemini 设计）导出的多尺寸 PNG + 根目录 favicon.ico 兜底。
   // 只声明单张 512 时，抓取端只能拿大图缩放，小尺寸下易糊、看起来「没填满」。
   icons: {
     icon: [

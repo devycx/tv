@@ -132,6 +132,37 @@ Next.js 15（App Router）+ OpenNext → 单个 Worker：
 - 典型会话（登录 + 首页 + 3 次搜索 + 5 个详情）约 **15 次 Worker 请求**，10 万/天约 6000+ 次会话。
 - 注意：改源必须重新构建（bootstrap 是构建期产物），不能只改 vars。
 
+### CPU 优化：入口缓存层（2026-11-14）
+
+Workers 免费套餐是 **10ms CPU / 请求**，而 Next.js/OpenNext 每次请求的固定开销就有 7–60ms。
+Cloudflare 对「偶发超限」有内置容忍，但连续超限会返回 Error 1102，所以必须把常态 CPU 压下来。
+
+改动：`wrangler.jsonc` 的 `main` 从 `.open-next/worker.js` 换成 **`src/cf-entry.ts`**（Worker 入口包壳），
+在进入 Next 运行时之前先用 Cloudflare Cache API 挡一层：
+
+| 缓存对象 | key | TTL | 命中后 |
+| --- | --- | --- | --- |
+| 页面整页 HTML（`/`、`/live`、`/about`、`/watch`） | pathname + 版本 | 6h | 直接返回，不进 Next |
+| 可缓存 GET API（`/api/status`、`/api/douban`、`/api/bangumi/calendar`、`/api/hot-list`、`/api/detail`、`/api/source-list`、`/api/live/epg`、`/api/live/playlist`） | pathname + query + 版本 | 1–60min | 直接返回，不进 Next |
+| 聚合搜索 `POST /api/search`（含 stream） | 请求体 SHA-256 + 版本 | 60s | 直接返回，不进 Next |
+
+- **安全**：缓存读取前先做一次会话 HMAC 校验；未登录/未配置密码一律直通 OpenNext，由 `src/middleware.ts` 照旧 302/401。
+  缓存内容是「所有登录用户共享的公共内容」（页面为构建期预渲染，API 为公共数据），不包含任何用户态。
+- **失效**：缓存 key 前缀是 `CF_VERSION_METADATA.id`（每次 `wrangler deploy` 都会变），新版本上线后旧缓存自然不命中；
+  另加 `max-age` 兜底。RSC 导航载荷（`_rsc` / `RSC: 1`）依赖 router state，**不缓存**。
+- **不缓存**：登录/登出、`/api/quality`、`/api/live/probe` 等流式探测、`force=1` 强制刷新。
+
+实测（`wrangler tail` 逐请求 cpuTime，2026-11-14 部署前后对比）：
+
+| 请求 | 优化前 CPU | 优化后 CPU（缓存命中） |
+| --- | --- | --- |
+| `/`、`/live`、`/about` 整页 | 28–59ms | **1ms** |
+| `/api/status`、`/api/douban` 等 GET | 7–23ms | **0–1ms** |
+| `POST /api/search`（35 源） | 48–281ms | **~1–2ms**（60s 内重复同词） |
+
+缓存 MISS（每个版本/路径/机房首次访问）仍是 28–152ms，冷启动首批 230–300ms，属正常；这些请求在免费套餐容忍范围内。
+`X-TV-Cache: HIT` 响应头可用于确认是否命中。
+
 ## 为 Workers 改了什么
 
 | 文件 | 改动 |
@@ -142,7 +173,8 @@ Next.js 15（App Router）+ OpenNext → 单个 Worker：
 | `src/app/login/page.tsx` | 新增。独立登录页（不依赖首页弹窗） |
 | `src/lib/session-webcrypto.ts` / `src/lib/safe-next.ts` | 新增。WebCrypto 会话校验（与 `auth.ts` 同算法）与回跳路径校验 |
 | `open-next.config.ts` | 新增。OpenNext Cloudflare 默认配置 |
-| `wrangler.jsonc` | 新增。Worker 入口、Assets 绑定、`nodejs_compat`、自定义域、预置源 vars |
+| `wrangler.jsonc` | 新增。Worker 入口、Assets 绑定、`nodejs_compat`、自定义域、预置源 vars；2026-11-14 起 `main` 指向 `src/cf-entry.ts`，并加 `version_metadata` 绑定 |
+| `src/cf-entry.ts` | 新增。Worker 入口包壳：已登录用户的页面 / GET API / 搜索 POST 走 Cloudflare Cache API，命中不进 Next 运行时（CPU 优化核心） |
 | `scripts/gen-wrangler.mjs` | 新增。生成 `wrangler.jsonc` + `src/lib/bootstrap.generated.json`（源列表的唯一维护点） |
 | `package.json` | 升级 `next` 到 15.5.29（OpenNext 1.20 的 peer 要求）；加 `cf:build` / `cf:preview` / `cf:deploy`；devDependencies 加 OpenNext、wrangler、cross-env |
 | `.gitignore` | 忽略 `.open-next/`、`.wrangler/`、`.dev.vars`、`.tmp/` |
@@ -156,14 +188,30 @@ Node 版（Docker / `npm start`）继续用原来的 `src/lib/ssrf.ts`：undici 
   但不会把域名解析一遍再校验。Cloudflare 边缘本身到不了内网，所以内网横向不可达。
 - **限流是单 isolate 内存实现**（登录 10 次 / 10 分钟）：多 isolate 时只是近似限流。
 - **内存缓存**（搜索短缓存、豆瓣推荐、直播列表）只活在单个 isolate 内，命中率看流量分布，属正常。
-- **实测 CPU**：静态预渲染 + 构建期 bootstrap 后，热 isolate 上 `/` 约 23–46ms、`/live` 约 16–69ms、
-  `/api/status` 约 28ms；新部署后的首批请求会有 200–400ms 的冷启动尖峰（isolate 初始化），属正常。
-  35 源聚合搜索约 2.7s（其中 CPU 很小），均未被 CPU 限制掐断。
+- **实测 CPU**（2026-11-14）：Cloudflare GraphQL 近 7 天 1869 次调用、总 CPU 68.4s，
+  P50 **7.5ms**、P75 **20.4ms**、P99 **407ms**、均值 36.6ms（含冷启动尖峰 200–600ms）；仪表盘 24h 中位数显示 8ms。
+  加了入口缓存层后，命中请求降到 **0–2ms**；MISS 仍 28–152ms、冷启动 230–300ms。
+  免费套餐 10ms/请求是硬上限，但平台对偶发超限有容忍 —— 「没有 Error 1102」不等于没超，要看 cpuTime 分布。
+  35 源聚合搜索 warm ~48ms CPU（首次冷启动 281ms），60s 内重复搜索走缓存约 1–2ms。
 - **直连播放依赖源站 CORS**：没有 `Access-Control-Allow-Origin`、防盗链、或 `http://` 混合内容
   的源只能换源；直播对这个最敏感（现有 12 个直播源约 30% 频道可直连，http 运营商流基本不可用）。
 - **封面依赖 cmliussss 公共镜像**：镜像不可用时豆瓣原站会返回 418/403，此时显示占位图。
 - `workers_dev: true` 保留了 `tv.ycxdev.workers.dev` 入口；不想要就把它设为 `false` 重新部署。
 - 站点源已预置；用户仍可在「设置 → 源管理」里自行增删、订阅或测活。
+
+## 品牌与图标（2026-11-14）
+
+站点从上游 LibreTV 品牌换成了自有的 **夜幕TV**（slogan：夜色启幕，好戏随时开场）。
+
+- Logo：Gemini 生成的 1024×1024 artwork（深色 #0b101a 底 + 霓虹蓝 #00b8e6 播放键/银幕符号），
+  原图存在 `public/icons/icon-1024.png`，其余尺寸（16/32/48/96/144/192/512/180）由它缩放导出，
+  `public/favicon.ico` 内嵌 16/32/48 三张 PNG。
+- 文案落点：`src/app/layout.tsx`（title/description）、`src/app/manifest.ts`（PWA 名称）、
+  `src/components/header.tsx`（顶栏 logo + 站名）、`src/components/site-footer.tsx`（页脚，已去掉上游
+  GitHub 链接与版本检测请求）、`src/app/login/page.tsx`、`src/app/page.tsx`（首页 hero）、
+  `src/app/about/page.tsx`。
+- 内部标识（localStorage key、IndexedDB 库名、订阅配置格式 `LibreTV-SourceList`/`LibreTV-Settings`、
+  session 派生盐）**保持不变**，避免已有用户的主题/配置/登录态失效。
 
 ## 排错
 

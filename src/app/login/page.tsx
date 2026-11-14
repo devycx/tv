@@ -83,8 +83,8 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-6">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/icons/icon-512.png" alt="LibreTV" className="w-14 h-14 rounded-2xl shadow-lg" />
-          <h1 className="mt-3 text-2xl font-bold brand-gradient">LibreTV</h1>
+          <img src="/icons/icon-512.png" alt="夜幕TV" className="w-14 h-14 rounded-2xl shadow-lg" />
+          <h1 className="mt-3 text-2xl font-bold brand-gradient">夜幕TV</h1>
           <p className="mt-1.5 text-sm text-muted">请输入访问密码以继续</p>
         </div>
 
