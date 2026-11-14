@@ -15,64 +15,18 @@
  * 利用的内网横向通道；DNS 预解析只会在每次代理时多一次外部查询与延迟。
  */
 
-/** 去掉 URL.hostname 对 IPv6 附加的方括号（"[::1]" → "::1"） */
-function stripBrackets(host: string): string {
-  return host.trim().replace(/^\[+|\]+$/g, '');
-}
+import { isPrivateIP, isValidProxyUrl, normalizeHost } from './ssrf-ip';
 
-/**
- * IPv4-mapped / IPv4-compatible IPv6 还原为点分十进制，命中不到时返回 null。
- */
-function toIPv4(ip: string): string | null {
-  const v = ip.replace(/^0:0:0:0:0:/i, '::');
-  const dotted = /^::(?:ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(v);
-  if (dotted) return dotted[1];
-  const hex = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(v);
-  if (!hex) return null;
-  const n = (((parseInt(hex[1], 16) << 16) | parseInt(hex[2], 16)) >>> 0);
-  return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
-}
-
-/** 判断 IP 是否为私有/回环/链路本地/保留地址（SSRF 防护） */
-export function isPrivateIP(ip: string): boolean {
-  let v = stripBrackets(ip.trim());
-  v = toIPv4(v) ?? v;
-  if (/^(127\.|0\.0\.0\.0$|::1$|::$|fe80:|fc|fd)/i.test(v)) return true;
-  if (v.startsWith('10.')) return true;
-  if (v.startsWith('192.168.')) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(v)) return true;
-  if (v.startsWith('169.254.')) return true;
-  if (v.startsWith('100.64.')) return true;
-  if (v.startsWith('192.0.0.')) return true;
-  return false;
-}
-
-const BLOCKED_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
-
-/** URL 字面量校验：协议白名单 + 主机名/字面量 IP 黑名单 */
-export function isValidProxyUrl(urlString: string): boolean {
-  try {
-    const parsed = new URL(urlString);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-    const host = stripBrackets(parsed.hostname);
-    if (BLOCKED_HOSTNAMES.has(host)) return false;
-    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':')) {
-      if (isPrivateIP(host)) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
+// 纯函数校验层统一放在 ./ssrf-ip（基于 ipaddr.js，不含 Node 内置模块，Workers 可直接打包）。
+export { isPrivateIP, isValidProxyUrl };
 
 /** Workers 侧不做 DNS 解析（见文件头注释），只拦字面量私网 IP */
 export async function isBlockedByDNS(urlString: string): Promise<boolean> {
   try {
-    const hostname = stripBrackets(new URL(urlString).hostname);
-    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.includes(':')) {
-      return isPrivateIP(hostname);
-    }
-    return false;
+    const hostname = normalizeHost(new URL(urlString).hostname);
+    if (!hostname) return false;
+    // 字面量 IP（含 IPv4-mapped、6to4、NAT64 等变形）直接走纯函数校验；Workers 侧不对域名做 DNS 预解析
+    return isPrivateIP(hostname);
   } catch {
     return false;
   }

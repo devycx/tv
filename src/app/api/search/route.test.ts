@@ -4,6 +4,18 @@ import { SESSION_COOKIE, signSession } from '@/lib/auth';
 import type { SearchResponse, SearchStreamEvent, SourceConfig } from '@/lib/types';
 
 /**
+ * 上游 mock 用的是 `.example` 保留域名，本意是「公网地址」。但部分开发环境
+ * （Clash / Surge 的 fake-IP 等）会把任意域名解析进 198.18.0.0/15，而 SSRF 校验
+ * 按审计规格会（正确地）拦截该保留网段，导致这些「公网源」被提前拒绝。
+ * 本文件测的是聚合搜索逻辑而非 DNS，统一把 DNS 解析 mock 成固定公网地址，保证环境无关。
+ */
+vi.mock('node:dns/promises', () => ({
+  default: {
+    lookup: vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]),
+  },
+}));
+
+/**
  * 聚合搜索接口单测：跨源聚合、同源去重、精确命中置顶、成人内容过滤、
  * 失败源不影响整体、SSRF 字面量拒绝。上游一律 mock fetch，无真实网络。
  */

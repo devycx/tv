@@ -1109,8 +1109,9 @@ export function PlayerShell({
       {error && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/80">
           <p className="text-danger text-sm">{error}</p>
-          <button className="btn-ghost text-xs" onClick={() => location.reload()}>
-            重新加载
+          {/* 轻量重试：只重载当前集的 HLS 源（loadEpisode 会清错误态），不整页刷新 */}
+          <button className="btn-ghost text-xs" onClick={() => loadEpisode(propsRef.current.url)}>
+            重试
           </button>
         </div>
       )}

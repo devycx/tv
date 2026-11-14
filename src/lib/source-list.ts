@@ -1,4 +1,8 @@
 import type { SourceListPayload } from './types';
+import { hostnameOf } from './utils';
+
+// 统一使用 utils 的 hostnameOf（hostname 兜底名称）；保留本模块导出，避免调用方改导入路径
+export { hostnameOf };
 
 /**
  * 数据源订阅（LibreTV-SourceList JSON）的纯解析层：只做字段裁剪、去重与上限，
@@ -55,14 +59,6 @@ export function normalizeUrl(raw: unknown, trimTrailingSlash: boolean): string |
 
 export function optionalString(raw: unknown): string | undefined {
   return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
-}
-
-export function hostnameOf(url: string): string {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return url;
-  }
 }
 
 /**

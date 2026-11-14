@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { SearchResultItem, SourceConfig } from '@/lib/types';
 import { useAppStore } from '@/lib/store';
 import { qualityKey } from '@/lib/quality';
-import { compactRemarks, formatRemarks, inferGroupRemarks } from '@/lib/remarks';
+import { compactRemarks, inferGroupRemarks } from '@/lib/remarks';
 import { cn } from '@/lib/utils';
 import { SmartImage } from './smart-image';
 import { QualityBadge } from './quality-badge';
@@ -327,68 +327,6 @@ export function AggregatedCard({
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-/** 影片卡片：封面加载失败时逐级降级到占位图（未聚合的单一结果使用） */
-export function VideoCard({ item, onClick }: { item: SearchResultItem; onClick: () => void }) {
-  const imageProxyMode = useAppStore((s) => s.imageProxyMode);
-  const customImageProxy = useAppStore((s) => s.customImageProxy);
-  const [imgFailed, setImgFailed] = useState(false);
-  const showImg = !!item.pic && !imgFailed;
-
-  return (
-    <div
-      className="card cursor-pointer hover:scale-[1.02] hover:shadow-md h-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-      role="button"
-      tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          // 阻止空格触发页面滚动（AggregatedCard 已是此写法，此处对齐）
-          e.preventDefault();
-          onClick();
-        }
-      }}
-    >
-      <div className="flex h-full">
-        {showImg ? (
-          <div className="relative flex-shrink-0 w-[105px] sm:w-[120px] aspect-[2/3] bg-chip">
-            <SmartImage
-              url={item.pic}
-              mode={imageProxyMode}
-              customProxy={customImageProxy}
-              alt={item.name}
-              className="h-full w-full object-cover"
-              onExhausted={() => setImgFailed(true)}
-            />
-            <div className="absolute inset-0 bg-gradient-to-r from-black/30 to-transparent" />
-          </div>
-        ) : (
-          <div className="flex-shrink-0 w-[105px] sm:w-[120px] aspect-[2/3] bg-chip flex items-center justify-center">
-            <svg className="w-8 h-8 text-faint" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 4v16m10-16v16M3 6a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6zm4 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6zm8 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6zm4 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6z" />
-            </svg>
-          </div>
-        )}
-
-        <div className="p-2.5 flex flex-col flex-grow min-w-0">
-          <div className="flex-grow">
-            <h3 className="font-semibold text-sm text-content mb-1.5 line-clamp-2" title={item.name}>
-              {item.name}
-            </h3>
-            <div className="flex flex-wrap gap-1 mb-1.5">
-              {item.typeName && <span className="tag bg-accent/15 text-accent">{item.typeName}</span>}
-              {item.year && <span className="tag bg-purple-500/15 text-purple-600 dark:text-purple-300">{item.year}</span>}
-            </div>
-            <p className="text-xs text-muted line-clamp-2 mb-2">{formatRemarks(item.remarks) || '暂无介绍'}</p>
-          </div>
-          <div className="flex items-center justify-between mt-auto pt-1.5 border-t border-line">
-            <span className="tag bg-chip text-muted truncate max-w-[80%]">{item.sourceName}</span>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

@@ -3,6 +3,18 @@ import { POST } from './route';
 import { SESSION_COOKIE, signSession } from '@/lib/auth';
 
 /**
+ * 上游 mock 用的是 `.test` 保留域名，本意是「公网地址」。但部分开发环境
+ * （Clash / Surge 的 fake-IP 等）会把任意域名解析进 198.18.0.0/15，而 SSRF 校验
+ * 按审计规格会（正确地）拦截该保留网段，导致这些「公网源」被提前拒绝。
+ * 本文件测的是探测逻辑而非 DNS，统一把 DNS 解析 mock 成固定公网地址，保证环境无关。
+ */
+vi.mock('node:dns/promises', () => ({
+  default: {
+    lookup: vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]),
+  },
+}));
+
+/**
  * 测活接口单测：流式 NDJSON、codec 解析、内容校验、结果缓存、内网放行。
  * 上游一律用 mock fetch，不产生真实网络请求。
  */

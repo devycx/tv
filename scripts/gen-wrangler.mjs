@@ -22,7 +22,8 @@ import fs from 'node:fs';
  *
  * 候选全集 = tested.json ∪ tested2.json ∪ near-miss.json ∪ recommended.json ∪ 原有 15 个，
  * 按规范化 URL 去重（忽略协议与主机大小写、去尾斜杠），同一源的多协议变体只保留复验通过的那个，
- * 名称取第一次出现。成人内容不再过滤：isAdult 一律 false，结果层过滤仍由站内「黄色过滤」设置控制。
+ * 名称取第一次出现。成人内容不剔除：9 个成人向源照旧标 isAdult: true（与 DEPLOY-CLOUDFLARE.md
+ * 的「18🈲 成人内容标识与开关」一致），搜索结果是否过滤成人条目由站内「成人内容过滤」设置控制。
  *
  * 线上复验（新纳入的源）：POST /api/search（庆余年，无结果再试 流浪地球，filterAdult=false）
  * + GET /api/detail，episodes 非空才算通过；仅成人目录的 森林 / jkun 用第三关键词 狂飙 复验通过。
@@ -113,6 +114,11 @@ const config = {
     // 每个源只抓第一页、关闭重试，把最坏情况压到「源数量 + 少量重定向」。
     SEARCH_MAX_PAGES: '1',
     MAX_RETRIES: '0',
+    // 部署矩阵开关（见 src/app/api/auth/route.ts）：Workers 前面只有 Cloudflare 边缘，
+    // cf-connecting-ip 由边缘覆写、客户端伪造无效，登录限流必须按它计数。
+    // 注意：Node / Docker + 可信反代部署不要照抄这一条，否则客户端可伪造 cf-connecting-ip
+    // 绕过限流（那里应改用反代覆写的 x-real-ip / x-forwarded-for）。
+    TRUST_CF_IP: '1',
   },
 };
 

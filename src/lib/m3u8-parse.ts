@@ -1,4 +1,5 @@
 import { makeAbsolute, stripAdGroups, documentBaseURI } from './m3u8';
+import { inferHeightFromBitrate } from './quality';
 
 /**
  * m3u8 播放列表解析（预取器与离线下载共用）。
@@ -45,27 +46,6 @@ export interface ParsedPlaylist {
 
 /** 解析深度上限（master → variant → media，正常不超过 2 层，防御异常源） */
 const MAX_DEPTH = 5;
-
-/**
- * 码率 → 推断高度：很多源站的 master playlist 只给 BANDWIDTH 不给 RESOLUTION，
- * hls.js 的 level.height 会是 undefined，任何「按分辨率命名」的实现都会退化。
- * 分层取自常见转码参数（1080p≈5Mbps、720p≈3Mbps…），仅供档位标识使用。
- */
-export function inferHeightFromBitrate(bandwidth: number): number {
-  const tiers: Array<[number, number]> = [
-    [20_000_000, 4320],
-    [10_000_000, 2160],
-    [5_000_000, 1080],
-    [3_000_000, 720],
-    [1_500_000, 540],
-    [800_000, 480],
-    [400_000, 360],
-  ];
-  for (const [bps, height] of tiers) {
-    if (bandwidth >= bps) return height;
-  }
-  return 240;
-}
 
 /**
  * 档位选择：传 preferredHeight 时「同高度优先 → 更高档中最低 → 更低档中最高」；

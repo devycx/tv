@@ -22,6 +22,17 @@ export function makeAbsolute(url: string, base: string | undefined): string {
   }
 }
 
+/** DISCONTINUITY 标记行判定（广告剔除的几段逻辑共用，避免各函数重复定义） */
+function isDisc(l: string): boolean {
+  return l.trim() === '#EXT-X-DISCONTINUITY';
+}
+
+/** 分片行判定：非空且非注释行 */
+function isSegment(l: string): boolean {
+  const t = l.trim();
+  return t !== '' && !t.startsWith('#');
+}
+
 /**
  * 片头广告段判定上限。dytt 等采集站把固定一支广告（约 15-60s，10 片左右）
  * 作为首个 DISCONTINUITY 段混入所有视频；正片分段（每段 20-40s）与其结构相同，
@@ -48,11 +59,6 @@ const LEAD_AD_MAX_SEGMENTS = 20;
 export function stripLeadAdGroup(m3u8Content: string): string {
   if (!m3u8Content) return '';
   const lines = m3u8Content.split('\n');
-  const isDisc = (l: string) => l.trim() === '#EXT-X-DISCONTINUITY';
-  const isSegment = (l: string) => {
-    const t = l.trim();
-    return t !== '' && !t.startsWith('#');
-  };
 
   // 多分组封装（采集站把流按固定块切分、每个衔接处都打 DISCONTINUITY）不是广告。
   // 实测两类源均在片头误删过正片：rycjapi 每组 5 片（间隙完全均匀），
@@ -132,11 +138,6 @@ function looksLikeAdUrl(line: string): boolean {
 function stripMarkedAdGroups(m3u8Content: string): string {
   if (!m3u8Content) return '';
   const lines = m3u8Content.split('\n');
-  const isDisc = (l: string) => l.trim() === '#EXT-X-DISCONTINUITY';
-  const isSegment = (l: string) => {
-    const t = l.trim();
-    return t !== '' && !t.startsWith('#');
-  };
 
   const drop = new Array<boolean>(lines.length).fill(false);
   let i = 0;
@@ -189,7 +190,7 @@ interface AdGroupScan {
 }
 
 /** 按 DISCONTINUITY 把播放列表切成组：组 k（k≥1）前的边界行是 discIdx[k-1] */
-function scanGroups(lines: string[], isDisc: (l: string) => boolean, isSegment: (l: string) => boolean): AdGroupScan[] {
+function scanGroups(lines: string[]): AdGroupScan[] {
   const discIdx: number[] = [];
   for (let i = 0; i < lines.length; i++) if (isDisc(lines[i])) discIdx.push(i);
 
@@ -220,13 +221,8 @@ function scanGroups(lines: string[], isDisc: (l: string) => boolean, isSegment: 
 function stripInterstitialAdGroups(m3u8Content: string): string {
   if (!m3u8Content) return '';
   const lines = m3u8Content.split('\n');
-  const isDisc = (l: string) => l.trim() === '#EXT-X-DISCONTINUITY';
-  const isSegment = (l: string) => {
-    const t = l.trim();
-    return t !== '' && !t.startsWith('#');
-  };
 
-  const groups = scanGroups(lines, isDisc, isSegment);
+  const groups = scanGroups(lines);
   const drop = new Array<boolean>(lines.length).fill(false);
   for (let k = 1; k < groups.length; k++) {
     const g = groups[k];

@@ -159,6 +159,10 @@ export class VideoPrefetcher {
   stop(): void {
     this.generation += 1;
     this.abort.abort();
+    // 唤醒被节流阻塞的 worker：generation 已变，它们会在二次校验处直接退出，
+    // 不会继续取任务；不唤醒的话 Promise 永远挂着，等待队列会残留
+    const waiters = this.waiters.splice(0);
+    for (const w of waiters) w();
     this.setState({ state: 'idle', cached: 0, total: 0, bytes: 0 });
   }
 
@@ -192,13 +196,10 @@ export class VideoPrefetcher {
 
   private waitForResume(generation: number): Promise<void> {
     if (!this.throttled || generation !== this.generation) return Promise.resolve();
+    // 队列式 Promise 唤醒（而不是 500ms 轮询）：解除节流 / stop 时立即唤醒，
+    // 恢复缓存无固定延迟；调用方唤醒后仍需二次校验 generation
     return new Promise((resolve) => {
-      const check = setInterval(() => {
-        if (!this.throttled || generation !== this.generation) {
-          clearInterval(check);
-          resolve();
-        }
-      }, 500);
+      this.waiters.push(resolve);
     });
   }
 
@@ -268,6 +269,8 @@ export class VideoPrefetcher {
       while (cursor < taskQueue.length) {
         if (generation !== this.generation) return;
         await this.waitForResume(generation);
+        // 唤醒后二次校验：stop() 会唤醒 waiters 让循环退出，若不校验会继续取任务
+        if (generation !== this.generation) return;
         const task = taskQueue[cursor++];
         if (!task) return;
         const key = buildSegmentCacheKey(task.url);

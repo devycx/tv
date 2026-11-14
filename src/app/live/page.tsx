@@ -21,6 +21,7 @@ import { LiveEpgPanel } from '@/components/live-epg-panel';
 import { Spinner } from '@/components/states';
 import { useAuth } from '@/components/auth';
 import { allLiveSources, useAppStore } from '@/lib/store';
+import { collectGroups } from '@/lib/m3u-parser';
 import { cn } from '@/lib/utils';
 import { SmartImage } from '@/components/smart-image';
 
@@ -94,10 +95,7 @@ function LiveContent() {
         list.push({ ...c, epg: source.epg, sourceUrl: source.url });
       }
     }
-    const groups = [...new Set(list.map((c) => c.group).filter((g): g is string => Boolean(g)))].sort(
-      (a, b) => a.localeCompare(b, 'zh')
-    );
-    return { channels: list, groups, failedCount: failed };
+    return { channels: list, groups: collectGroups(list), failedCount: failed };
   }, [playlistsQuery.data]);
 
   // 当前频道：优先取列表内完整对象（含台标），否则由 URL 参数重建

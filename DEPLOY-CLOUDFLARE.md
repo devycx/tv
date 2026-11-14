@@ -144,13 +144,14 @@ Cloudflare 对「偶发超限」有内置容忍，但连续超限会返回 Error
 | --- | --- | --- | --- |
 | 页面整页 HTML（`/`、`/live`、`/about`、`/watch`） | pathname + 版本 | 6h | 直接返回，不进 Next |
 | 可缓存 GET API（`/api/status`、`/api/douban`、`/api/bangumi/calendar`、`/api/hot-list`、`/api/detail`、`/api/source-list`、`/api/live/epg`、`/api/live/playlist`） | pathname + query + 版本 | 1–60min | 直接返回，不进 Next |
-| 聚合搜索 `POST /api/search`（stream 与非 stream 分开缓存） | 请求体 SHA-256 + URL query + 版本 | 60s | 直接返回，不进 Next |
+| 聚合搜索 `POST /api/search`（仅非 stream 的完整 JSON，且 `failures` 为空数组） | `wd` + 成人过滤 + 排序后的源地址集合（与 route.ts 同口径）的 SHA-256 + URL query + 版本 | 60s | 直接返回，不进 Next |
 
 - **安全**：缓存读取前先做一次会话 HMAC 校验；未登录/未配置密码一律直通 OpenNext，由 `src/middleware.ts` 照旧 302/401。
   缓存内容是「所有登录用户共享的公共内容」（页面为构建期预渲染，API 为公共数据），不包含任何用户态。
 - **失效**：缓存 key 前缀是 `CF_VERSION_METADATA.id`（每次 `wrangler deploy` 都会变），新版本上线后旧缓存自然不命中；
   另加 `max-age` 兜底。RSC 导航载荷（`_rsc` / `RSC: 1`）依赖 router state，**不缓存**。
-- **不缓存**：登录/登出、`/api/quality`、`/api/live/probe` 等流式探测、`force=1` 强制刷新。
+- **不缓存**：登录/登出、`/api/quality`、`/api/live/probe` 等流式探测、`force=1` 强制刷新、`?stream=1` 的 NDJSON 搜索流
+  （只能消费一次且断连会打断上游），以及含失败源（`failures.length > 0`）的搜索结果——失败源 60s 内可能恢复，缓存会让用户看不到。
 
 实测（`wrangler tail` 逐请求 cpuTime，2026-11-14 部署前后对比）：
 
@@ -187,6 +188,9 @@ Node 版（Docker / `npm start`）继续用原来的 `src/lib/ssrf.ts`：undici 
 - **Workers 没有连接级 SSRF 防护**：字面量私网 IP、非 http(s) 协议、每一跳重定向都会被拦，
   但不会把域名解析一遍再校验。Cloudflare 边缘本身到不了内网，所以内网横向不可达。
 - **限流是单 isolate 内存实现**（登录 10 次 / 10 分钟）：多 isolate 时只是近似限流。
+  Workers 部署由 `wrangler.jsonc` 的 `TRUST_CF_IP: "1"`（`gen-wrangler.mjs` 生成）让限流按 Cloudflare 边缘覆写的
+  `cf-connecting-ip` 计数；漏配会让所有请求共用一个 `'unknown'` 计数桶，10 次失败即锁死全站登录 10 分钟。
+  Node / Docker + 可信反代部署**不要**设 `TRUST_CF_IP`，否则客户端可伪造该头绕过限流（那里应改用反代覆写的 `x-real-ip` / `x-forwarded-for`）。
 - **内存缓存**（搜索短缓存、豆瓣推荐、直播列表）只活在单个 isolate 内，命中率看流量分布，属正常。
 - **客户端存储（播放器片段缓存）**：Cache Storage `libretv-video-v1` + IndexedDB `segmentMeta`，
   默认桌面 2GB 总量 / 800MB 每集 / 300s 预取；手机、省流模式、2G/3G 自动收紧到

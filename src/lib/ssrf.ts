@@ -3,66 +3,18 @@ import type { LookupAddress } from 'node:dns';
 import { lookup as callbackLookup } from 'node:dns';
 import dns from 'node:dns/promises';
 import { Agent, buildConnector } from 'undici';
+import { BLOCKED_HOSTNAMES, isPrivateIP, isValidProxyUrl, normalizeHost } from './ssrf-ip';
 
-/** 去掉 URL.hostname 对 IPv6 附加的方括号（"[::1]" → "::1"） */
-function stripBrackets(host: string): string {
-  return host.trim().replace(/^\[+|\]+$/g, '');
-}
-
-/**
- * IPv4-mapped / IPv4-compatible IPv6 还原为点分十进制，命中不到时返回 null。
- * "::ffff:192.168.1.100" 与 "::ffff:c0a8:164" 都会归一化成 "192.168.1.100"，
- * 否则这类地址会绕过下面的私网规则被当成公网放行。
- */
-function toIPv4(ip: string): string | null {
-  const v = ip.replace(/^0:0:0:0:0:/i, '::'); // 全写形式
-  const dotted = /^::(?:ffff:)?(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(v);
-  if (dotted) return dotted[1];
-  const hex = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(v);
-  if (!hex) return null;
-  const n = (((parseInt(hex[1], 16) << 16) | parseInt(hex[2], 16)) >>> 0);
-  return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
-}
-
-/** 判断 IP 是否为私有/回环/链路本地/保留地址（SSRF 防护） */
-export function isPrivateIP(ip: string): boolean {
-  let v = stripBrackets(ip.trim());
-  v = toIPv4(v) ?? v;
-  if (/^(127\.|0\.0\.0\.0$|::1$|::$|fe80:|fc|fd)/i.test(v)) return true;
-  if (v.startsWith('10.')) return true;
-  if (v.startsWith('192.168.')) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(v)) return true;
-  if (v.startsWith('169.254.')) return true; // 链路本地（含云元数据 169.254.169.254）
-  if (v.startsWith('100.64.')) return true; // CGNAT
-  if (v.startsWith('192.0.0.')) return true; // 协议分配块
-  return false;
-}
-
-const BLOCKED_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
-
-/** URL 字面量校验：协议白名单 + 主机名/字面量 IP 黑名单 */
-export function isValidProxyUrl(urlString: string): boolean {
-  try {
-    const parsed = new URL(urlString);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-    const host = stripBrackets(parsed.hostname); // "[::1]" 也要能被黑名单命中
-    if (BLOCKED_HOSTNAMES.has(host)) return false;
-    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':')) {
-      if (isPrivateIP(host)) return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
+// 纯函数校验层统一放在 ./ssrf-ip（基于 ipaddr.js），此处保持原有导出面兼容。
+export { isPrivateIP, isValidProxyUrl };
 
 /** DNS 解析后校验目标主机名是否解析到内网/保留地址 */
 export async function isBlockedByDNS(urlString: string): Promise<boolean> {
   try {
-    const hostname = stripBrackets(new URL(urlString).hostname);
-    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.includes(':')) {
-      return isPrivateIP(hostname);
-    }
+    const hostname = normalizeHost(new URL(urlString).hostname);
+    if (!hostname) return false;
+    // 字面量 IP（含 IPv4-mapped、6to4、NAT64 等变形）直接走纯函数校验，域名再交给 DNS
+    if (isPrivateIP(hostname)) return true;
     const result = await dns.lookup(hostname, { all: true });
     return result.some((r) => isPrivateIP(r.address));
   } catch {
@@ -139,8 +91,8 @@ export function createSSRFAgent(options: { allowPrivate?: boolean } = {}): Agent
     opts: unknown,
     cb: (err: NodeJS.ErrnoException | null, address?: string | LookupAddress[], family?: number) => void
   ): void {
-    const cleanHost = stripBrackets(hostname);
-    if (!allowPrivate && BLOCKED_HOSTNAMES.has(cleanHost.toLowerCase())) {
+    const cleanHost = normalizeHost(hostname);
+    if (!allowPrivate && BLOCKED_HOSTNAMES.has(cleanHost)) {
       const blockErr = Object.assign(new Error(`目标主机名在黑名单中 (${hostname})`), {
         code: 'ERR_SSRF_BLOCKED',
       });
@@ -178,21 +130,19 @@ export function createSSRFAgent(options: { allowPrivate?: boolean } = {}): Agent
   });
 
   function ssrfConnect(opts: buildConnector.Options, cb: buildConnector.Callback) {
-    const cleanHost = stripBrackets(opts.hostname || '');
+    const cleanHost = normalizeHost(opts.hostname || '');
     if (!allowPrivate) {
-      if (BLOCKED_HOSTNAMES.has(cleanHost.toLowerCase())) {
+      if (BLOCKED_HOSTNAMES.has(cleanHost)) {
         const blockErr = Object.assign(new Error(`目标主机名在黑名单中 (${cleanHost})`), {
           code: 'ERR_SSRF_BLOCKED',
         });
         return cb(blockErr, null);
       }
-      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(cleanHost) || cleanHost.includes(':')) {
-        if (isPrivateIP(cleanHost)) {
-          const blockErr = Object.assign(new Error(`目标地址属于私有/保留网络 (${cleanHost})`), {
-            code: 'ERR_SSRF_BLOCKED',
-          });
-          return cb(blockErr, null);
-        }
+      if (isPrivateIP(cleanHost)) {
+        const blockErr = Object.assign(new Error(`目标地址属于私有/保留网络 (${cleanHost})`), {
+          code: 'ERR_SSRF_BLOCKED',
+        });
+        return cb(blockErr, null);
       }
     }
     return baseConnector(opts, cb);

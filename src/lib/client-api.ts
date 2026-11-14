@@ -2,6 +2,10 @@
 
 import type { SearchResponse, SearchStreamEvent, SourceSearchOutcome, VideoDetail, DoubanResponse, BangumiCalendarResponse, SourceConfig, SearchResultItem, LivePlaylistResponse, LiveEpgResponse, SourceListPayload, QualityProbeItem, QualityProbeResult } from './types';
 import { fetchLivePlaylistDirect, livePlaylistApiUrl } from './live-playlist';
+import { UNAUTHORIZED_EVENT } from './unauthorized-event';
+
+/** 401/503 全局事件名；对外导出保持兼容（事件常量已抽到 unauthorized-event，避免循环依赖） */
+export { UNAUTHORIZED_EVENT };
 
 /**
  * 客户端 API 封装。401 时触发全局事件打开登录框，
@@ -15,8 +19,6 @@ export class ApiError extends Error {
     this.status = status;
   }
 }
-
-const UNAUTHORIZED_EVENT = 'libretv:unauthorized';
 
 /** 单条测活结果（/api/live/probe，JSON 与 NDJSON 流共用同一结构） */
 export interface LiveProbeResult {

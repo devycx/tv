@@ -78,13 +78,15 @@ export function parseXmltv(
   now: number = Date.now()
 ): Map<string, EpgProgram[]> {
   let text: string;
-  if (Buffer.isBuffer(content)) {
-    text =
-      content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b
-        ? gunzipSync(content).toString('utf8')
-        : content.toString('utf8');
-  } else {
+  // 用 typeof 收窄而不是 Buffer.isBuffer：allowJs 下 .open-next 构建产物会参与 TS program，
+  // 其中 `globalThis.Buffer = Buffer` 会让全局 Buffer 类型不再被识别为类型守卫，
+  // 导致 `content` 无法收窄（构建产物存在时 tsc 报 TS2322）。
+  if (typeof content === 'string') {
     text = content;
+  } else if (content.length >= 2 && content[0] === 0x1f && content[1] === 0x8b) {
+    text = gunzipSync(content).toString('utf8');
+  } else {
+    text = content.toString('utf8');
   }
 
   const result = new Map<string, EpgProgram[]>();

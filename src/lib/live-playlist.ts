@@ -1,5 +1,6 @@
 import { buildLivePlaylist } from './m3u-parser';
 import type { LivePlaylistResponse } from './types';
+import { UNAUTHORIZED_EVENT } from './unauthorized-event';
 
 /**
  * 直播 M3U 列表的客户端直连层。
@@ -17,9 +18,6 @@ import type { LivePlaylistResponse } from './types';
  * 解析结果由 `buildLivePlaylist`（与 /api/live/playlist 共用）产出，
  * 直连与回退两条路径的 name/channels/groups 结构不可能出现差异。
  */
-
-/** 与 client-api.ts 的 UNAUTHORIZED_EVENT 一致（不在两个模块间互相 import，避免循环依赖） */
-const UNAUTHORIZED_EVENT = 'libretv:unauthorized';
 
 /** `/api/live/playlist` 的请求地址（服务端代理/回退与页面外链共用同一套参数） */
 export function livePlaylistApiUrl(url: string, force = false): string {

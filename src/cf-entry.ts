@@ -1,5 +1,3 @@
-/* eslint-disable */
-// @ts-nocheck
 /**
  * Cloudflare Worker 入口包壳（wrangler.jsonc 的 main 指向这里）。
  *
@@ -17,14 +15,34 @@
  *
  * 失效：缓存 key 里带 `CF_VERSION_METADATA.id`（每次 wrangler deploy 都会变），
  * 新版本上线后旧缓存自然不再命中；entry 另有 max-age 兜底。
+ *
+ * 搜索 POST（`/api/search`）的额外约束：
+ * - `?stream=1`（NDJSON 逐源推送）永远不进缓存：流只能消费一次，断连还会打断上游；
+ * - 只有完整 JSON、且所有源都成功（`failures` 为空数组）的响应才写缓存——失败源下次
+ *   不一定还失败，缓存它会让用户 60s 内看不到本可恢复的结果；
+ * - 缓存 key 按 `src/app/api/search/route.ts` 的检索口径规范化（wd + 成人过滤开关 +
+ *   排序后的源地址集合），源顺序 / 请求体里的多余字段不会造成重复缓存条目。
  */
 
 import openNextWorker from '../.open-next/worker.js';
 import { createSessionVerifier, type SessionVerifier } from './lib/session-webcrypto';
 
-export { DOQueueHandler } from '../.open-next/worker.js';
-export { DOShardedTagCache } from '../.open-next/worker.js';
-export { BucketCachePurge } from '../.open-next/worker.js';
+export { DOQueueHandler, DOShardedTagCache, BucketCachePurge } from '../.open-next/worker.js';
+
+/**
+ * Worker 运行时绑定：CloudflareEnv 是 OpenNext/Workers 的全局环境类型（见 src/open-next.d.ts），
+ * 这里补上本项目在 wrangler vars / secrets 里配置、入口会读到的字段。
+ */
+interface WorkerEnv extends CloudflareEnv {
+  PASSWORD?: string;
+  PROXY_SECRET?: string;
+  /** 部署矩阵开关（见 src/app/api/auth/route.ts，本入口不读，仅统一类型面） */
+  TRUST_CF_IP?: string;
+  CF_VERSION_METADATA?: { id?: string };
+}
+
+/** Workers 的 ExecutionContext（入口只用到 waitUntil） */
+type WorkerCtx = ExecutionContext;
 
 const SESSION_COOKIE = 'ltv_session';
 
@@ -69,10 +87,10 @@ function readSessionCookie(cookieHeader: string | null): string | null {
 let verifierCache: { key: string; verifier: SessionVerifier } | null = null;
 
 /** 与 middleware.ts 相同的按 isolate 缓存策略：密钥派生只做一次 */
-function getSessionVerifier(env: any): SessionVerifier | null {
-  const password = (env && env.PASSWORD) || '';
+function getSessionVerifier(env: WorkerEnv): SessionVerifier | null {
+  const password = env.PASSWORD || '';
   if (!password) return null;
-  const proxySecret = (env && env.PROXY_SECRET) || '';
+  const proxySecret = env.PROXY_SECRET || '';
   const cacheKey = `${password}\u0000${proxySecret}`;
   if (verifierCache?.key !== cacheKey) {
     verifierCache = { key: cacheKey, verifier: createSessionVerifier({ password, proxySecret }) };
@@ -109,57 +127,100 @@ function cacheTtlFor(request: Request, url: URL): number {
 const SEARCH_TTL = 60;
 
 /**
- * 搜索 POST 的缓存 key：按请求体（关键词 + 源集合 + 过滤开关）做 SHA-256，
- * 并把 URL query 一起编进 key —— `?stream=1` 返回 NDJSON、不带则是整包 JSON，
- * 两者响应格式不同，绝不能共用缓存条目。
+ * 搜索 POST 的缓存 key：按 `src/app/api/search/route.ts` 的检索口径规范化——
+ * wd 取 trim 后（长度 1–100）、filterAdult 缺省视为 true、源取前 50 个且 url 去尾斜杠后
+ * 排序拼成 `url1|url2|...`；三者拼成规范串再 SHA-256 取 hex。
+ * 请求体不是合法搜索请求（JSON 解析失败 / 结构非法）时返回 null，表示不缓存。
  */
-async function buildSearchCacheKey(version: string, bodyText: string, search: string): Promise<Request> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(bodyText));
-  const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
-  return buildCacheKey(version, `/__search__/${hex}`, search, true);
+async function buildSearchCacheKey(version: string, bodyText: string, search: string): Promise<Request | null> {
+  try {
+    const parsed = JSON.parse(bodyText) as {
+      wd?: unknown;
+      filterAdult?: unknown;
+      sources?: Array<{ url?: unknown }>;
+    };
+    const wd = typeof parsed.wd === 'string' ? parsed.wd.trim() : '';
+    // 与 route.ts 的入参校验一致：非法请求交给 route 返回 400，不占缓存
+    if (!wd || wd.length > 100 || !Array.isArray(parsed.sources) || parsed.sources.length === 0) return null;
+    const filterAdult = parsed.filterAdult !== false ? 1 : 0;
+    const urls = parsed.sources
+      .slice(0, 50)
+      .map((source) => (typeof source?.url === 'string' ? source.url.replace(/\/+$/, '') : ''))
+      .filter((url) => url.length > 0)
+      .sort()
+      .join('|');
+    if (!urls) return null;
+    const canonical = `${wd}\n${filterAdult}\n${urls}`;
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+    const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    return buildCacheKey(version, `/__search__/${hex}`, search, true);
+  } catch {
+    // 请求体不是 JSON：不做缓存，交给 OpenNext 的 route 返回 400
+    return null;
+  }
 }
 
 function isCacheableResponse(res: Response): boolean {
   if (!res || res.status !== 200) return false;
   if (res.headers.has('set-cookie')) return false;
   const ct = res.headers.get('content-type') || '';
-  // 页面 HTML、JSON API 与 /api/search 的 NDJSON 流都按字节缓存
+  // 页面 HTML 与 JSON API；NDJSON 搜索流在 handleSearchPost 里已提前直通，不会走到这里
   return ct.includes('text/html') || ct.includes('json');
 }
+
+/** Workers 的 CacheStorage 额外提供 `default` 命名空间（DOM 类型里没有，这里单独收窄） */
+type WorkersCacheStorage = CacheStorage & { default?: Cache };
 
 async function cacheApi(): Promise<Cache | null> {
   try {
     // caches.default 在自定义域 / workers.dev 上均可用；取不到就当没有缓存
-    return typeof caches !== 'undefined' && caches.default ? caches.default : null;
+    const storage = typeof caches !== 'undefined' ? (caches as WorkersCacheStorage) : undefined;
+    return storage?.default ?? null;
   } catch {
     return null;
   }
 }
 
 /** 未登录 / 未配置密码时一律直通 OpenNext（由 middleware 负责门禁） */
-async function authed(env: any, request: Request): Promise<boolean> {
+async function authed(env: WorkerEnv, request: Request): Promise<boolean> {
   const verifier = getSessionVerifier(env);
   if (!verifier) return false;
   return verifier.verify(readSessionCookie(request.headers.get('cookie')));
 }
 
 function cacheHitResponse(hit: Response): Response {
-  const res = new Response(hit.body, hit);
-  res.headers.set('X-TV-Cache', 'HIT');
+  const headers = new Headers(hit.headers);
+  headers.set('X-TV-Cache', 'HIT');
   // 页面/接口不落浏览器缓存：登录态与版本切换由边缘缓存保证一致性
-  res.headers.set('Cache-Control', 'private, no-store');
-  return res;
+  headers.set('Cache-Control', 'private, no-store');
+  return new Response(hit.body, { status: hit.status, statusText: hit.statusText, headers });
 }
 
-function versionOf(env: any): string {
-  return (env && env.CF_VERSION_METADATA && env.CF_VERSION_METADATA.id) || 'dev';
+function versionOf(env: WorkerEnv): string {
+  return env.CF_VERSION_METADATA?.id || 'dev';
 }
 
-async function storeResponse(ctx: any, cache: Cache, key: Request, response: Response, ttl: number): Promise<void> {
+/** 构造写缓存的响应副本：显式 ResponseInit（旧写法直接把 Response 当 init 传，靠结构兼容） */
+function buildStoredResponse(response: Response, ttl: number): Response {
+  const headers = new Headers(response.headers);
+  headers.set('Cache-Control', `public, max-age=${ttl}`);
+  headers.delete('set-cookie');
+  return new Response(response.clone().body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+async function storeResponse(
+  ctx: WorkerCtx,
+  cache: Cache,
+  key: Request,
+  response: Response,
+  ttl: number
+): Promise<void> {
   try {
-    const stored = new Response(response.clone().body, response);
-    stored.headers.set('Cache-Control', `public, max-age=${ttl}`);
-    stored.headers.delete('set-cookie');
+    const stored = buildStoredResponse(response, ttl);
     // waitUntil：不阻塞响应返回，也不额外增加本次请求的 CPU 计费窗口
     ctx.waitUntil(cache.put(key, stored).catch(() => {}));
   } catch {
@@ -167,29 +228,66 @@ async function storeResponse(ctx: any, cache: Cache, key: Request, response: Res
   }
 }
 
-/** GET /api/search?stream=1 的 POST 版本：按请求体哈希缓存 60s（与 route 内存缓存一致） */
-async function handleSearchPost(request: Request, env: any, ctx: any): Promise<Response> {
+/**
+ * 聚合搜索 POST 的边缘缓存。
+ * - `?stream=1` 是 NDJSON 流：直接直通，绝不读写缓存；
+ * - 未登录 / 未配置密码：直通 OpenNext，由 middleware 返回 401/503；
+ * - 非流式响应：只有 JSON 解析成功且 `failures` 为空数组时才写缓存（失败结果不复用）。
+ */
+async function handleSearchPost(request: Request, env: WorkerEnv, ctx: WorkerCtx): Promise<Response> {
+  const reqUrl = new URL(request.url);
+
+  // 流式响应逐源推送、只能消费一次，且缓存会锁住上游连接：不缓存、不查缓存
+  if (reqUrl.searchParams.get('stream') === '1') return openNextWorker.fetch(request, env, ctx);
+
   if (!(await authed(env, request))) return openNextWorker.fetch(request, env, ctx);
+
   const cache = await cacheApi();
   let key: Request | null = null;
   if (cache) {
     try {
-      key = await buildSearchCacheKey(versionOf(env), await request.clone().text(), new URL(request.url).search);
-      const hit = await cache.match(key);
-      if (hit) return cacheHitResponse(hit);
+      key = await buildSearchCacheKey(versionOf(env), await request.clone().text(), reqUrl.search);
+      if (key) {
+        const hit = await cache.match(key);
+        if (hit) return cacheHitResponse(hit);
+      }
     } catch {
       key = null;
     }
   }
+
   const response = await openNextWorker.fetch(request, env, ctx);
   if (cache && key && isCacheableResponse(response)) {
-    await storeResponse(ctx, cache, key, response, SEARCH_TTL);
+    const storeCache = cache;
+    const storeKey = key;
+    try {
+      // 两个副本必须在响应返回前同步克隆，否则原始响应体开始消费后就无法 clone
+      const inspect = response.clone();
+      const stored = buildStoredResponse(response, SEARCH_TTL);
+      ctx.waitUntil(
+        inspect
+          .json()
+          .then((data: unknown) => {
+            const payload = data as { failures?: unknown };
+            // 有失败源的搜索响应不复用：60s 内重试可能已经恢复
+            if (Array.isArray(payload.failures) && payload.failures.length === 0) {
+              return storeCache.put(storeKey, stored);
+            }
+            return undefined;
+          })
+          .catch(() => {
+            /* JSON 解析失败 / 写缓存失败都不影响本次响应 */
+          })
+      );
+    } catch {
+      /* 响应体不可克隆（如已被消费）：跳过缓存 */
+    }
   }
   return response;
 }
 
-export default {
-  async fetch(request: Request, env: any, ctx: any): Promise<Response> {
+const workerEntry = {
+  async fetch(request: Request, env: WorkerEnv, ctx: WorkerCtx): Promise<Response> {
     const url = new URL(request.url);
 
     if (request.method === 'POST' && url.pathname === '/api/search') {
@@ -223,3 +321,5 @@ export default {
     return response;
   },
 };
+
+export default workerEntry;

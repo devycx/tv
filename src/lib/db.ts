@@ -136,6 +136,33 @@ export async function updateHistoryProgress(
   });
 }
 
+/**
+ * 仅补写封面与总集数，不改动播放进度与时间戳。
+ * 用于播放页在详情/剧集异步返回后回填元数据：历史记录先由占位数据写入，
+ * 详情晚到时不重刷 upsert（那会重置 2s 定时器并覆盖进度）。
+ * id 规则与 upsertHistory 一致：`${sourceKey}_${vodId}`。
+ */
+export async function patchHistoryMeta(
+  sourceKey: string,
+  vodId: string,
+  patch: { pic?: string; totalEpisodes?: number }
+): Promise<void> {
+  if (!sourceKey || !vodId) return;
+  const id = `${sourceKey}_${vodId}`;
+  const existing = await db.history.get(id);
+  if (!existing) return;
+  const update: Partial<HistoryEntry> = {};
+  // 封面只补空：已有封面（可能来自更准确的来源）不被旧详情覆盖
+  if (patch.pic && !existing.pic) update.pic = patch.pic;
+  // 总集数只认有效值，且确实变化才写，避免无意义唤醒监听方
+  if (patch.totalEpisodes && patch.totalEpisodes > 0 && existing.totalEpisodes !== patch.totalEpisodes) {
+    update.totalEpisodes = patch.totalEpisodes;
+  }
+  if (Object.keys(update).length > 0) {
+    await db.history.update(id, update);
+  }
+}
+
 export async function removeHistory(sourceKey: string, vodId: string): Promise<void> {
   await db.history.delete(`${sourceKey}_${vodId}`);
 }

@@ -240,7 +240,7 @@ export function summarizeQuality(entries: Array<QualityEntry | undefined>): Qual
 
 /**
  * 码率 → 推断高度：部分源站的 master playlist 只给 BANDWIDTH 不给 RESOLUTION。
- * 分层取自常见转码参数，仅供档位标识使用（与 m3u8-parse 的推断表保持一致）。
+ * 分层取自常见转码参数，仅供档位标识使用（m3u8-parse 的档位推断直接复用本函数，单一实现）。
  */
 export function inferHeightFromBitrate(bandwidth: number): number {
   const tiers: Array<[number, number]> = [

@@ -173,6 +173,86 @@ describe('VideoPrefetcher.ensure 幂等', () => {
   });
 });
 
+describe('VideoPrefetcher 节流与停止', () => {
+  const SEG_COUNT = 20;
+  const SEG_BASE = 'https://cdn.example.com/';
+  const M3U8_URL = `${SEG_BASE}index.m3u8`;
+  const PLAYLIST = [
+    '#EXTM3U',
+    ...Array.from({ length: SEG_COUNT }, (_, i) => `#EXTINF:5,\n${SEG_BASE}seg${i + 1}.ts`),
+  ].join('\n');
+
+  function deferred() {
+    let resolve = () => {};
+    const promise = new Promise<void>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  const ensureAt = (pf: VideoPrefetcher) =>
+    pf.ensure({ m3u8Url: M3U8_URL, currentTime: 0, episodeKey: 's:v:0', horizonSeconds: 300 });
+
+  it('stop() 唤醒被节流的 worker，之后解除节流也不会继续取任务', async () => {
+    const held = deferred();
+    const segUrls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : (input as Request).url;
+      if (url.includes('.m3u8')) return new Response(PLAYLIST, { status: 200 });
+      // 分片全部挂起：worker 一旦真的取到任务，segUrls 就会留下记录
+      segUrls.push(url);
+      await held.promise;
+      return new Response(new ArrayBuffer(1024), { status: 200 });
+    }));
+    const pf = new VideoPrefetcher();
+
+    // 先节流再启动：解析完成后 worker 停在 waitForResume 队列里
+    pf.setThrottled(true);
+    ensureAt(pf);
+    await vi.waitFor(() => expect(pf.getStats().state).toBe('running'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(segUrls).toHaveLength(0);
+
+    pf.stop();
+    expect(pf.getStats().state).toBe('idle');
+
+    // 关键回归：旧实现 stop 不唤醒 waiters，要等 500ms 轮询才发现 generation 变化，
+    // 且唤醒后缺少二次校验，会再抢一个任务去 fetch（segUrls 留下记录）
+    await new Promise((r) => setTimeout(r, 650));
+    expect(segUrls).toHaveLength(0);
+    expect(pf.getStats().state).toBe('idle');
+
+    // 停止后外部 playing 事件晚到的解除节流，也不能让旧运行复活
+    pf.setThrottled(false);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(segUrls).toHaveLength(0);
+    expect(pf.getStats().state).toBe('idle');
+    held.resolve();
+  });
+
+  it('节流期间不取任务，解除节流后经 waiters 队列立即恢复直到完成', async () => {
+    const segUrls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : (input as Request).url;
+      if (url.includes('.m3u8')) return new Response(PLAYLIST, { status: 200 });
+      segUrls.push(url);
+      return new Response(new ArrayBuffer(1024), { status: 200 });
+    }));
+    const pf = new VideoPrefetcher();
+
+    pf.setThrottled(true);
+    ensureAt(pf);
+    await vi.waitFor(() => expect(pf.getStats().state).toBe('running'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(segUrls).toHaveLength(0);
+
+    pf.setThrottled(false);
+    // Node 单测没有 Cache Storage，分片写入会 failed，但任务照常消费完 → done
+    await vi.waitFor(() => expect(pf.getStats().state).toBe('done'));
+    expect(segUrls).toHaveLength(SEG_COUNT);
+  });
+});
+
 describe('缓存 key 归一（根相对地址）', () => {
   const APP = 'https://app.example.com';
 

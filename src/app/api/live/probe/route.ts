@@ -45,6 +45,11 @@ const CONCURRENCY = 16;
 const URL_BUDGET_MS = 10_000;
 /** 单级请求上限（入口/variant），避免某一级吃光总预算 */
 const LEVEL_TIMEOUT_MS = 5000;
+/**
+ * 发起新请求所需的最低剩余预算。低于该值时即使立刻发出请求，
+ * 也必然在拿到响应前吃满总预算（白白多等一轮），直接按超时处理。
+ */
+const MIN_TIMEOUT_MS = 100;
 /** 分片级最长等待：分片只需响应头；部分服务器忽略 Range 会整段返回，留足余量 */
 const SEGMENT_TIMEOUT_MS = 4000;
 /**
@@ -252,8 +257,9 @@ async function measureThroughput(segmentUrl: string, referer?: string): Promise<
     }
     try { await reader.cancel(); } catch { /* 忽略 */ }
     try { await res.body.cancel(); } catch { /* 忽略 */ }
-    const secs = (performance.now() - start) / 1000;
-    if (bytes <= 0 || secs < 0.05) return undefined;
+    // 极快下载（<50ms 拉满 128KB）也要保留 kbps：secs 夹一个下限避免除零/失真
+    const secs = Math.max(0.001, (performance.now() - start) / 1000);
+    if (bytes <= 0) return undefined;
     return Math.round((bytes * 8) / secs / 1000);
   } catch {
     return undefined;
@@ -267,7 +273,16 @@ async function probeOne(url: string): Promise<ProbeOutcome> {
   const remaining = () => deadline - performance.now();
 
   const referer = refererOf(url);
-  const timeout = () => Math.min(LEVEL_TIMEOUT_MS, Math.max(500, Math.round(remaining())));
+  // 预算耗尽时 timeout() 主动抛出，不发出注定超预算的请求；catch 据此归类为超时
+  let budgetExhausted = false;
+  const timeout = () => {
+    const rem = remaining();
+    if (rem < MIN_TIMEOUT_MS) {
+      budgetExhausted = true;
+      throw new DOMException('探测超时', 'TimeoutError');
+    }
+    return Math.min(LEVEL_TIMEOUT_MS, Math.round(rem));
+  };
 
   try {
     // 第一级：入口地址
@@ -380,7 +395,8 @@ async function probeOne(url: string): Promise<ProbeOutcome> {
       kbps,
     };
   } catch (err) {
-    const timedOut = performance.now() >= deadline;
+    // 预算耗尽提前退出时可能尚未越过 deadline，同样按超时归类/展示
+    const timedOut = budgetExhausted || performance.now() >= deadline;
     return {
       url,
       ok: false,

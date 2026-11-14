@@ -364,7 +364,7 @@ function LiveSourceForm({
           取消
         </button>
         <button className="btn-primary btn-sm" onClick={submit}>
-          添加
+          {initial ? '更新' : '添加'}
         </button>
       </div>
     </div>

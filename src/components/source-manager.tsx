@@ -245,9 +245,11 @@ function VodSourcesPanel() {
     const q = query.trim().toLowerCase();
     return all.filter((s) => {
       const fromSub = s.key.startsWith('sub_');
-      // 已启用 = 勾选中且当前未被自动停用（即真正在参与搜索的源）
-      if (filter === 'enabled' && !(store.selectedKeys.includes(s.key) && !isSourceDisabled(store, s.key))) return false;
-      if (filter === 'disabled' && !isSourceDisabled(store, s.key)) return false;
+      // 已启用 = 勾选中且当前未被自动停用（即真正在参与搜索的源）；
+      // 已停用 = 已启用的补集（手动取消勾选 或 被健康度自动停用），与直播源面板语义一致
+      const active = store.selectedKeys.includes(s.key) && !isSourceDisabled(store, s.key);
+      if (filter === 'enabled' && !active) return false;
+      if (filter === 'disabled' && active) return false;
       if (filter === 'sub' && !fromSub) return false;
       // 手动添加 = 既非订阅导入、也非部署者预置
       if (filter === 'manual' && (fromSub || envKeys.has(s.key))) return false;
@@ -295,7 +297,13 @@ function VodSourcesPanel() {
     <section>
       <SectionTitle
         title="点播源"
-        hint={empty ? undefined : `共 ${all.length} 个 · 已启用 ${all.filter((s) => store.selectedKeys.includes(s.key)).length}`}
+        hint={
+          empty
+            ? undefined
+            : `共 ${all.length} 个 · 已启用 ${
+                all.filter((s) => store.selectedKeys.includes(s.key) && !isSourceDisabled(store, s.key)).length
+              }`
+        }
         extra={
           <button className="btn-primary btn-sm" onClick={() => setEditing('__new__')}>
             <Icon name="plus" className="w-3.5 h-3.5" />

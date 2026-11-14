@@ -28,6 +28,7 @@ import { resolveSource, useAppStore } from '@/lib/store';
 import { qualityKey } from '@/lib/quality';
 import {
   clearProgress,
+  patchHistoryMeta,
   progressKeyOf,
   saveProgress,
   updateHistoryProgress,
@@ -184,6 +185,19 @@ function WatchContent() {
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [verified, sourceKey, vodId, currentIndex, videoTitle, currentUrl]);
+
+  // 详情/剧集异步返回后补写历史元数据：封面与总集数可能晚于历史写入到达。
+  // 这里必须用独立 effect（只带元数据依赖）：若把 detailQuery.data / episodes 塞进上面
+  // upsertHistory 的依赖，详情每次刷新都会重置 2s 定时器，且 upsert 的 playbackPosition=0
+  // 会把已恢复的进度打回。patchHistoryMeta 只补空封面/变化的总集数，不碰进度与时间戳。
+  const cover = detailQuery.data?.videoInfo?.cover;
+  const totalEpisodes = episodes.length;
+  const historyVodId = vodId || currentUrl;
+
+  useEffect(() => {
+    if (!verified || !sourceKey || !historyVodId || (!cover && totalEpisodes === 0)) return;
+    patchHistoryMeta(sourceKey, historyVodId, { pic: cover, totalEpisodes }).catch(() => {});
+  }, [verified, sourceKey, historyVodId, cover, totalEpisodes]);
 
   // 播放中与暂停时的进度落盘逻辑一致，共用同一回调
   const handleProgress = useCallback(

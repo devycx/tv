@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import http from 'node:http';
+import dns from 'node:dns/promises';
+import * as ipaddr from 'ipaddr.js';
 import { isPrivateIP, isValidProxyUrl, runWithSSRFProtection } from './ssrf';
 
 describe('isPrivateIP', () => {
@@ -36,6 +38,31 @@ describe('isPrivateIP', () => {
   ])('%s → %s', (ip, expected) => {
     expect(isPrivateIP(ip)).toBe(expected);
   });
+
+  // 手写前缀/正则时代的绕过回归用例（ipaddr.js 重构后必须全部继续拦截）
+  it.each([
+    ['0.1.2.3', true],
+    ['100.65.0.1', true],
+    ['100.127.255.254', true],
+    ['198.18.0.1', true],
+    ['192.0.2.1', true], // TEST-NET-1
+    ['198.51.100.1', true], // TEST-NET-2
+    ['203.0.113.1', true], // TEST-NET-3
+    ['224.0.0.1', true],
+    ['0000:0000:0000:0000:0000:0000:0000:0001', true],
+    ['fe80:0:0:0::1', true],
+    ['[fe80::1%eth0]', true],
+    ['2002:7f00:0001::', true], // 6to4 -> 127.0.0.1
+    ['64:ff9b::127.0.0.1', true], // NAT64 -> 127.0.0.1
+    ['64:ff9b:1::1', true], // Local-Use NAT64
+    ['::ffff:0:127.0.0.1', true], // IPv4-translated
+    ['2001:db8::1', true], // Documentation
+    ['100::1', true], // Discard-Only
+    ['0177.0.0.1', true],
+    ['2130706433', true],
+  ])('扩展私有/保留/隧道地址拦截: %s → %s', (ip, expected) => {
+    expect(isPrivateIP(ip)).toBe(expected);
+  });
 });
 
 describe('isValidProxyUrl', () => {
@@ -68,6 +95,28 @@ describe('isValidProxyUrl', () => {
     expect(isValidProxyUrl('ftp://x.com/a')).toBe(false);
     expect(isValidProxyUrl('not a url')).toBe(false);
   });
+
+  it('拦截 FQDN 末尾点、前导点、空 host 与非标准 IPv4 绕过', () => {
+    expect(isValidProxyUrl('http://localhost./x')).toBe(false);
+    expect(isValidProxyUrl('http://LOCALHOST./x')).toBe(false);
+    expect(isValidProxyUrl('http://.localhost/x')).toBe(false);
+    // WHATWG URL 对特殊协议会跳过额外斜杠：'http:///x' 会被归一化成 host "x"，
+    // 不存在可拦截的“空 host”；空 host 只能体现为无法解析的 URL（如 'http://'）。
+    expect(isValidProxyUrl('http://')).toBe(false);
+    expect(isValidProxyUrl('http://./x')).toBe(false);
+    expect(isValidProxyUrl('http://0177.0.0.1/x')).toBe(false);
+    expect(isValidProxyUrl('http://2130706433/x')).toBe(false);
+    expect(isValidProxyUrl('http://[2002:7f00:0001::]/x')).toBe(false);
+    expect(isValidProxyUrl('http://[64:ff9b::169.254.169.254]/x')).toBe(false);
+  });
+});
+
+describe('ipaddr.js 语义锁定', () => {
+  it('IPv4.isValidFourPartDecimal 拒绝八进制与前导零写法', () => {
+    expect(ipaddr.IPv4.isValidFourPartDecimal('0177.0.0.1')).toBe(false);
+    expect(ipaddr.IPv4.isValidFourPartDecimal('127.0.0.01')).toBe(false);
+    expect(ipaddr.IPv4.isValidFourPartDecimal('127.0.0.1')).toBe(true);
+  });
 });
 
 
@@ -75,6 +124,19 @@ describe('DNS Rebinding & Connection SSRF Protection (#941)', () => {
   it(
     'a request to a public origin inside the protected scope must succeed',
     async (ctx) => {
+      // 部分开发环境（Clash/Surge 的 fake-IP 等）会把 example.com 解析进 198.18.0.0/15 等保留网段，
+      // 严格 SSRF 校验会（正确地）拦截，此时本机没有“公网解析”可测，按环境限制跳过；
+      // 只有真实公网解析下被 ERR_SSRF_BLOCKED 拦掉才算回归（见下方 catch）。
+      try {
+        const addresses = await dns.lookup('example.com', { all: true });
+        if (addresses.some((a) => isPrivateIP(a.address))) {
+          ctx.skip();
+          return;
+        }
+      } catch {
+        ctx.skip();
+        return;
+      }
       let res: Response;
       try {
         res = await runWithSSRFProtection({ allowPrivate: false }, async () => {
