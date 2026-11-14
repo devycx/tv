@@ -1,17 +1,35 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/client-api';
 import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
-import type { DoubanItem } from '@/lib/types';
+import type { DoubanItem, DoubanResponse } from '@/lib/types';
 import { mergeRecommendationPages, nextRecommendationOffset, RECOMMEND_PAGE_SIZE } from '@/lib/recommendation-pages';
 import { DoubanCard } from './video-card';
 
 const MOVIE_TAGS = ['热门', '最新', '经典', '豆瓣高分', '冷门佳片', '华语', '欧美', '韩国', '日本', '动画'];
 const TV_TAGS = ['热门', '美剧', '英剧', '韩剧', '日剧', '国产剧', '港剧', '日本动画', '综艺', '纪录片'];
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+/** 推荐数据缓存时间：预热后 5 分钟内点击标签直接命中，避免重复请求 */
+const RECOMMEND_STALE_MS = 5 * 60_000;
+
+/**
+ * 在浏览器空闲时执行一次预热任务：首页推荐标签点开才请求，
+ * 提前把数据拉进 React Query 缓存，点击时不再等网络。
+ * 不支持 requestIdleCallback 的环境（Safari 旧版等）退化为 300ms 定时。
+ */
+function runWhenIdle(task: () => void): () => void {
+  if (typeof window === 'undefined') return () => {};
+  if (typeof window.requestIdleCallback === 'function') {
+    const id = window.requestIdleCallback(task, { timeout: 1500 });
+    return () => window.cancelIdleCallback?.(id);
+  }
+  const id = window.setTimeout(task, 300);
+  return () => window.clearTimeout(id);
+}
 
 /** 首页推荐区：数据源由设置决定（豆瓣热门 / Bangumi 新番放送 / 影视热榜），二选一展示 */
 export function RecommendSection({ onPick }: { onPick: (title: string) => void }) {
@@ -35,6 +53,7 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
   const [type, setType] = useState<'movie' | 'tv'>('movie');
   const [tag, setTag] = useState<string | null>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
+  const queryClient = useQueryClient();
 
   const query = useInfiniteQuery({
     queryKey: ['douban-scroll', type, tag, RECOMMEND_PAGE_SIZE],
@@ -45,10 +64,31 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
       return api.douban(type, tag, pageParam, RECOMMEND_PAGE_SIZE, signal);
     },
     getNextPageParam: (last, pages, offset) => nextRecommendationOffset(last, pages, offset),
+    staleTime: RECOMMEND_STALE_MS,
     retry: false,
   });
 
   const tags = type === 'movie' ? MOVIE_TAGS : TV_TAGS;
+
+  /** 预热某个标签的第一页（与点击时 useInfiniteQuery 用同一个 queryKey / queryFn） */
+  const prefetchTag = useCallback(
+    (t: string) => {
+      void queryClient.prefetchInfiniteQuery({
+        queryKey: ['douban-scroll', type, t, RECOMMEND_PAGE_SIZE],
+        queryFn: ({ pageParam, signal }) =>
+          api.douban(type, t, pageParam as number, RECOMMEND_PAGE_SIZE, signal),
+        initialPageParam: 0,
+        getNextPageParam: (last: DoubanResponse, pages: DoubanResponse[], offset: number) =>
+          nextRecommendationOffset(last, pages, offset),
+        staleTime: RECOMMEND_STALE_MS,
+      });
+    },
+    [queryClient, type]
+  );
+
+  // 首页推荐区挂载后就把当前类型的标签页全部预热，点击标签直接出封面
+  useEffect(() => runWhenIdle(() => tags.forEach(prefetchTag)), [tags, prefetchTag]);
+
   const items = useMemo(
     () => (tag === null ? [] : mergeRecommendationPages(query.data?.pages ?? [])),
     [tag, query.data]
@@ -96,6 +136,8 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
               t === tag ? 'bg-accent text-on-accent' : 'bg-chip text-muted hover:text-content hover:bg-hover'
             )}
             onClick={() => setTag((prev) => (prev === t ? null : t))}
+            onPointerEnter={() => prefetchTag(t)}
+            onFocus={() => prefetchTag(t)}
             aria-pressed={t === tag}
           >
             {t}
@@ -145,11 +187,24 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
  */
 function BangumiView({ onPick }: { onPick: (title: string) => void }) {
   const [weekday, setWeekday] = useState<number | 'all' | null>(null);
+  const queryClient = useQueryClient();
+
+  const prefetchCalendar = useCallback(() => {
+    void queryClient.prefetchQuery({
+      queryKey: ['bangumi-calendar'],
+      queryFn: ({ signal }) => api.bangumiCalendar(signal),
+      staleTime: RECOMMEND_STALE_MS,
+    });
+  }, [queryClient]);
+
+  // 星期共用同一份 calendar 数据：挂载后预热，点任意星期立即出列表
+  useEffect(() => runWhenIdle(prefetchCalendar), [prefetchCalendar]);
 
   const query = useQuery({
     queryKey: ['bangumi-calendar'],
     queryFn: ({ signal }) => api.bangumiCalendar(signal),
     enabled: weekday !== null,
+    staleTime: RECOMMEND_STALE_MS,
   });
 
   let items: DoubanItem[] = [];
@@ -164,11 +219,16 @@ function BangumiView({ onPick }: { onPick: (title: string) => void }) {
   return (
     <section aria-label="新番放送推荐">
       <div className={cn('flex flex-wrap gap-1.5', weekday === null ? 'mb-0' : 'mb-4')}>
-        <ChipButton active={weekday === 'all'} onClick={() => toggleWeekday('all')}>
+        <ChipButton active={weekday === 'all'} onClick={() => toggleWeekday('all')} onPrefetch={prefetchCalendar}>
           全部
         </ChipButton>
         {WEEKDAYS.map((name, i) => (
-          <ChipButton key={name} active={weekday === i + 1} onClick={() => toggleWeekday(i + 1)}>
+          <ChipButton
+            key={name}
+            active={weekday === i + 1}
+            onClick={() => toggleWeekday(i + 1)}
+            onPrefetch={prefetchCalendar}
+          >
             {name}
           </ChipButton>
         ))}
@@ -204,6 +264,21 @@ const HOT_LISTS = [
  */
 function HotListView({ onPick }: { onPick: (title: string) => void }) {
   const [listId, setListId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const prefetchList = useCallback(
+    (id: string) => {
+      void queryClient.prefetchQuery({
+        queryKey: ['hot-list', id],
+        queryFn: ({ signal }) => api.hotList(id, signal),
+        staleTime: RECOMMEND_STALE_MS,
+      });
+    },
+    [queryClient]
+  );
+
+  // 六个榜单在首页空闲时全部预热：点标签直接出封面，不再先看骨架屏
+  useEffect(() => runWhenIdle(() => HOT_LISTS.forEach((l) => prefetchList(l.id))), [prefetchList]);
 
   const query = useQuery({
     queryKey: ['hot-list', listId],
@@ -212,6 +287,7 @@ function HotListView({ onPick }: { onPick: (title: string) => void }) {
       return api.hotList(listId, signal);
     },
     enabled: listId !== null,
+    staleTime: RECOMMEND_STALE_MS,
   });
 
   const items = listId === null ? [] : (query.data?.items ?? []);
@@ -224,6 +300,7 @@ function HotListView({ onPick }: { onPick: (title: string) => void }) {
             key={l.id}
             active={listId === l.id}
             onClick={() => setListId((prev) => (prev === l.id ? null : l.id))}
+            onPrefetch={() => prefetchList(l.id)}
           >
             {l.label}
           </ChipButton>
@@ -258,7 +335,18 @@ function GridSkeleton() {
   );
 }
 
-function ChipButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function ChipButton({
+  active,
+  onClick,
+  children,
+  onPrefetch,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+  /** 悬停/聚焦时提前预热该标签的数据（触摸端由 idle 预热兜底） */
+  onPrefetch?: () => void;
+}) {
   return (
     <button
       className={cn(
@@ -266,6 +354,8 @@ function ChipButton({ active, onClick, children }: { active: boolean; onClick: (
         active ? 'bg-accent text-on-accent' : 'bg-chip text-muted hover:text-content hover:bg-hover'
       )}
       onClick={onClick}
+      onPointerEnter={onPrefetch}
+      onFocus={onPrefetch}
     >
       {children}
     </button>
