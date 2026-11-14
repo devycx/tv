@@ -68,6 +68,14 @@ describe('matchesAlive', () => {
     expect(matchesAlive(undefined, 'ok')).toBe(false);
   });
 
+  it('auto 档：隐藏所有失败（含超时），未测保留', () => {
+    expect(matchesAlive(undefined, 'auto')).toBe(true);
+    expect(matchesAlive(green, 'auto')).toBe(true);
+    expect(matchesAlive(weak, 'auto')).toBe(true);
+    expect(matchesAlive(timeout, 'auto')).toBe(false);
+    expect(matchesAlive(dead, 'auto')).toBe(false);
+  });
+
   it('green 档：仅分片级验证且吞吐达标', () => {
     expect(matchesAlive(fast, 'green')).toBe(true);
     expect(matchesAlive(green, 'green')).toBe(true); // 无吞吐数据不排除

@@ -27,7 +27,12 @@ export interface ProbeResult {
   kbps?: number;
 }
 
-const CHUNK_SIZE = 50;
+/**
+ * 每批探测的频道数：单频道最多 4 次上游请求（manifest → variant → media → 分片），
+ * 8 × 4 = 32 次，留在 Workers 免费版 50 subrequest/invocation 的预算内。
+ * 之前 50 条一批在 Workers 上会撞 subrequest 上限，失败会被误判成「源不可用」。
+ */
+const CHUNK_SIZE = 8;
 /** 同时在途的批次数：与 CHUNK_SIZE 相乘即最大并发探测规模 */
 const CHUNK_CONCURRENCY = 2;
 /**
@@ -112,11 +117,12 @@ export function useLiveProbe() {
   }, []);
 
   const probe = useCallback(
-    async (targets: { url: string }[]) => {
+    async (targets: { url: string }[], options?: { silent?: boolean }) => {
+      const silent = options?.silent === true;
       const allUrls = [...new Set(targets.map((t) => t.url))];
       if (allUrls.length === 0) return;
       if (allUrls.length > MAX_TARGETS) {
-        showHint(`频道数超过 ${MAX_TARGETS}，仅测前 ${MAX_TARGETS} 个，请精简订阅源`);
+        if (!silent) showHint(`频道数超过 ${MAX_TARGETS}，仅测前 ${MAX_TARGETS} 个，请精简订阅源`);
       }
       const urls = allUrls.slice(0, MAX_TARGETS);
 
@@ -128,7 +134,7 @@ export function useLiveProbe() {
         return !e || now - e.timestamp >= LIVE_PROBE_TTL_MS;
       });
       if (stale.length === 0) {
-        showHint('测活结果 6 小时内有效，无需重测');
+        if (!silent) showHint('测活结果 6 小时内有效，无需重测');
         return;
       }
 

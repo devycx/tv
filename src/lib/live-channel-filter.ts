@@ -16,7 +16,15 @@ export interface ProbeLike {
 }
 
 export type LiveSortMode = 'default' | 'name' | 'group' | 'probe' | 'recent';
-export type AliveFilter = 'off' | 'ok' | 'green';
+/**
+ * 可用性筛选：
+ * - auto：进入直播页自动测活后的默认档，隐藏「已确认不可用」的频道；
+ *   未测/测活中/超时（源可能只是慢）仍然保留，避免列表在测活完成前被清空。
+ * - off：全部
+ * - ok：任何验证级别通过
+ * - green：仅分片级验证通过且吞吐达标
+ */
+export type AliveFilter = 'auto' | 'off' | 'ok' | 'green';
 
 /**
  * 「源限速」阈值（kbps）：分片可达但吞吐低于该值的源无法流畅缓冲。
@@ -58,11 +66,17 @@ export function matchesKeyword(channel: KeywordMatchable, normalizedKeyword: str
 
 /**
  * 可用性筛选：
+ * - auto：隐藏所有已确认不可用的频道（含超时）；未测/测活中保留
  * - 'ok'：任何验证级别通过（绿点、限速源或琥珀中的弱验证）
  * - 'green'：仅「分片级验证通过且吞吐达标」（真实可流畅播放置信度最高）
  */
 export function matchesAlive(probe: ProbeLike | undefined, mode: AliveFilter): boolean {
   if (mode === 'off') return true;
+  if (mode === 'auto') {
+    // 未测/测活中先保留；只要有失败结论（含超时）就不展示
+    if (!probe) return true;
+    return probe.ok;
+  }
   if (!probe?.ok) return false;
   if (mode === 'green') return probe.level === 'segment' && !isSlowSource(probe);
   return true;

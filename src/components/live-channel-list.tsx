@@ -164,7 +164,8 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
   const [keyword, setKeyword] = useState('');
   const debouncedKeyword = useDebouncedValue(keyword, SEARCH_DEBOUNCE_MS);
   const [sortMode, setSortMode] = useState<LiveSortMode>('default');
-  const [aliveFilter, setAliveFilter] = useState<AliveFilter>('off');
+  // 默认自动隐藏已确认不可用的频道；测活在进入直播页后自动进行
+  const [aliveFilter, setAliveFilter] = useState<AliveFilter>('auto');
   /** 键盘光标（filtered 的下标），与"正在播放"高亮独立 */
   const [cursor, setCursor] = useState(-1);
   /** 分组标签条的拖拽滚动与边缘渐隐 */
@@ -175,10 +176,32 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
     progress: probeProgress,
     probe,
     cancel: cancelProbe,
-    clear: clearProbe,
     isProbing,
     hint: probeHint,
   } = useLiveProbe();
+  /** 自动测活只跑一次（结果 6 小时内复用；组件重挂载时由 hook 自行跳过缓存） */
+  const autoProbeStarted = useRef(false);
+  /** StrictMode 下 effect 会 mount→unmount→mount；用独立 ref 区分“真卸载”和模拟卸载 */
+  const aliveRef = useRef(true);
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+
+  // 进入直播页后自动测活（用户不需要点按钮）：等首屏渲染完成再开跑，
+  // 结果边到边写入，auto 筛选会实时隐藏已确认不可用的频道。
+  useEffect(() => {
+    if (autoProbeStarted.current || channels.length === 0) return;
+    autoProbeStarted.current = true;
+    // 注意不清理 timer：dev 的 StrictMode 模拟卸载会清掉首个 timer，
+    // 而 autoProbeStarted 已置位，第二次 effect 不会再排——自动测活就永远不触发。
+    // 真卸载由 aliveRef 拦截，不会在离开页面后突然发起探测。
+    setTimeout(() => {
+      if (aliveRef.current) void probe(channels, { silent: true });
+    }, 1200);
+  }, [channels, probe]);
 
   // 测活 ETA 每秒刷新：探测长尾（在途请求未返回）期间进度不推进，剩余时间也要走动
   const [, setProbeTick] = useState(0);
@@ -215,20 +238,26 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
     return sortChannels(list, sortMode, { recentOrder, probeOf: (url) => probeResults.get(url) });
   }, [channels, favSet, liveRecent, view, group, normalizedKeyword, sortMode, recentOrder, probeResults]);
 
-  const filtered = useMemo(
-    () =>
-      aliveFilter === 'off'
-        ? matched
-        : matched.filter((c) => matchesAlive(probeResults.get(c.url), aliveFilter)),
-    [matched, aliveFilter, probeResults]
+  /** 至少有一个频道测活通过时才启用 auto 隐藏：整批失败（源站全挂/本地代理异常）时
+      宁可全部展示并标记失败，也不要把列表清空成“什么都看不了” */
+  const hasAliveProbe = useMemo(
+    () => matched.some((c) => probeResults.get(c.url)?.ok === true),
+    [matched, probeResults]
   );
+
+  const filtered = useMemo(() => {
+    if (aliveFilter === 'off') return matched;
+    // auto 档在没有任何可用结果时退化为“全部”，避免测活异常时清空列表
+    if (aliveFilter === 'auto' && !hasAliveProbe) return matched;
+    return matched.filter((c) => matchesAlive(probeResults.get(c.url), aliveFilter));
+  }, [matched, aliveFilter, probeResults, hasAliveProbe]);
 
   // 上报筛选排序结果给页面（键盘换台用）；列表存父组件 ref，不触发父组件重渲染
   useEffect(() => {
     onFilteredChange?.(filtered);
   }, [filtered, onFilteredChange]);
 
-  // 口径与两个筛选按钮一致：绿点=分片级验证且吞吐达标（排除限速源），可播=任何验证级别通过
+  // 口径与筛选按钮一致：绿点=分片级验证且吞吐达标（排除限速源），可播=任何验证级别通过
   const aliveCounts = useMemo(() => {
     let ok = 0;
     let green = 0;
@@ -240,6 +269,17 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
     }
     return { ok, green };
   }, [matched, probeResults]);
+
+  /** 当前 auto 档隐藏了多少个「已确认不可用」的频道（含超时；没有可用结果时隐藏不生效） */
+  const autoHiddenCount = useMemo(() => {
+    if (aliveFilter !== 'auto' || !hasAliveProbe) return 0;
+    let n = 0;
+    for (const c of matched) {
+      const p = probeResults.get(c.url);
+      if (p && !p.ok) n++;
+    }
+    return n;
+  }, [aliveFilter, hasAliveProbe, matched, probeResults]);
 
   // 键盘/锚定滚动需要按 URL 反查索引；filtered 随测活结果变化（排序含可用性），
   // 用 ref 读取最新值，避免测活写回触发重新锚定打断用户滚动
@@ -355,47 +395,46 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
         />
       </div>
 
-      {/* 测活 + 可用性筛选工具条 */}
+      {/* 自动测活进度 + 可用性筛选（进入直播页自动进行，不提供手动触发按钮） */}
       <div className="flex items-center gap-1.5 px-3 pb-2 shrink-0 flex-wrap">
-        <button
-          className="btn-ghost btn-sm"
-          disabled={isProbing || filtered.length === 0}
-          onClick={() => void probe(filtered)}
-          title="探测当前列表频道是否可播（分片级校验；量大时自动分批排队跑完，结果 6 小时内有效）"
-        >
-          测活
-        </button>
-        {/* 同一操作位按时机切换：测活中=取消（保留已完成结果）；空闲且有结果=清除全部 */}
         {isProbing ? (
-          <button
-            className="btn-ghost btn-sm"
-            onClick={cancelProbe}
-            title="中止本次测活，已完成的结果会保留"
-          >
-            取消
-          </button>
-        ) : (
-          probeResults.size > 0 && (
+          <>
+            <span className="text-[10px] text-faint whitespace-nowrap">
+              自动检测中 {probeProgress ? formatProbeProgress(probeProgress) : ''}
+            </span>
             <button
-              className="btn-ghost btn-sm"
-              onClick={() => {
-                clearProbe();
-                setAliveFilter('off');
-              }}
-              title="清除全部测活结果，并取消可用性筛选"
+              className="text-[10px] text-faint underline-offset-2 hover:text-content hover:underline"
+              onClick={cancelProbe}
+              title="中止本次自动检测，已完成的结果会保留"
             >
-              清除
+              停止
             </button>
-          )
-        )}
-        {isProbing && probeProgress && (
-          <span className="text-[10px] text-faint whitespace-nowrap">
-            探测中 {formatProbeProgress(probeProgress)}
-          </span>
-        )}
-        {probeHint && (
-          <span className="text-[10px] text-faint">{probeHint}</span>
-        )}
+          </>
+        ) : aliveFilter === 'auto' && autoHiddenCount > 0 ? (
+          <>
+            <span className="text-[10px] text-faint whitespace-nowrap">
+              已自动隐藏 {autoHiddenCount} 个不可用
+            </span>
+            <button
+              className="text-[10px] text-accent underline-offset-2 hover:underline"
+              onClick={() => setAliveFilter('off')}
+              title="显示全部频道（包括已确认不可用的）"
+            >
+              显示全部
+            </button>
+          </>
+        ) : aliveFilter === 'auto' && probeResults.size > 0 && !hasAliveProbe ? (
+          <span className="text-[10px] text-warning">自动检测暂未发现可用频道，已显示全部</span>
+        ) : aliveFilter !== 'auto' && probeResults.size > 0 ? (
+          <button
+            className="text-[10px] text-faint underline-offset-2 hover:text-content hover:underline"
+            onClick={() => setAliveFilter('auto')}
+            title="恢复自动隐藏不可用频道"
+          >
+            恢复自动隐藏
+          </button>
+        ) : null}
+        {probeHint && <span className="text-[10px] text-faint">{probeHint}</span>}
         {probeResults.size > 0 && !isProbing && (
           <>
             <button
@@ -405,7 +444,7 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
                   ? 'bg-accent text-on-accent border-accent'
                   : 'bg-chip text-muted border-line hover:text-content hover:bg-hover'
               )}
-              onClick={() => setAliveFilter((v) => (v === 'green' ? 'off' : 'green'))}
+              onClick={() => setAliveFilter((v) => (v === 'green' ? 'auto' : 'green'))}
               title="只看分片级验证通过的频道"
             >
               绿点 {aliveCounts.green}
@@ -417,7 +456,7 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
                   ? 'bg-accent text-on-accent border-accent'
                   : 'bg-chip text-muted border-line hover:text-content hover:bg-hover'
               )}
-              onClick={() => setAliveFilter((v) => (v === 'ok' ? 'off' : 'ok'))}
+              onClick={() => setAliveFilter((v) => (v === 'ok' ? 'auto' : 'ok'))}
               title="看所有验证通过（含直链/清单级弱验证）的频道"
             >
               可播 {aliveCounts.ok}
@@ -475,9 +514,11 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
                   ? '暂无观看记录'
                   : channels.length === 0
                     ? '暂无频道，请先在设置中添加直播源'
-                    : aliveFilter !== 'off' && probeResults.size > 0
-                      ? '没有匹配该可用性的频道，可放宽或清除筛选'
-                      : '没有匹配的频道'
+                    : aliveFilter === 'auto' && autoHiddenCount > 0
+                      ? `已自动隐藏 ${autoHiddenCount} 个不可用频道，可点「显示全部」查看`
+                      : aliveFilter !== 'off' && probeResults.size > 0
+                        ? '没有匹配该可用性的频道，可切换回自动或选择全部'
+                        : '没有匹配的频道'
             }
           />
         ) : (

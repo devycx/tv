@@ -35,7 +35,12 @@ export const dynamic = 'force-dynamic';
  *   不带该参数时仍返回整批 JSON，保持向后兼容。
  */
 
-const MAX_URLS = 50;
+/**
+ * 单次请求最多测 8 个频道：单频道最多 4 次上游请求（manifest → variant → media → 分片），
+ * 8 × 4 = 32，留在 Workers 免费版 50 subrequest/invocation 的预算内。
+ * 客户端 use-live-probe 的 CHUNK_SIZE 与此保持一致。
+ */
+const MAX_URLS = 8;
 const CONCURRENCY = 16;
 /**
  * 单个频道三级探测的总预算（含各级请求）。
