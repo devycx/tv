@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '@/lib/client-api';
+import { ApiError, api } from '@/lib/client-api';
 import { getAdaptiveBatchLimit, onAdaptiveBatchDownscale } from '@/lib/adaptive-batch';
 import { LIVE_PROBE_TTL_MS, useAppStore, type LiveProbeEntry } from '@/lib/store';
 
@@ -10,7 +10,8 @@ import { LIVE_PROBE_TTL_MS, useAppStore, type LiveProbeEntry } from '@/lib/store
  * - 结果持久化到 store（liveProbeResults），6 小时内直接复用（LIVE_PROBE_TTL_MS）；
  * - 触发探测时只补测缺失或已过期的频道，全部仍有效则提示跳过；
  * - 服务端以 NDJSON 流式逐条返回，结果边测边写入列表（节流合并，避免高频 re-render）；
- * - 每批 CHUNK_SIZE 条并行 CHUNK_CONCURRENCY 批，服务端批内并发 16、单 host 在途 ≤3（按源排队，不冲垮弱源）；
+ * - 每批 DEFAULT_CHUNK_SIZE 条并行 CHUNK_CONCURRENCY 批（批大小按全局 1102 降档动态收），
+ *   服务端批内并发 16、单 host 在途 ≤3（按源排队，不冲垮弱源）；
  * - 目标数无上限（仅 MAX_TARGETS 保险阀防病态列表）：几千频道自动分批排队跑完，
  *   进度带 ETA，可随时取消（保留已完成的结果）；
  * - 重新测活/清空时 abort 在途请求并作废上一轮（runId 比对）。
@@ -183,35 +184,56 @@ export function useLiveProbe() {
           if (runIdRef.current !== runId) return;
           const start = cursor;
           if (start >= stale.length) return;
-          const chunk = stale.slice(start, start + getAdaptiveBatchLimit(DEFAULT_CHUNK_SIZE));
-          cursor = start + chunk.length;
-          const received = new Set<string>();
-          try {
-            await api.liveProbeStream(
-              chunk,
-              (r) => {
-                received.add(r.url);
-                if (runIdRef.current !== runId) return;
-                buffer[r.url] = {
-                  ok: r.ok,
-                  ms: r.ms,
-                  level: r.level,
-                  error: r.error,
-                  codec: r.codec,
-                  timedOut: r.timedOut,
-                  kbps: r.kbps,
-                  timestamp: Date.now(),
-                };
-                done++;
-                scheduleFlush();
-              },
-              controller.signal
-            );
-          } catch {
-            // 整批失败/被取消：不写缓存，保持待测状态以便下次重试
+          let queue = stale.slice(start, start + getAdaptiveBatchLimit(DEFAULT_CHUNK_SIZE));
+          cursor = start + queue.length;
+
+          // 1102 后按降档后的批大小重试一次：只降不重试的话，一次故障就白漏一整批
+          // （撞上时全局 limit 已减半，重试用更小的批更安全）。
+          let attempt = 0;
+          /** 本轮放弃的目标数（只补进度、不写缓存，下次运行补测） */
+          let abandoned = 0;
+          while (queue.length > 0) {
+            const received = new Set<string>();
+            let resourceLimited = false;
+            try {
+              await api.liveProbeStream(
+                queue,
+                (r) => {
+                  received.add(r.url);
+                  if (runIdRef.current !== runId) return;
+                  buffer[r.url] = {
+                    ok: r.ok,
+                    ms: r.ms,
+                    level: r.level,
+                    error: r.error,
+                    codec: r.codec,
+                    timedOut: r.timedOut,
+                    kbps: r.kbps,
+                    timestamp: Date.now(),
+                  };
+                  done++;
+                  scheduleFlush();
+                },
+                controller.signal
+              );
+            } catch (err) {
+              // 整批失败/被取消：不写缓存，保持待测状态以便下次重试
+              resourceLimited = err instanceof ApiError && err.resourceLimit === true;
+            }
+            const failed = queue.filter((u) => !received.has(u));
+            const nextLimit = getAdaptiveBatchLimit(DEFAULT_CHUNK_SIZE);
+            if (resourceLimited && attempt === 0 && runIdRef.current === runId && nextLimit < queue.length) {
+              attempt++;
+              // 超出新批大小的部分留给下次运行，不无限重试（仍计入进度，只是不写缓存）
+              abandoned += failed.length - nextLimit;
+              queue = failed.slice(0, nextLimit);
+              continue;
+            }
+            abandoned += failed.length;
+            queue = [];
           }
-          // 流中途断开时未返回的目标：只补进度，不写缓存
-          done += chunk.length - received.size;
+          // 流中途断开/批次失败时未返回的目标：只补进度，不写缓存
+          done += abandoned;
           flush();
         }
       };
