@@ -7,14 +7,15 @@ import type { SourceSearchOutcome } from '@/lib/types';
 
 /**
  * 点播源批量探活 hook：
- * - 受控并发（点播源上限 100，并发 4 足够快且不会同时压垮多个源站）；
+ * - 受控并发（点播源上限 100，并发 8：每个源测试是独立 invocation，翻倍并发只翻倍速度，
+ *   不同源互不干扰，同源另有服务端 per-host 闸门兜底）；
  * - 进度实时回传（已完成 / 总数 / 可用数），可随时中止（已完成结果保留）；
  * - 结果写入 store 的 sourceHealth，与搜索过程共用同一份健康度模型
  *   （因此连续失败达阈值会临时停用，与搜索行为一致，不再出现两套「健康度」）。
  */
 
-/** 同时在途的探测数 */
-const CONCURRENCY = 4;
+/** 同时在途的探测数（每个源一次独立 invocation，提高并发只影响速度，不叠加单次资源预算） */
+const CONCURRENCY = 8;
 
 export interface SourceProbeProgress {
   done: number;

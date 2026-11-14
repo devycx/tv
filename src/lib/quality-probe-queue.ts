@@ -11,11 +11,12 @@ import type { QualityProbeItem, QualityProbeResult } from './types';
  * 策略：
  * - 同 key（源 + 影片）只跑一次，重复入队共享同一个结果 Promise；
  * - 50ms 合并窗口：同一批渲染周期入队的条目合成一个请求，减少往返；
- * - 最多 2 个请求在飞、每批最多 8 条：既能让首屏先亮，又不会形成请求风暴；
+ * - 最多 4 个请求在飞、每批最多 12 条：首屏先亮的同时把单卡片等待压到最低
+ *   （单批 12 条 × 约 3 次上游 ≈ 36 subrequest，仍在免费版 50/invocation 预算内）；
  * - 单个批次失败只影响该批条目，队列继续工作；
  * - 服务端提前关流时，未回结果的条目按「已取消」收尾，调用方不会永远挂起；
  * - 看门狗：单批超过 timeoutMs 无结果即按「探测超时」收尾并释放槽位，
- *   避免服务端挂起把 2 个并发槽永久占死（队列是全局单例，占死等于全站停摆）；
+ *   避免服务端挂起把并发槽永久占死（队列是全局单例，占死等于全站停摆）；
  * - onStart 在批次真正发出时回调：调用方据此显示的「探测中」不会在排队期间说谎。
  */
 
@@ -26,17 +27,16 @@ export interface ProbeQueueDeps {
     onResult: (result: QualityProbeResult) => void,
     signal: AbortSignal
   ) => Promise<void>;
-  /** 同时进行的请求数，默认 2 */
+  /** 同时进行的请求数，默认 4 */
   concurrency?: number;
-  /** 单请求条目上限，默认 8 */
+  /** 单请求条目上限，默认 12 */
   batchSize?: number;
   /** 入队合并窗口（ms），默认 50 */
   coalesceMs?: number;
   /**
    * 单批看门狗（ms），默认 60_000。
    * 服务端每条目有 8s 死线，正常批次远快于此；但若服务端崩溃导致流挂起，
-   * fetch 会一直 pending——队列只有 2 个槽位，一个挂起就废掉一半运力，
-   * 两个挂起则全站单源探测停摆。超时后按「探测超时」收尾并释放槽位。
+   * fetch 会一直 pending——并发槽被占满后整条队列会停摆，所以超时后按「探测超时」收尾并释放槽位。
    */
   timeoutMs?: number;
 }
@@ -60,8 +60,8 @@ const cancelled = (item: QualityProbeItem): QualityProbeResult => ({
 });
 
 export function createProbeQueue(deps: ProbeQueueDeps): ProbeQueue {
-  const concurrency = Math.max(1, deps.concurrency ?? 2);
-  const batchSize = Math.max(1, deps.batchSize ?? 8);
+  const concurrency = Math.max(1, deps.concurrency ?? 4);
+  const batchSize = Math.max(1, deps.batchSize ?? 12);
   const coalesceMs = Math.max(0, deps.coalesceMs ?? 50);
   const timeoutMs = Math.max(1_000, deps.timeoutMs ?? 60_000);
 

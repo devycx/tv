@@ -109,7 +109,7 @@ export function AggregatedCard({
 
   // 进入视口 500ms 后整组交给全局队列探测：多源卡片在收起态也要有「最高画质」结论，
   // 否则首屏十几张「N 个来源」全是未知，既不能排序也没法判断该点哪个。
-  // 队列自身限并发（默认 2、每批 8），不会因为一屏卡片同时入队就打出请求风暴。
+  // 队列自身限并发（默认 4、每批 12），不会因为一屏卡片同时入队就打出请求风暴。
   const { ref: inViewRef, inView } = useInView<HTMLDivElement>();
   const itemsSignal = `${group.key}|${group.items.length}`;
   useEffect(() => {

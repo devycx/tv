@@ -15,11 +15,12 @@ interface QualityBody {
 const MAX_ITEMS = 50;
 
 /**
- * 并发上限：一次打满十几个源容易触发源站限流，也会把服务端出站连接占满。
- * 小内存 VPS 上并发过高时，探测峰值（64KB 文本 + 分片 + AES key）容易把容器顶到 OOM，
- * 表现为浏览器整条 fetch 失败；降到 3 换取稳定，单批最坏时长仍在客户端看门狗（60s）内。
+ * 并发上限：单次 invocation 内的探测并发，只影响墙钟耗时、不改变上游请求总数。
+ * 原为 3（小内存 VPS 上并发过高时，64KB 文本 + 分片 + AES key 的峰值容易把容器顶到 OOM）；
+ * Workers 部署（本仓库默认）内存余量足够，放宽到 6 让单批探测耗时减半。
+ * 若将来跑在 1GB 以内的 VPS 且出现 OOM，再回调到 3–4。
  */
-const CONCURRENCY = 3;
+const CONCURRENCY = 6;
 
 /** 探测成功缓存 30 分钟：源站短期内不会给同一部剧换片源 */
 const OK_CACHE_TTL = 30 * 60 * 1000;

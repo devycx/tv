@@ -65,7 +65,7 @@ const dedupeByKey = (items: QualityProbeTarget[]): QualityProbeTarget[] => {
  *
  * 三种入口共用同一份状态与冷却规则：
  * - `probe`：一次 POST 流式探测一批（多源卡片展开、换源面板）；
- * - `probeQueued`：交给全局队列（单源卡片进入视口），并发 2、每批 8 条；
+ * - `probeQueued`：交给全局队列（单源卡片进入视口），并发 4、每批 12 条；
  * - `retry`：绕过失败冷却重探（徽章点击）。
  *
  * 结果一律写回 `useAppStore.setQuality`，换页面/再次搜索时可复用（TTL 与 LRU 由 store 负责）。
