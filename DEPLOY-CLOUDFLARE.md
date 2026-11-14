@@ -144,7 +144,7 @@ Cloudflare 对「偶发超限」有内置容忍，但连续超限会返回 Error
 | --- | --- | --- | --- |
 | 页面整页 HTML（`/`、`/live`、`/about`、`/watch`） | pathname + 版本 | 6h | 直接返回，不进 Next |
 | 可缓存 GET API（`/api/status`、`/api/douban`、`/api/bangumi/calendar`、`/api/hot-list`、`/api/detail`、`/api/source-list`、`/api/live/epg`、`/api/live/playlist`） | pathname + query + 版本 | 1–60min | 直接返回，不进 Next |
-| 聚合搜索 `POST /api/search`（含 stream） | 请求体 SHA-256 + 版本 | 60s | 直接返回，不进 Next |
+| 聚合搜索 `POST /api/search`（stream 与非 stream 分开缓存） | 请求体 SHA-256 + URL query + 版本 | 60s | 直接返回，不进 Next |
 
 - **安全**：缓存读取前先做一次会话 HMAC 校验；未登录/未配置密码一律直通 OpenNext，由 `src/middleware.ts` 照旧 302/401。
   缓存内容是「所有登录用户共享的公共内容」（页面为构建期预渲染，API 为公共数据），不包含任何用户态。

@@ -108,11 +108,15 @@ function cacheTtlFor(request: Request, url: URL): number {
 /** 聚合搜索 POST 缓存 TTL（秒）：与 route.ts 内的内存短缓存对齐 */
 const SEARCH_TTL = 60;
 
-/** 搜索 POST 的缓存 key：按请求体（关键词 + 源集合 + 过滤开关）做 SHA-256 */
-async function buildSearchCacheKey(version: string, bodyText: string): Promise<Request> {
+/**
+ * 搜索 POST 的缓存 key：按请求体（关键词 + 源集合 + 过滤开关）做 SHA-256，
+ * 并把 URL query 一起编进 key —— `?stream=1` 返回 NDJSON、不带则是整包 JSON，
+ * 两者响应格式不同，绝不能共用缓存条目。
+ */
+async function buildSearchCacheKey(version: string, bodyText: string, search: string): Promise<Request> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(bodyText));
   const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
-  return buildCacheKey(version, `/__search__/${hex}`, '', false);
+  return buildCacheKey(version, `/__search__/${hex}`, search, true);
 }
 
 function isCacheableResponse(res: Response): boolean {
@@ -170,7 +174,7 @@ async function handleSearchPost(request: Request, env: any, ctx: any): Promise<R
   let key: Request | null = null;
   if (cache) {
     try {
-      key = await buildSearchCacheKey(versionOf(env), await request.clone().text());
+      key = await buildSearchCacheKey(versionOf(env), await request.clone().text(), new URL(request.url).search);
       const hit = await cache.match(key);
       if (hit) return cacheHitResponse(hit);
     } catch {
