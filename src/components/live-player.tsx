@@ -97,6 +97,11 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
     setLoading(true);
     setShowPoster(true);
 
+    // 直播的错误/重试由本组件统一负责：关掉 ArtPlayer 自带的 5 次自动重连，
+    // 否则它会和 hls.js 的 liveNetRetryCount 各跑一套，界面上还会闪「重新连接: N」。
+    const prevReconnectMax = Artplayer.RECONNECT_TIME_MAX;
+    Artplayer.RECONNECT_TIME_MAX = 0;
+
     let playbackStarted = false;
     let disposed = false;
     let destroyed = false;
@@ -261,7 +266,10 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
       controls.push({
         name: 'prev-channel',
         position: 'left',
-        index: 0,
+        // 注意不能写 0：ArtPlayer 的 add() 用 `option.index || this.id`，0 会被自增 id 顶掉，
+        // 导致上一台/下一台同 index、后加的下一台插到上一台前面（截图里的 ⏭ ⏮ ▶）。
+        // 11/12 让它们在播放键（index 10）之后、音量（20）之前，顺序为 ▶ ⏮ ⏭。
+        index: 11,
         html: channelBtnSvg('M11 19l-7-7 7-7m8 14l-7-7 7-7'),
         tooltip: '上一台',
         click: () => onPrevChannel(),
@@ -271,7 +279,7 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
       controls.push({
         name: 'next-channel',
         position: 'left',
-        index: 1,
+        index: 12,
         html: channelBtnSvg('M13 5l7 7-7 7M5 5l7 7-7 7'),
         tooltip: '下一台',
         click: () => onNextChannel(),
@@ -289,6 +297,8 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
       type: engine === 'flv' ? 'flv' : engine === 'native' ? 'mp4' : 'm3u8',
       volume: 0.9,
       autoplay: true,
+      // 直播态：ArtPlayer 原生 isLive 会不创建进度条/时间控件，并禁用移动端拖进度手势
+      isLive: true,
       // —— 直播态：关闭点播专属能力 ——
       pip: true,
       screenshot: false,
@@ -341,13 +351,6 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
       // mpegts 走自身 ERROR 事件；这里兜底其它未知错误
       if (!mpegtsRef.current) setError('视频播放失败，请尝试其他频道');
     });
-    art.on('ready', () => {
-      // 直播隐藏进度条（ArtPlayer 无原生 isLive 开关）
-      try {
-        const progress = art.controls?.progress as HTMLElement | undefined;
-        if (progress) progress.style.display = 'none';
-      } catch { /* 忽略 */ }
-    });
 
     // 15s 内未起播则提示
     const startTimer = setTimeout(() => {
@@ -365,7 +368,8 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
       volumeBoostRef.current = null;
       art.destroy();
       artRef.current = null;
-      // CONTROL_HIDE_TIME 是全局 static：恢复库默认值，避免影响后续挂载的其它播放器
+      // CONTROL_HIDE_TIME / RECONNECT_TIME_MAX 都是全局 static：恢复库默认值，避免影响其它播放器
+      Artplayer.RECONNECT_TIME_MAX = prevReconnectMax;
       if (touchPointer) Artplayer.CONTROL_HIDE_TIME = ART_DEFAULT_CONTROL_HIDE_MS;
       destroyed = true;
     };
@@ -386,12 +390,22 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
     }
   }, [volumeBoost]);
 
+  // 进入错误态时清掉过渡提示（HLS 回退原生播放的 hint 不能和错误一起显示在画面上），
+  // 并收起控制条：错误面板是唯一焦点，避免半透明遮罩下还透出播放/换台按钮。
+  useEffect(() => {
+    const art = artRef.current;
+    if (art?.controls) art.controls.show = !error;
+    if (!error) return;
+    setHint('');
+    if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
+  }, [error]);
+
   return (
-    <div className="relative w-full h-full">
+    <div className="player-stage relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" />
       {/* 起播前的品牌加载占位 */}
       {showPoster && !error && (
-        <div className="absolute inset-0 bg-black pointer-events-none flex flex-col items-center justify-center gap-3 px-6">
+        <div className="absolute inset-0 z-[130] bg-black pointer-events-none flex flex-col items-center justify-center gap-3 px-6">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/icons/brand-mark.svg" alt="" className="h-10 sm:h-12 w-auto" />
           <span className="text-2xl sm:text-3xl font-bold brand-gradient tracking-tight">夜幕影视</span>
@@ -400,40 +414,46 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
       )}
       {/* LIVE 呼吸标识 */}
       {!error && (
-        <div className="absolute top-3 right-3 flex items-center gap-1.5 bg-black/60 px-2 py-1 rounded-full pointer-events-none">
+        <div className="absolute top-3 right-3 z-[130] flex items-center gap-1.5 bg-black/60 px-2 py-1 rounded-full pointer-events-none">
           <span className="live-dot" />
           <span className="text-[10px] font-semibold text-white tracking-wider">LIVE</span>
         </div>
       )}
       {/* 换台 OSD：频道名（全屏内同样可见） */}
       {osdTitle && !error && (
-        <div className="absolute top-3 left-3 flex items-center max-w-[70%] bg-black/60 px-3 py-1.5 rounded-full pointer-events-none animate-fade-in">
+        <div className="absolute top-3 left-3 z-[130] flex items-center max-w-[70%] bg-black/60 px-3 py-1.5 rounded-full pointer-events-none animate-fade-in">
           <span className="text-sm font-medium text-white truncate">{osdTitle}</span>
         </div>
       )}
       {loading && !error && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/40 pointer-events-none">
+        <div className="absolute inset-0 z-[130] flex items-center justify-center bg-black/40 pointer-events-none">
           <Spinner size="lg" tone="onDark" />
         </div>
       )}
       {error && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/80">
-          <p className="text-danger text-sm px-4 text-center">{error}</p>
-          <button
-            className="btn-ghost text-xs !bg-white/10 !text-white !border-white/20"
-            onClick={() => {
-              // 重建播放器实例即可，无需整页刷新
-              setError('');
-              setHint('');
-              setRetryNonce((n) => n + 1);
-            }}
-          >
-            重新加载
-          </button>
+        <div
+          role="alert"
+          className="absolute inset-0 z-[130] flex flex-col items-center justify-center gap-3 bg-black px-6 text-center"
+        >
+          <p className="text-sm font-medium text-white">频道暂时无法播放</p>
+          <p className="max-w-sm text-xs leading-relaxed text-white/70">{error}</p>
+          <div className="flex items-center gap-2">
+            <button
+              className="rounded-md bg-white/15 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-white/25"
+              onClick={() => {
+                // 重建播放器实例即可，无需整页刷新
+                setError('');
+                setHint('');
+                setRetryNonce((n) => n + 1);
+              }}
+            >
+              重新加载
+            </button>
+          </div>
         </div>
       )}
       {hint && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-black/70 text-white text-sm px-3 py-1.5 rounded-full pointer-events-none animate-fade-in">
+        <div className="absolute top-4 left-1/2 z-[130] -translate-x-1/2 bg-black/70 text-white text-sm px-3 py-1.5 rounded-full pointer-events-none animate-fade-in">
           {hint}
         </div>
       )}

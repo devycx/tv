@@ -131,8 +131,9 @@ export function Header({
             </form>
           )}
 
-          {/* 窄屏占位：把导航推到右侧（无搜索框时留白，桌面端靠 nav 的 ml-auto） */}
-          {!showSearch && <div className="flex-1 sm:hidden" />}
+          {/* 窄屏占位：始终把右侧图标推到视口右端（直播页 showSearch 时表单在 <sm 是隐藏的，
+              以前这里不渲染占位，导致图标紧跟在品牌后面，没有两端对齐） */}
+          <div className="flex-1 sm:hidden" />
 
           {/* 桌面 / 平板：完整导航 */}
           <nav className="hidden sm:flex items-center gap-1 ml-auto">
@@ -142,20 +143,21 @@ export function Header({
             <HeaderLink href="/about" active={pathname === '/about'}>
               关于
             </HeaderLink>
-            <ThemeToggle />
             <IconButton label="观看历史" onClick={() => setHistoryOpen(true)}>
               <Icon name="clock" />
             </IconButton>
             <IconButton label="下载管理" onClick={requestShowDownloadManager}>
               <Icon name="download" />
             </IconButton>
+            <ThemeToggle />
             <IconButton label="设置" onClick={() => setSettingsOpen(true)}>
               <Icon name="gear" />
             </IconButton>
           </nav>
 
-          {/* 手机：设置直接露出（最常用），其余收进汉堡菜单 */}
+          {/* 手机：主题 + 设置直接露出（最常用），其余收进汉堡菜单 */}
           <div className="sm:hidden flex items-center gap-1 shrink-0">
+            <ThemeToggle />
             {/* 与菜单项一致：打开抽屉前先收起菜单，否则关掉设置后汉堡菜单还摊在那儿 */}
             <IconButton
               label="设置"
@@ -205,6 +207,7 @@ export function Header({
               </MenuAction>
               <MenuAction
                 icon="download"
+                className="col-span-2"
                 onClick={() => {
                   closeMenu();
                   requestShowDownloadManager();
@@ -212,10 +215,6 @@ export function Header({
               >
                 下载管理
               </MenuAction>
-            </div>
-            <div className="mt-1.5 flex items-center justify-between rounded-lg bg-chip px-3 py-2">
-              <span className="text-xs text-muted">外观主题</span>
-              <ThemeToggle />
             </div>
           </nav>
         )}
@@ -300,16 +299,22 @@ function MenuAction({
   icon,
   onClick,
   children,
+  className,
 }: {
   icon: IconName;
   onClick: () => void;
   children: React.ReactNode;
+  /** 网格布局里需要跨列时传入（如 2 列菜单的最后一个单项） */
+  className?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-muted hover:bg-hover hover:text-content transition-colors text-left"
+      className={cn(
+        'flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm text-muted hover:bg-hover hover:text-content transition-colors text-left',
+        className
+      )}
     >
       <Icon name={icon} className="w-4 h-4 shrink-0" />
       {children}

@@ -5,8 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/client-api';
 import { cn } from '@/lib/utils';
 import type { EpgProgram } from '@/lib/types';
-import { EmptyState, ErrorState, Spinner } from './states';
-
+import { ErrorState, Spinner } from './states';
 /**
  * EPG 节目单面板：当前节目（含播放进度条）+ 接下来节目列表 + 简介展开。
  * 仅在频道带 tvg-id 且来源订阅配置了 EPG 地址时查询；无数据优雅降级。
@@ -38,13 +37,9 @@ export function LiveEpgPanel({ epgUrl, tvgId }: { epgUrl?: string; tvgId?: strin
   });
 
   if (!enabled) {
-    return (
-      <EmptyState
-        variant="plain"
-        title="该频道未配置节目单数据（需来源订阅提供 EPG 地址且频道带 tvg-id）"
-        className="!py-4"
-      />
-    );
+    // 没有 EPG 配置时不渲染任何内容：管理页只在 hasEpg 时挂载本组件，
+    // 这里保留防御，避免将来被单独复用时又出现一张占满屏的空卡。
+    return null;
   }
 
   if (epgQuery.isLoading) {
