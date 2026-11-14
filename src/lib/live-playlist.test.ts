@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchLivePlaylistDirect, livePlaylistApiUrl } from './live-playlist';
-import { __resetAdaptiveBatchForTests, getAdaptiveBatchLimit } from './adaptive-batch';
 import type { LivePlaylistResponse } from './types';
 
 /**
@@ -138,59 +137,5 @@ describe('fetchLivePlaylistDirect', () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: '未登录' }), { status: 401 }));
 
     await expect(fetchLivePlaylistDirect(SOURCE)).rejects.toThrow('需要登录');
-  });
-});
-
-/**
- * 服务端回退曾把「任意 503」当成未配置密码：Cloudflare 的错误页（1102 等）是 HTML，
- * 一条网关错误就能弹出登录框。这里钉住与 client-api 一致的判定。
- */
-describe('服务端回退的失败语义（与 client-api 同一套判定）', () => {
-  const dispatch = vi.fn();
-
-  beforeEach(() => {
-    dispatch.mockReset();
-    vi.stubGlobal('window', { dispatchEvent: dispatch });
-    __resetAdaptiveBatchForTests();
-    // 直连失败会 warn 一次，测试里静音
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-  });
-
-  it('503 JSON（未配置 PASSWORD）→ 触发 setup 事件并抛提示', async () => {
-    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
-    fetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify({ error: '服务器未设置 PASSWORD 环境变量' }), {
-        status: 503,
-        headers: { 'content-type': 'application/json' },
-      })
-    );
-
-    await expect(fetchLivePlaylistDirect(SOURCE)).rejects.toThrow('服务器未配置密码');
-    expect(dispatch).toHaveBeenCalledTimes(1);
-    expect((dispatch.mock.calls[0][0] as CustomEvent).detail).toBe('setup');
-  });
-
-  it('503 HTML + 1102 → 不弹登录框，报资源超限并降批', async () => {
-    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
-    fetchMock.mockResolvedValueOnce(
-      new Response('<html>Error 1102 Worker exceeded resource limits</html>', {
-        status: 503,
-        headers: { 'content-type': 'text/html' },
-      })
-    );
-
-    await expect(fetchLivePlaylistDirect(SOURCE)).rejects.toThrow(/1102/);
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(getAdaptiveBatchLimit(8)).toBe(4);
-  });
-
-  it('500 + cf-error-code: 1102 → 同样识别为资源超限', async () => {
-    fetchMock.mockRejectedValueOnce(new TypeError('Failed to fetch'));
-    fetchMock.mockResolvedValueOnce(
-      new Response('{}', { status: 500, headers: { 'cf-error-code': '1102' } })
-    );
-
-    await expect(fetchLivePlaylistDirect(SOURCE)).rejects.toThrow(/1102/);
-    expect(getAdaptiveBatchLimit(8)).toBe(4);
   });
 });

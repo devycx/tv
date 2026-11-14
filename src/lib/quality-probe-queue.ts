@@ -28,11 +28,8 @@ export interface ProbeQueueDeps {
   ) => Promise<void>;
   /** 同时进行的请求数，默认 2 */
   concurrency?: number;
-  /**
-   * 单请求条目上限，默认 8；传函数则每批发出前重新读取，
-   * 用于全局 adaptive-batch 在 Cloudflare 1102 后动态降批。
-   */
-  batchSize?: number | (() => number);
+  /** 单请求条目上限，默认 8 */
+  batchSize?: number;
   /** 入队合并窗口（ms），默认 50 */
   coalesceMs?: number;
   /**
@@ -64,14 +61,9 @@ const cancelled = (item: QualityProbeItem): QualityProbeResult => ({
 
 export function createProbeQueue(deps: ProbeQueueDeps): ProbeQueue {
   const concurrency = Math.max(1, deps.concurrency ?? 2);
+  const batchSize = Math.max(1, deps.batchSize ?? 8);
   const coalesceMs = Math.max(0, deps.coalesceMs ?? 50);
   const timeoutMs = Math.max(1_000, deps.timeoutMs ?? 60_000);
-
-  /** 当前批大小：每批发出前重新计算，1102 降批后下一批立即生效 */
-  const currentBatchSize = (): number => {
-    const configured = typeof deps.batchSize === 'function' ? deps.batchSize() : deps.batchSize;
-    return Math.max(1, configured ?? 8);
-  };
 
   /** 待发条目（key → item） */
   const pending = new Map<string, QualityProbeItem>();
@@ -98,7 +90,7 @@ export function createProbeQueue(deps: ProbeQueueDeps): ProbeQueue {
   const dispatch = () => {
     timer = null;
     while (active < concurrency && pending.size > 0) {
-      const entries = [...pending.entries()].slice(0, currentBatchSize());
+      const entries = [...pending.entries()].slice(0, batchSize);
       for (const [key] of entries) pending.delete(key);
       const items = entries.map(([, item]) => item);
       const keys = entries.map(([key]) => key);

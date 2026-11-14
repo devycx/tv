@@ -3,12 +3,6 @@
 import type { SearchResponse, SearchStreamEvent, SourceSearchOutcome, VideoDetail, DoubanResponse, BangumiCalendarResponse, SourceConfig, SearchResultItem, LivePlaylistResponse, LiveEpgResponse, SourceListPayload, QualityProbeItem, QualityProbeResult } from './types';
 import { fetchLivePlaylistDirect, livePlaylistApiUrl } from './live-playlist';
 import { UNAUTHORIZED_EVENT } from './unauthorized-event';
-import {
-  isPasswordSetupResponse,
-  noteWorkerResourceLimit,
-  readErrorBody,
-  RESOURCE_LIMIT_MESSAGE,
-} from './api-failure';
 
 /** 401/503 全局事件名；对外导出保持兼容（事件常量已抽到 unauthorized-event，避免循环依赖） */
 export { UNAUTHORIZED_EVENT };
@@ -20,12 +14,9 @@ export { UNAUTHORIZED_EVENT };
 
 export class ApiError extends Error {
   status: number;
-  /** Cloudflare Worker 资源超限（1102）：调用方可据此提示或降低后续批次 */
-  resourceLimit?: boolean;
-  constructor(message: string, status: number, options?: { resourceLimit?: boolean }) {
+  constructor(message: string, status: number) {
     super(message);
     this.status = status;
-    this.resourceLimit = options?.resourceLimit;
   }
 }
 
@@ -59,9 +50,7 @@ function throwForAuthStatus(res: Response): void {
     window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
     throw new ApiError('需要登录', 401);
   }
-  // 只有本站登录接口的 JSON 503 才代表「未配置 PASSWORD」；
-  // Cloudflare 1102 等网关错误页也可能是 503（HTML），不能误弹登录框。
-  if (isPasswordSetupResponse(res)) {
+  if (res.status === 503) {
     window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail: 'setup' }));
     throw new ApiError('服务器未配置密码', 503);
   }
@@ -106,18 +95,12 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   }
   throwForAuthStatus(res);
   if (!res.ok) {
-    const text = await readErrorBody(res);
-    const limited = noteWorkerResourceLimit(res, text);
-    let msg = limited ? RESOURCE_LIMIT_MESSAGE : `请求失败 (${res.status})`;
-    if (!limited) {
-      try {
-        const data = JSON.parse(text) as { error?: string };
-        if (data?.error) msg = data.error;
-      } catch {
-        /* 忽略解析失败 */
-      }
-    }
-    throw new ApiError(msg, res.status, { resourceLimit: limited });
+    let msg = `请求失败 (${res.status})`;
+    try {
+      const data = (await res.json()) as { error?: string };
+      if (data?.error) msg = data.error;
+    } catch { /* 忽略解析失败 */ }
+    throw new ApiError(msg, res.status);
   }
   return (await res.json()) as T;
 }
@@ -187,15 +170,7 @@ export const api = {
       throw new ApiError('探测请求没能送达服务器（网络或反向代理中断）', 0);
     }
     throwForAuthStatus(res);
-    if (!res.ok || !res.body) {
-      const text = res.ok ? '' : await readErrorBody(res);
-      const limited = !res.ok && noteWorkerResourceLimit(res, text);
-      throw new ApiError(
-        limited ? RESOURCE_LIMIT_MESSAGE : `请求失败 (${res.status})`,
-        res.status,
-        { resourceLimit: limited }
-      );
-    }
+    if (!res.ok || !res.body) throw new ApiError(`请求失败 (${res.status})`, res.status);
 
     let firstByte = false;
     try {
@@ -334,15 +309,7 @@ export const api = {
       signal,
     });
     throwForAuthStatus(res);
-    if (!res.ok || !res.body) {
-      const text = res.ok ? '' : await readErrorBody(res);
-      const limited = !res.ok && noteWorkerResourceLimit(res, text);
-      throw new ApiError(
-        limited ? RESOURCE_LIMIT_MESSAGE : `请求失败 (${res.status})`,
-        res.status,
-        { resourceLimit: limited }
-      );
-    }
+    if (!res.ok || !res.body) throw new ApiError(`请求失败 (${res.status})`, res.status);
 
     await consumeNdjson<LiveProbeResult>(res, onResult);
   },
@@ -369,15 +336,7 @@ async function searchStream(
     signal,
   });
     throwForAuthStatus(res);
-    if (!res.ok || !res.body) {
-      const text = res.ok ? '' : await readErrorBody(res);
-      const limited = !res.ok && noteWorkerResourceLimit(res, text);
-      throw new ApiError(
-        limited ? RESOURCE_LIMIT_MESSAGE : `请求失败 (${res.status})`,
-        res.status,
-        { resourceLimit: limited }
-      );
-    }
+    if (!res.ok || !res.body) throw new ApiError(`请求失败 (${res.status})`, res.status);
 
     // done 事件缺失（流被截断）时退化为空结果，不让整次搜索报错
     let final: SearchResponse = { list: [], failures: [] };

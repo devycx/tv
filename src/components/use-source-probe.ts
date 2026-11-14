@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '@/lib/client-api';
-import { getAdaptiveBatchLimit } from '@/lib/adaptive-batch';
 import { useAppStore } from '@/lib/store';
 import type { SourceSearchOutcome } from '@/lib/types';
 
@@ -90,9 +89,7 @@ export function useSourceProbe() {
       }
     };
 
-    // 全局 1102 降批后并发数跟着收；已发出的请求不撤回
-    const workerCount = Math.max(1, Math.min(getAdaptiveBatchLimit(CONCURRENCY), sources.length));
-    await Promise.all(Array.from({ length: workerCount }, worker));
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, sources.length) }, worker));
     if (runIdRef.current !== runId) return undefined;
     useAppStore.getState().recordSourceHealth(outcomes);
     setProgress(null);

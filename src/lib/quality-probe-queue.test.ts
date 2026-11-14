@@ -59,27 +59,6 @@ describe('createProbeQueue', () => {
     await expect(done).resolves.toMatchObject({ 's1:vod-0': { height: 1080 } });
   });
 
-  it('batchSize 传函数：每批发出前重新读取（1102 降档后下一批立刻变小）', async () => {
-    const { run, calls, gates } = manualRun();
-    let limit = 4;
-    const queue = createProbeQueue({ run, concurrency: 1, batchSize: () => limit, coalesceMs: 50 });
-
-    const done = queue.push(items(6));
-    await vi.advanceTimersByTimeAsync(50);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toHaveLength(4);
-
-    // 模拟撞到 1102 后全局降批：已经发出的批次不受影响，下一批按新上限切
-    limit = 2;
-    gates[0]();
-    await vi.advanceTimersByTimeAsync(50);
-    expect(calls).toHaveLength(2);
-    expect(calls[1]).toHaveLength(2);
-
-    gates[1]();
-    await expect(done).resolves.toMatchObject({ 's1:vod-0': { height: 1080 } });
-  });
-
   it('同 key 重复入队只发一次请求，双方共享结果', async () => {
     const { run, calls, gates } = manualRun();
     const queue = createProbeQueue({ run, coalesceMs: 50 });

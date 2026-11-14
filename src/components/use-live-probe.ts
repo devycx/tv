@@ -1,8 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, api } from '@/lib/client-api';
-import { getAdaptiveBatchLimit, onAdaptiveBatchDownscale } from '@/lib/adaptive-batch';
+import { api } from '@/lib/client-api';
 import { LIVE_PROBE_TTL_MS, useAppStore, type LiveProbeEntry } from '@/lib/store';
 
 /**
@@ -10,8 +9,7 @@ import { LIVE_PROBE_TTL_MS, useAppStore, type LiveProbeEntry } from '@/lib/store
  * - 结果持久化到 store（liveProbeResults），6 小时内直接复用（LIVE_PROBE_TTL_MS）；
  * - 触发探测时只补测缺失或已过期的频道，全部仍有效则提示跳过；
  * - 服务端以 NDJSON 流式逐条返回，结果边测边写入列表（节流合并，避免高频 re-render）；
- * - 每批 DEFAULT_CHUNK_SIZE 条并行 CHUNK_CONCURRENCY 批（批大小按全局 1102 降档动态收），
- *   服务端批内并发 16、单 host 在途 ≤3（按源排队，不冲垮弱源）；
+ * - 每批 CHUNK_SIZE 条并行 CHUNK_CONCURRENCY 批，服务端批内并发 16、单 host 在途 ≤3（按源排队，不冲垮弱源）；
  * - 目标数无上限（仅 MAX_TARGETS 保险阀防病态列表）：几千频道自动分批排队跑完，
  *   进度带 ETA，可随时取消（保留已完成的结果）；
  * - 重新测活/清空时 abort 在途请求并作废上一轮（runId 比对）。
@@ -30,12 +28,12 @@ export interface ProbeResult {
 }
 
 /**
- * 每批探测的基准频道数：单频道最多 4 次上游请求（manifest → variant → media → 分片），
+ * 每批探测的频道数：单频道最多 4 次上游请求（manifest → variant → media → 分片），
  * 8 × 4 = 32 次，留在 Workers 免费版 50 subrequest/invocation 的预算内。
- * 实际每批大小由全局 adaptive-batch 控制：撞到 1102 会从 8 自动降到 4/2/1。
+ * 之前 50 条一批在 Workers 上会撞 subrequest 上限，失败会被误判成「源不可用」。
  */
-const DEFAULT_CHUNK_SIZE = 8;
-/** 同时在途的批次数：与批大小相乘即最大并发探测规模 */
+const CHUNK_SIZE = 8;
+/** 同时在途的批次数：与 CHUNK_SIZE 相乘即最大并发探测规模 */
 const CHUNK_CONCURRENCY = 2;
 /**
  * 单轮测活目标数上限（保险阀）：正常几千个频道分批排队都能跑完，不设人为瓶颈；
@@ -65,12 +63,6 @@ export function useLiveProbe() {
     if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
     abortRef.current?.abort();
   }, []);
-
-  // 任一 API 撞到 Cloudflare 1102 都会全局降批；测活这边给用户一个明确提示
-  useEffect(
-    () => onAdaptiveBatchDownscale(() => showHint('服务器资源紧张，已自动降低测活批次')),
-    [showHint]
-  );
 
   // 仅暴露 6 小时内的结果，过期条目对 UI 不可见。
   // 结果对象按 (url, timestamp) 复用身份：节流写回只更新被探测到的频道，
@@ -152,6 +144,10 @@ export function useLiveProbe() {
       const controller = new AbortController();
       abortRef.current = controller;
 
+      const chunks: string[][] = [];
+      for (let i = 0; i < stale.length; i += CHUNK_SIZE) {
+        chunks.push(stale.slice(i, i + CHUNK_SIZE));
+      }
       // startedAt 供 UI 按已完成均速估算剩余时间
       const startedAt = Date.now();
       setProgress({ done: 0, total: stale.length, startedAt });
@@ -177,68 +173,45 @@ export function useLiveProbe() {
         if (!flushTimer) flushTimer = setTimeout(flush, FLUSH_INTERVAL_MS);
       };
 
-      // 批大小每轮重新读取：某个请求撞到 1102 后，下一批立刻按降档后的 limit 切
-      let cursor = 0;
+      let nextChunk = 0;
       const worker = async () => {
         for (;;) {
           if (runIdRef.current !== runId) return;
-          const start = cursor;
-          if (start >= stale.length) return;
-          let queue = stale.slice(start, start + getAdaptiveBatchLimit(DEFAULT_CHUNK_SIZE));
-          cursor = start + queue.length;
-
-          // 1102 后按降档后的批大小重试一次：只降不重试的话，一次故障就白漏一整批
-          // （撞上时全局 limit 已减半，重试用更小的批更安全）。
-          let attempt = 0;
-          /** 本轮放弃的目标数（只补进度、不写缓存，下次运行补测） */
-          let abandoned = 0;
-          while (queue.length > 0) {
-            const received = new Set<string>();
-            let resourceLimited = false;
-            try {
-              await api.liveProbeStream(
-                queue,
-                (r) => {
-                  received.add(r.url);
-                  if (runIdRef.current !== runId) return;
-                  buffer[r.url] = {
-                    ok: r.ok,
-                    ms: r.ms,
-                    level: r.level,
-                    error: r.error,
-                    codec: r.codec,
-                    timedOut: r.timedOut,
-                    kbps: r.kbps,
-                    timestamp: Date.now(),
-                  };
-                  done++;
-                  scheduleFlush();
-                },
-                controller.signal
-              );
-            } catch (err) {
-              // 整批失败/被取消：不写缓存，保持待测状态以便下次重试
-              resourceLimited = err instanceof ApiError && err.resourceLimit === true;
-            }
-            const failed = queue.filter((u) => !received.has(u));
-            const nextLimit = getAdaptiveBatchLimit(DEFAULT_CHUNK_SIZE);
-            if (resourceLimited && attempt === 0 && runIdRef.current === runId && nextLimit < queue.length) {
-              attempt++;
-              // 超出新批大小的部分留给下次运行，不无限重试（仍计入进度，只是不写缓存）
-              abandoned += failed.length - nextLimit;
-              queue = failed.slice(0, nextLimit);
-              continue;
-            }
-            abandoned += failed.length;
-            queue = [];
+          const index = nextChunk++;
+          if (index >= chunks.length) return;
+          const chunk = chunks[index];
+          const received = new Set<string>();
+          try {
+            await api.liveProbeStream(
+              chunk,
+              (r) => {
+                received.add(r.url);
+                if (runIdRef.current !== runId) return;
+                buffer[r.url] = {
+                  ok: r.ok,
+                  ms: r.ms,
+                  level: r.level,
+                  error: r.error,
+                  codec: r.codec,
+                  timedOut: r.timedOut,
+                  kbps: r.kbps,
+                  timestamp: Date.now(),
+                };
+                done++;
+                scheduleFlush();
+              },
+              controller.signal
+            );
+          } catch {
+            // 整批失败/被取消：不写缓存，保持待测状态以便下次重试
           }
-          // 流中途断开/批次失败时未返回的目标：只补进度，不写缓存
-          done += abandoned;
+          // 流中途断开时未返回的目标：只补进度，不写缓存
+          done += chunk.length - received.size;
           flush();
         }
       };
       await Promise.all(
-        Array.from({ length: Math.min(CHUNK_CONCURRENCY, stale.length) }, worker)
+        Array.from({ length: Math.min(CHUNK_CONCURRENCY, chunks.length) }, worker)
       );
 
       if (flushTimer) clearTimeout(flushTimer);
