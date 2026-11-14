@@ -2,8 +2,8 @@ import type { MetadataRoute } from 'next';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: '夜幕TV - 私人影视聚合',
-    short_name: '夜幕TV',
+    name: '夜幕影视 - 私人影视聚合',
+    short_name: '夜幕影视',
     description: '私人影视聚合平台，汇聚公开点播源与直播源',
     start_url: '/',
     display: 'standalone',

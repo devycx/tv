@@ -122,7 +122,7 @@ export async function fetchLivePlaylistDirect(
     // 组件卸载/换查询导致的取消不是失败，不能回退（也避免误报 warn）
     if (isAbortError(err) || signal?.aborted) throw err;
     console.warn(
-      '[LibreTV] 直播列表直连失败，已回退服务端代理：',
+      '[夜幕影视] 直播列表直连失败，已回退服务端代理：',
       url,
       err instanceof Error ? err.message : err
     );

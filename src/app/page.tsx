@@ -45,9 +45,6 @@ function HomeContent() {
   const yellowFilter = useAppStore((s) => s.yellowFilter);
   const sourceHealth = useAppStore((s) => s.sourceHealth);
   const subscriptions = useAppStore((s) => s.subscriptions);
-  // 搜索页后台请求控制：画质探测范围 + 点卡片直达最高画质来源
-  const searchProbe = useAppStore((s) => s.searchProbe);
-  const quickOpenBest = useAppStore((s) => s.quickOpenBest);
   const [input, setInput] = useState(urlQuery);
   const [detailItem, setDetailItem] = useState<SearchResultItem | null>(null);
   /** 流式搜索中已结算的源（data 就绪前用于增量渲染） */
@@ -188,11 +185,11 @@ function HomeContent() {
         <section className={cn('flex flex-col items-center', urlQuery ? 'mb-6' : 'mt-8 mb-8')}>
           {!urlQuery && (
             <header className="text-center mb-6">
-              <h1 className="text-4xl sm:text-5xl font-bold brand-gradient">夜幕TV</h1>
-              <p className="mt-2 text-sm text-faint">夜色启幕，好戏随时开场</p>
+              {/* 只展示网站名：slogan 已按需求移除 */}
+              <h1 className="text-4xl sm:text-5xl font-bold brand-gradient">夜幕影视</h1>
             </header>
           )}
-          {urlQuery && <h1 className="sr-only">夜幕TV 视频搜索</h1>}
+          {urlQuery && <h1 className="sr-only">夜幕影视 视频搜索</h1>}
           {/* 定位容器比胶囊宽一圈：浮层按它的宽度对齐，接缝处不会与胶囊边框错位 1px */}
           <div ref={searchHistory.containerRef} className="relative w-full max-w-2xl">
             <form
@@ -339,28 +336,14 @@ function HomeContent() {
             ) : list.length > 0 ? (
               <>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 items-start">
-                  {visibleGroups.map((group, index) => {
-                    // 画质探测范围：默认只探第一张卡片；visible 模式恢复「单源卡进视口即探」；
-                    // off 模式完全交给用户展开/点重试触发。多来源卡片在 first 模式下也自动探，
-                    // 探完即可「点卡片直达最高画质来源」。
-                    const singleSource = group.items.length === 1;
-                    const autoProbe =
-                      searchProbe === 'first'
-                        ? index === 0
-                        : searchProbe === 'visible'
-                          ? singleSource
-                          : false;
-                    return (
-                      <AggregatedCard
-                        key={group.key}
-                        group={group}
-                        sources={selectedSources}
-                        autoProbe={autoProbe}
-                        quickOpenBest={quickOpenBest}
-                        onOpen={(item) => setDetailItem(item)}
-                      />
-                    );
-                  })}
+                  {visibleGroups.map((group) => (
+                    <AggregatedCard
+                      key={group.key}
+                      group={group}
+                      sources={selectedSources}
+                      onOpen={(item) => setDetailItem(item)}
+                    />
+                  ))}
                 </div>
                 {groups.length > visibleCount && (
                   <div className="flex justify-center mt-4">
@@ -432,7 +415,7 @@ function NoSourceGuide({ hasSources = false }: { hasSources?: boolean }) {
           <>点击右上角「设置」，勾选要参与搜索的点播源后重新搜索。</>
         ) : (
           <>
-            夜幕TV 不内置任何采集站。点击右上角「设置 → 添加 API」，填入一个
+            夜幕影视 不内置任何采集站。点击右上角「设置 → 添加 API」，填入一个
             Apple CMS 采集站地址（如 <code className="text-accent text-xs">https://example.com/api.php/provide/vod</code>），
             勾选后即可开始搜索。
           </>

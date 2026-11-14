@@ -33,7 +33,7 @@ import { allLiveSources, isSourceDisabled, keyBelongsToSubscription, resolveSour
 import type { SourceConfig } from '@/lib/types';
 import { useToast } from './toast';
 import { formatRelativeTime, hostnameOf, validateSourceUrl, cn } from '@/lib/utils';
-import { exportConfig, importConfig } from '@/lib/db';
+import { CONFIG_NAME, LEGACY_CONFIG_NAME, exportConfig, importConfig } from '@/lib/db';
 import { PERSIST_KEY } from '@/lib/persist-storage';
 import { copyToClipboard } from '@/lib/clipboard';
 import { useAuth } from './auth';
@@ -808,33 +808,6 @@ function HomePanel() {
           ]}
         />
       </div>
-
-      <SectionTitle title="搜索与画质" hint="减少搜索页无谓的后台请求" />
-      <div className="space-y-3">
-        <SelectRow
-          label="画质探测范围"
-          value={store.searchProbe}
-          description={
-            store.searchProbe === 'first'
-              ? '只自动探测搜索结果第一张卡片（多来源时探完该卡全部来源）；其余卡片在悬停、展开来源或点画质徽章重试时才探测。匹配「点首卡最优源」的习惯，请求最少。'
-              : store.searchProbe === 'visible'
-                ? '单源卡片滚入可视区域 500ms 后自动探测（旧行为）：信息最全，但滚动列表会持续触发请求。'
-                : '不自动探测：只在展开来源列表或手动点画质徽章重试时探测。'
-          }
-          onChange={(v) => store.updateSettings({ searchProbe: v as 'first' | 'visible' | 'off' })}
-          options={[
-            { value: 'first', label: '仅第一张卡片', hint: '推荐 · 请求最少' },
-            { value: 'visible', label: '可视卡片', hint: '旧行为 · 信息最全' },
-            { value: 'off', label: '关闭', hint: '只在展开/重试时探测' },
-          ]}
-        />
-        <ToggleRow
-          label="点击卡片直达最高画质"
-          description="多来源卡片已探到最高画质时，点击卡片直接打开该来源的详情（右侧箭头仍可展开全部来源）；尚未探到画质时先展开并开始探测。关闭后恢复「点击卡片展开来源列表」。"
-          checked={store.quickOpenBest}
-          onChange={(v) => store.updateSettings({ quickOpenBest: v })}
-        />
-      </div>
     </section>
   );
 }
@@ -856,7 +829,7 @@ const REFRESH_OPTIONS: DropdownOption[] = [
 
 /**
  * 数据源订阅 / 分享：
- * - 订阅：填入远程订阅地址（LibreTV-SourceList JSON、TVBOX 配置 JSON 或接口目录 JSON，
+ * - 订阅：填入远程订阅地址（源列表 JSON、TVBOX 配置 JSON 或接口目录 JSON，
  *   由服务端自动识别），一次拉取点播源与直播源，可随时重新同步；
  * - 自动刷新：每个订阅可单独设周期（默认手动），到期才在打开站点时静默同步；
  * - 分享：把当前点播源 + 直播源导出为同格式 JSON 文件，托管到任意位置即可被他人订阅。
@@ -946,7 +919,7 @@ function SourceSubscriptions() {
 
     setPublishing(true);
     try {
-      const result = await api.publishSourceList({ name: 'LibreTV-SourceList', sources, liveSources });
+      const result = await api.publishSourceList({ name: '夜幕影视-SourceList', sources, liveSources });
       setPublished(result);
       toast(`已发布 ${result.sources} 个点播源、${result.liveSources} 个直播源到 ${result.provider}`, 'success');
     } catch (err) {
@@ -985,12 +958,12 @@ function SourceSubscriptions() {
       })
       .map(({ name, url, epg }) => ({ name: name || hostnameOf(url), url, epg }));
 
-    const payload = { name: 'LibreTV-SourceList', version: 2, exportedAt: Date.now(), sources, liveSources };
+    const payload = { name: '夜幕影视-SourceList', version: 2, exportedAt: Date.now(), sources, liveSources };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `LibreTV-SourceList_${Date.now()}.json`;
+    a.download = `夜幕影视-SourceList_${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
     toast(`已导出 ${sources.length} 个点播源、${liveSources.length} 个直播源，托管后即可被他人订阅`, 'success');
@@ -1066,7 +1039,7 @@ function SourceSubscriptions() {
       <div className="flex gap-2 mb-2">
         <input
           className="input flex-1 min-w-0"
-          placeholder="订阅地址（LibreTV 源列表或 TVBOX 配置的 JSON URL）"
+          placeholder="订阅地址（源列表或 TVBOX 配置的 JSON URL）"
           value={subUrl}
           onChange={(e) => setSubUrl(e.target.value)}
           onKeyDown={(e) => {
@@ -1083,7 +1056,7 @@ function SourceSubscriptions() {
       </div>
       {store.subscriptions.length === 0 ? (
         <p className="text-xs text-faint">
-          一份订阅可同时下发点播源与直播源，支持 LibreTV 源列表与 TVBOX 配置（仅导入可直接使用的接口，Spider 类站点自动跳过）；
+          一份订阅可同时下发点播源与直播源，支持源列表 JSON 与 TVBOX 配置（仅导入可直接使用的接口，Spider 类站点自动跳过）；
           「导出数据源」生成的 JSON 托管到任意 URL 即可分享给他人订阅。
         </p>
       ) : (
@@ -1247,7 +1220,7 @@ function ConfigIoPanel() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `LibreTV-Settings_${Date.now()}.json`;
+      a.download = `夜幕影视-Settings_${Date.now()}.json`;
       a.click();
       URL.revokeObjectURL(url);
       toast('配置已导出', 'success');
@@ -1321,7 +1294,10 @@ function summarizeConfig(text: string): string {
   } catch {
     throw new Error('文件不是合法的 JSON');
   }
-  if (cfg.name !== 'LibreTV-Settings') throw new Error('不是 LibreTV 的配置文件');
+  // 兼容旧版导出名（LEGACY_CONFIG_NAME），否则用户手里的历史配置文件无法导入
+  if (cfg.name !== CONFIG_NAME && cfg.name !== LEGACY_CONFIG_NAME) {
+    throw new Error('不是夜幕影视的配置文件');
+  }
 
   const parts: string[] = [];
   const settingsRaw = cfg.data?.[PERSIST_KEY];

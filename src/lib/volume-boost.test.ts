@@ -130,7 +130,7 @@ describe('isWebAudioSafeForVideo', () => {
     installFakeAudio();
     const mod = await freshModule();
     expect(mod.isWebAudioSafeForVideo(video('http://localhost:8080/api/auth'))).toBe(true);
-    expect(mod.isWebAudioSafeForVideo(video('/player-poster.png'))).toBe(true);
+    expect(mod.isWebAudioSafeForVideo(video('/icons/brand-mark.svg'))).toBe(true);
   });
 
   it('跨域且未开 CORS 的直连流不安全（接入会被浏览器静音）', async () => {

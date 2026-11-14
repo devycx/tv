@@ -10,7 +10,7 @@
 export function SiteFooter() {
   return (
     <footer className="border-t border-line py-4">
-      <p className="text-center text-xs text-faint">夜幕TV · 夜色启幕，好戏随时开场</p>
+      <p className="text-center text-xs text-faint">夜幕影视</p>
       <p className="mt-1 text-center text-[11px] text-faint/70">
         仅供个人学习使用 · 基于开源项目（AGPL-3.0）
       </p>

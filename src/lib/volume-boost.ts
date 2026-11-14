@@ -54,7 +54,7 @@ export function isWebAudioSafeForVideo(video: HTMLVideoElement): boolean {
   try {
     const url = new URL(src, typeof window !== 'undefined' ? window.location.href : undefined);
     const origin = typeof window !== 'undefined' ? window.location.origin : undefined;
-    // 相对/无协议 URL（如 /player-poster.png）解析后同源，安全
+    // 相对/无协议 URL（如 /icons/brand-mark.svg）解析后同源，安全
     if (url.protocol === 'http:' || url.protocol === 'https:') {
       if (origin && url.origin === origin) return true;
     }

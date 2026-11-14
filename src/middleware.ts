@@ -28,7 +28,7 @@ const PUBLIC_PATHS = ['/login', '/api/auth', '/api/status'];
  * 被 302 成 HTML 导致页面白屏。
  */
 const STATIC_PREFIXES = ['/_next/', '/icons/'];
-const STATIC_EXACT = new Set(['/favicon.ico', '/manifest.webmanifest', '/robots.txt', '/player-poster.png']);
+const STATIC_EXACT = new Set(['/favicon.ico', '/manifest.webmanifest', '/robots.txt']);
 const STATIC_EXTENSION =
   /\.(?:svg|png|jpe?g|gif|webp|avif|ico|css|js|mjs|map|txt|xml|woff2?|ttf|otf|eot|mp4|webm|m3u8)$/i;
 
@@ -139,6 +139,6 @@ export const config = {
    */
   matcher: [
     '/api/:path*',
-    '/((?!_next/static|_next/image|favicon\\.ico|icons/|manifest\\.webmanifest|robots\\.txt|player-poster\\.png|.*\\.(?:svg|png|jpe?g|gif|webp|avif|ico|css|js|mjs|map|txt|xml|woff2?|ttf|otf|eot|mp4|webm|m3u8)$).*)',
+    '/((?!_next/static|_next/image|favicon\\.ico|icons/|manifest\\.webmanifest|robots\\.txt|.*\\.(?:svg|png|jpe?g|gif|webp|avif|ico|css|js|mjs|map|txt|xml|woff2?|ttf|otf|eot|mp4|webm|m3u8)$).*)',
   ],
 };

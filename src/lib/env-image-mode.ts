@@ -12,11 +12,11 @@ export function getEnvImageMode(): ImageModeValue | undefined {
   if (!raw) return undefined;
   if (raw === 'direct') return raw;
   if (raw === 'proxy') {
-    console.warn('[LibreTV] DEFAULT_IMAGE_MODE=proxy 已废弃（图片代理已移除），按 direct 处理');
+    console.warn('[夜幕影视] DEFAULT_IMAGE_MODE=proxy 已废弃（图片代理已移除），按 direct 处理');
     return 'direct';
   }
   console.warn(
-    '[LibreTV] DEFAULT_IMAGE_MODE 取值无效，已忽略（可选 direct）：',
+    '[夜幕影视] DEFAULT_IMAGE_MODE 取值无效，已忽略（可选 direct）：',
     raw
   );
   return undefined;

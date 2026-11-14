@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { SearchResultItem, SourceConfig } from '@/lib/types';
 import { useAppStore } from '@/lib/store';
 import { qualityKey } from '@/lib/quality';
@@ -78,20 +78,11 @@ export function AggregatedCard({
   group,
   onOpen,
   sources,
-  autoProbe = false,
-  quickOpenBest = false,
 }: {
   group: AggregatedGroup;
   onOpen: (item: SearchResultItem) => void;
   /** 完整源配置：探测画质需要 source.url / source.detail，搜索结果里只带 sourceUrl */
   sources?: SourceConfig[];
-  /**
-   * 是否允许本卡自动探测（由搜索页按「画质探测范围」设置判定）：
-   * 单源卡片表示进入视口后探测，多来源卡片表示直接探测该组全部来源。
-   */
-  autoProbe?: boolean;
-  /** 展开前点卡片是否直接打开已探到的最高画质来源 */
-  quickOpenBest?: boolean;
 }) {
   const imageProxyMode = useAppStore((s) => s.imageProxyMode);
   const customImageProxy = useAppStore((s) => s.customImageProxy);
@@ -114,24 +105,15 @@ export function AggregatedCard({
 
   // 单源卡片没有「展开」这一步：进入视口 500ms 后交给全局队列（并发 2），
   // 首屏能先亮，又不会把一屏十几张卡同时打向源站
-  const { ref: inViewRef, inView } = useInView<HTMLDivElement>(!multi && autoProbe);
+  const { ref: inViewRef, inView } = useInView<HTMLDivElement>(!multi);
   useEffect(() => {
-    if (!multi && autoProbe && inView) probeQueued(group.items);
+    if (!multi && inView) probeQueued(group.items);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [multi, autoProbe, inView, group.key]);
+  }, [multi, inView, group.key]);
 
-  // 「仅第一张卡片」模式下，多来源卡片也自动探测：
-  // 首卡往往就是目标，提前探完才能做到「点一下直接进最高画质来源」。
-  // items.length 进依赖：流式搜索会陆续追加来源，新来的也要探（队列内部按 key 去重）。
-  // 走全局队列而非直连批次：直连批次每次重入都会 abort 上一批，未回结果的来源会永久停在未知。
+  // 展开期间来源可能继续追加（流式搜索）：只补探新增的，已探过的被队列内部去重。
+  // items.length 进依赖：流式搜索会陆续追加来源，新来的也要探，否则「最高画质」结论不完整。
   const itemsSignal = `${group.key}|${group.items.length}`;
-  useEffect(() => {
-    if (!multi || !autoProbe) return;
-    probeQueued(group.items);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [multi, autoProbe, itemsSignal, probeQueued]);
-
-  // 展开期间来源可能继续追加（流式搜索）：只补探新增的，已探过的被队列内部去重
   useEffect(() => {
     if (multi && expanded) probeQueued(group.items);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -161,46 +143,13 @@ export function AggregatedCard({
       ? remarksList[0]
       : undefined;
 
-  const toggleExpanded = () => {
-    const next = !expanded;
-    setExpanded(next);
-    if (next) probe(group.items);
-  };
-
   const activate = () => {
-    if (!multi) {
+    if (multi) {
+      const next = !expanded;
+      setExpanded(next);
+      if (next) probe(group.items);
+    } else {
       onOpen(group.items[0]);
-      return;
-    }
-    // 收起态下点卡片：已探到最高画质就直接进该来源详情（设置项 quickOpenBest）。
-    // 尚未探到时退化为展开来源列表并开始探测，不会让点击落空。
-    if (quickOpenBest && !expanded && firstBest) {
-      onOpen(firstBest);
-      return;
-    }
-    toggleExpanded();
-  };
-
-  // 桌面悬停补探：默认只在「悬停」和「展开」时才为第一张以外的卡片探测，
-  // 既保留按需查看画质的能力，又不会像「可视即探」那样在滚动时批量打源站。
-  const hoverProbeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (hoverProbeTimer.current) clearTimeout(hoverProbeTimer.current);
-    },
-    []
-  );
-  const onHoverProbe = () => {
-    if (multi || autoProbe) return;
-    // 触屏设备的 pointerenter 往往由点击触发，跳转前多发一次探测没有意义
-    if (typeof window !== 'undefined' && !window.matchMedia('(hover: hover)').matches) return;
-    if (hoverProbeTimer.current) clearTimeout(hoverProbeTimer.current);
-    hoverProbeTimer.current = setTimeout(() => probeQueued(group.items), 300);
-  };
-  const onHoverEnd = () => {
-    if (hoverProbeTimer.current) {
-      clearTimeout(hoverProbeTimer.current);
-      hoverProbeTimer.current = null;
     }
   };
 
@@ -208,8 +157,6 @@ export function AggregatedCard({
     <div
       ref={inViewRef}
       className={cn('card', !multi && 'hover:scale-[1.02] hover:shadow-md', multi && expanded && 'ring-1 ring-accent/40')}
-      onPointerEnter={onHoverProbe}
-      onPointerLeave={onHoverEnd}
     >
       {/* 不用 h-full：展开面板需要撑高卡片，等高裁切会让面板不可见 */}
       <div
@@ -296,35 +243,15 @@ export function AggregatedCard({
                     {progress.best}
                   </span>
                 )}
-                {/* 独立的展开/收起按钮：卡片主体点击在 quickOpenBest 开启时用于直达最优来源 */}
-                <button
-                  type="button"
-                  className="p-1 -m-1 rounded text-faint hover:text-content hover:bg-hover transition-colors"
-                  aria-label={expanded ? '收起来源列表' : `查看 ${group.items.length} 个来源`}
-                  aria-expanded={expanded}
-                  title={
-                    expanded
-                      ? '收起来源列表'
-                      : quickOpenBest && firstBest
-                        ? `查看 ${group.items.length} 个来源（点卡片主体直接播放最高画质来源）`
-                        : `查看 ${group.items.length} 个来源`
-                  }
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleExpanded();
-                  }}
-                  onKeyDown={(e) => e.stopPropagation()}
+                <svg
+                  className={cn('w-4 h-4 text-faint transition-transform', expanded && 'rotate-180')}
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  aria-hidden
                 >
-                  <svg
-                    className={cn('w-4 h-4 transition-transform', expanded && 'rotate-180')}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    aria-hidden
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </button>
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
               </span>
             )}
           </div>

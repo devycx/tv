@@ -62,7 +62,7 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
   const [loading, setLoading] = useState(true);
   // 手动重试计数：变化时重建整个播放器实例（比 location.reload() 轻得多）
   const [retryNonce, setRetryNonce] = useState(0);
-  // 起播前的品牌占位图（与点播 player-shell 共用 /player-poster.png），实际开始播放后隐藏
+  // 起播前的品牌加载占位（黑底 + 站标 + 站名，与点播播放器一致），实际开始播放后隐藏
   const [showPoster, setShowPoster] = useState(true);
   // 换台 OSD：切台后短暂显示频道名（键盘换台/控制条换台时的视觉反馈，全屏内同样可见）
   const [osdTitle, setOsdTitle] = useState('');
@@ -389,17 +389,14 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
   return (
     <div className="relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" />
-      {/* 起播前的品牌占位图 */}
+      {/* 起播前的品牌加载占位 */}
       {showPoster && !error && (
-        <div
-          className="absolute inset-0 bg-black pointer-events-none"
-          style={{
-            backgroundImage: 'url(/player-poster.png)',
-            backgroundSize: 'contain',
-            backgroundPosition: 'center',
-            backgroundRepeat: 'no-repeat',
-          }}
-        />
+        <div className="absolute inset-0 bg-black pointer-events-none flex flex-col items-center justify-center gap-3 px-6">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/icons/brand-mark.svg" alt="" className="h-10 sm:h-12 w-auto" />
+          <span className="text-2xl sm:text-3xl font-bold brand-gradient tracking-tight">夜幕影视</span>
+          <span className="text-[11px] sm:text-xs text-faint">正在加载…</span>
+        </div>
       )}
       {/* LIVE 呼吸标识 */}
       {!error && (

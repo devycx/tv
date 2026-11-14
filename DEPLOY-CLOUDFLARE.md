@@ -1,6 +1,6 @@
 # 部署到 Cloudflare Workers（tv.ycxdev.com）
 
-本项目（LibreTV Next.js 版）已改造成用 **OpenNext Cloudflare** 部署到 Cloudflare Workers。
+本项目（夜幕影视，基于上游 LibreTV 的 Next.js 版二次开发）已改造成用 **OpenNext Cloudflare** 部署到 Cloudflare Workers。
 线上地址：<https://tv.ycxdev.com>（同一份服务也在 `https://tv.ycxdev.workers.dev`）。
 
 - Cloudflare 账号：`24c59299b11a61eed6fc8902524e0515`
@@ -238,20 +238,23 @@ Node 版（Docker / `npm start`）继续用原来的 `src/lib/ssrf.ts`：undici 
 
 ## 品牌与图标（2026-11-14）
 
-站点从上游 LibreTV 品牌换成了自有的 **夜幕TV**（slogan：夜色启幕，好戏随时开场）。
+站点使用自有的 **夜幕影视** 品牌，由上游 LibreTV 品牌换成自有品牌，不再使用 slogan。
 
 - Logo：YouTube 风格蓝色圆角播放徽标，主题色沿用站点霓虹蓝 **#00b8e6**，深色底 **#0b101a**。
   矢量源放在 `public/icons/`：`icon-source.svg`（深色底 app icon）与 `brand-mark.svg`（透明徽标，
   顶栏/登录页/favicon 使用）；`npm run icons` 由这两个 SVG 导出 48/96/144/192/512/1024 与
   180px apple-touch-icon，`public/favicon.ico` 内嵌 16/32/48 三张透明底 PNG。
-- 顶栏与登录页的「夜幕TV」字标改为纯色（跟随 `text-content`），与 YouTube 的单色字标一致；
+- 顶栏与登录页的「夜幕影视」字标改为纯色（跟随 `text-content`），与 YouTube 的单色字标一致；
   首页 hero 大标题仍保留原有蓝→粉渐变。
 - 文案落点：`src/app/layout.tsx`（title/description）、`src/app/manifest.ts`（PWA 名称）、
   `src/components/header.tsx`（顶栏 logo + 站名）、`src/components/site-footer.tsx`（页脚，已去掉上游
   GitHub 链接与版本检测请求）、`src/app/login/page.tsx`、`src/app/page.tsx`（首页 hero）、
   `src/app/about/page.tsx`。
-- 内部标识（localStorage key、IndexedDB 库名、订阅配置格式 `LibreTV-SourceList`/`LibreTV-Settings`、
-  session 派生盐）**保持不变**，避免已有用户的主题/配置/登录态失效。
+- 播放器加载占位图已换成品牌 UI，不再出现上游品牌字样。
+- 内部标识**沿用旧名保持兼容**：localStorage key、IndexedDB 库名、Cache Storage 名、订阅/配置内部格式标识、
+  session 派生盐都不改名，避免已有用户的主题/配置/缓存与登录态失效。
+- 订阅与配置文件导出名改为 **`夜幕影视-SourceList`** / **`夜幕影视-Settings`**；导入端仍兼容旧版
+  `LibreTV-SourceList` / `LibreTV-Settings` 名称。
 
 ## 排错
 

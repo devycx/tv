@@ -242,7 +242,7 @@ export function parseSubscriptionPayload(json: unknown): SourceListPayload {
   if (isSourceCatalogPayload(json)) return parseSourceCatalogPayload(json);
   if (isMixedCatalogPayload(json)) {
     throw new Error(
-      '订阅内容混用了 baseUrl 与 url 两种条目，请统一为一种格式（接口目录用 baseUrl，LibreTV 源列表用 url）'
+      '订阅内容混用了 baseUrl 与 url 两种条目，请统一为一种格式（接口目录用 baseUrl，源列表用 url）'
     );
   }
   return { ...parseSourceListPayload(json), stats: emptyStats('libretv') };

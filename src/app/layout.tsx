@@ -15,11 +15,11 @@ const bootstrap = generatedBootstrap as BootstrapConfig;
 
 export const metadata: Metadata = {
   title: {
-    default: '夜幕TV - 私人影视聚合',
-    template: '%s - 夜幕TV',
+    default: '夜幕影视 - 私人影视聚合',
+    template: '%s - 夜幕影视',
   },
   description:
-    '夜幕TV 是一个私人影视聚合平台：汇聚多个公开点播源与直播源，提供搜索、播放、收藏与观看记录，仅供个人学习使用。',
+    '夜幕影视 是一个私人影视聚合平台：汇聚多个公开点播源与直播源，提供搜索、播放、收藏与观看记录，仅供个人学习使用。',
   manifest: '/manifest.webmanifest',
   // 页面/标签页图标用**透明背景**的徽标（YouTube 风格）：深色底的 icon-*.png 只留给
   // manifest 里的 PWA 安装图标。此前把深色底 PNG 声明为页面 icon，浏览器的标签页/书签

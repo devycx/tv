@@ -151,7 +151,7 @@ export function PlayerShell({
   const volumeBoostRef = useRef<VolumeBoostHandle | null>(null);
   const [error, setError] = useState('');
   const [hint, setHint] = useState('');
-  // 起播前的品牌占位图（沿用旧版 nomedia 素材），实际开始播放后隐藏
+  // 起播前的品牌加载占位：黑底 + 站标 + 站名，实际开始播放后隐藏
   const [showPoster, setShowPoster] = useState(true);
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1078,15 +1078,12 @@ export function PlayerShell({
     <div className="relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" style={{ WebkitTouchCallout: 'none' }} />
       {showPoster && !error && (
-        <div
-          className="absolute inset-0 bg-black pointer-events-none"
-          style={{
-            backgroundImage: 'url(/player-poster.png)',
-            backgroundSize: 'contain',
-            backgroundPosition: 'center',
-            backgroundRepeat: 'no-repeat',
-          }}
-        />
+        <div className="absolute inset-0 bg-black pointer-events-none flex flex-col items-center justify-center gap-3 px-6">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/icons/brand-mark.svg" alt="" className="h-10 sm:h-12 w-auto" />
+          <span className="text-2xl sm:text-3xl font-bold brand-gradient tracking-tight">夜幕影视</span>
+          <span className="text-[11px] sm:text-xs text-faint">正在加载…</span>
+        </div>
       )}
       {!error && skipPrompt && (
         <button
