@@ -24,15 +24,16 @@ import {
   type AliveFilter,
   type LiveSortMode,
 } from '@/lib/live-channel-filter';
+import { bestProbe, type LiveChannelItem, type MergedChannel } from '@/lib/channel-merge';
 import { useLiveProbe, type ProbeResult } from './use-live-probe';
-import type { LiveChannel } from '@/lib/types';
 import { EmptyState } from './states';
 
 /**
  * 直播频道侧栏：全部/收藏/最近三个视图 + 分组横向标签条 + 关键字搜索 + 排序。
- * - 搜索对分隔符归一化（cctv1 命中 CCTV-1），并匹配分组名；输入防抖后过滤；
+ * - 频道按名称跨源合并（见 lib/channel-merge.ts）：一行 = 一个频道，可能含多个候选源；
+ * - 不再进页面自动全量测活：测活改为「选中频道时只探它自己的候选源」，
+ *   需要体检整个列表时用工具栏的「测活」按钮（默认不跑）；
  * - 可用性两档筛选（绿点=分片级验证 / 可播=含弱验证）；
- * - 支持批量测活：频道名前显示可达性状态点；
  * - 虚拟列表（@tanstack/react-virtual）：仅渲染可视区内的频道行，数千频道下 DOM 恒定，
  *   电视盒子 / 低端设备滑动不掉帧；行高动态测量（有无分组名两档）；
  * - 键盘：容器聚焦后 ↑↓ 移动光标、Enter 播放；
@@ -51,20 +52,17 @@ function formatProbeProgress(p: { done: number; total: number; startedAt: number
   return `${base} · 预计剩余 ${Math.max(1, remainMin)} 分钟`;
 }
 
-export interface LiveChannelItem extends LiveChannel {
-  /** 来源订阅的 EPG 地址（用于节目单查询） */
-  epg?: string;
-  /** 所属直播源地址（M3U 订阅 URL），写入最近观看以便订阅删除时清理 */
-  sourceUrl?: string;
-}
+export type { LiveChannelItem };
 
 interface ChannelListProps {
-  channels: LiveChannelItem[];
+  channels: MergedChannel[];
   groups: string[];
   currentUrl: string;
-  onSelect: (channel: LiveChannelItem) => void;
+  onSelect: (channel: MergedChannel) => void;
   /** 筛选+排序结果变化时上报（页面级键盘换台沿此列表顺序切换） */
-  onFilteredChange?: (list: LiveChannelItem[]) => void;
+  onFilteredChange?: (list: MergedChannel[]) => void;
+  /** 正在为哪一行按需探测候选源（显示「连接中」，避免点了没反应） */
+  pickingKey?: string;
 }
 
 type View = 'all' | 'fav' | 'recent';
@@ -152,7 +150,14 @@ function useChipStrip(itemCount: number) {
   return { ref, dragging, edges, onPointerDown, onClickCapture };
 }
 
-export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilteredChange }: ChannelListProps) {
+export function LiveChannelList({
+  channels,
+  groups,
+  currentUrl,
+  onSelect,
+  onFilteredChange,
+  pickingKey,
+}: ChannelListProps) {
   // 精确订阅：避免任何 store 字段变化（尤其测活节流写回）引发本组件重渲染
   const liveFavorites = useAppStore((s) => s.liveFavorites);
   const liveRecent = useAppStore((s) => s.liveRecent);
@@ -164,7 +169,7 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
   const [keyword, setKeyword] = useState('');
   const debouncedKeyword = useDebouncedValue(keyword, SEARCH_DEBOUNCE_MS);
   const [sortMode, setSortMode] = useState<LiveSortMode>('default');
-  // 默认自动隐藏已确认不可用的频道；测活在进入直播页后自动进行
+  // auto 档只在「确实有可用结果」时生效；没有测活数据时等价于全部展示
   const [aliveFilter, setAliveFilter] = useState<AliveFilter>('auto');
   /** 键盘光标（filtered 的下标），与"正在播放"高亮独立 */
   const [cursor, setCursor] = useState(-1);
@@ -179,29 +184,6 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
     isProbing,
     hint: probeHint,
   } = useLiveProbe();
-  /** 自动测活只跑一次（结果 6 小时内复用；组件重挂载时由 hook 自行跳过缓存） */
-  const autoProbeStarted = useRef(false);
-  /** StrictMode 下 effect 会 mount→unmount→mount；用独立 ref 区分“真卸载”和模拟卸载 */
-  const aliveRef = useRef(true);
-  useEffect(() => {
-    aliveRef.current = true;
-    return () => {
-      aliveRef.current = false;
-    };
-  }, []);
-
-  // 进入直播页后自动测活（用户不需要点按钮）：等首屏渲染完成再开跑，
-  // 结果边到边写入，auto 筛选会实时隐藏已确认不可用的频道。
-  useEffect(() => {
-    if (autoProbeStarted.current || channels.length === 0) return;
-    autoProbeStarted.current = true;
-    // 注意不清理 timer：dev 的 StrictMode 模拟卸载会清掉首个 timer，
-    // 而 autoProbeStarted 已置位，第二次 effect 不会再排——自动测活就永远不触发。
-    // 真卸载由 aliveRef 拦截，不会在离开页面后突然发起探测。
-    setTimeout(() => {
-      if (aliveRef.current) void probe(channels, { silent: true });
-    }, 1200);
-  }, [channels, probe]);
 
   // 测活 ETA 每秒刷新：探测长尾（在途请求未返回）期间进度不推进，剩余时间也要走动
   const [, setProbeTick] = useState(0);
@@ -212,45 +194,86 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
   }, [isProbing]);
 
   const favSet = useMemo(() => new Set(liveFavorites), [liveFavorites]);
-  const recentOrder = useMemo(() => new Map(liveRecent.map((r, i) => [r.url, i] as const)), [liveRecent]);
+  /** 候选 URL → 合并行：收藏/最近/当前播放都按 URL 反查 */
+  const rowByUrl = useMemo(() => {
+    const map = new Map<string, MergedChannel>();
+    for (const row of channels) for (const candidate of row.candidates) map.set(candidate.url, row);
+    return map;
+  }, [channels]);
+  /** 排序用的「最近观看」序：一行里任一候选看过即算，取最早出现的序号 */
+  const recentOrder = useMemo(() => {
+    const order = new Map<string, number>();
+    liveRecent.forEach((r, i) => {
+      const row = rowByUrl.get(r.url);
+      if (!row) return;
+      const known = order.get(row.url);
+      if (known === undefined || i < known) order.set(row.url, i);
+    });
+    return order;
+  }, [liveRecent, rowByUrl]);
   const normalizedKeyword = useMemo(() => normalizeForSearch(debouncedKeyword.trim()), [debouncedKeyword]);
+  /** 一行的可用性结论：候选里最好的那个测活结果 */
+  const probeOfRow = useCallback(
+    (row: MergedChannel) => bestProbe(row, (url) => probeResults.get(url)),
+    [probeResults]
+  );
 
   // 先做视图/分组/搜索/排序（不含可用性筛选）：可用性计数必须基于这份列表，
   // 否则点击筛选后 filtered 收缩，两个计数会跟着变小、与实际展示对不上
   const matched = useMemo(() => {
-    let list: LiveChannelItem[];
+    let list: MergedChannel[];
     if (view === 'fav') {
-      list = channels.filter((c) => favSet.has(c.url));
+      list = channels.filter((row) => row.candidates.some((c) => favSet.has(c.url)));
     } else if (view === 'recent') {
-      // 按最近观看时间倒序
-      list = liveRecent
-        .map((r) => channels.find((c) => c.url === r.url))
-        .filter((c): c is LiveChannelItem => Boolean(c));
+      // 按最近观看时间倒序；同一行只保留第一次出现的记录
+      const seen = new Set<string>();
+      list = [];
+      for (const record of liveRecent) {
+        const row = rowByUrl.get(record.url);
+        if (!row || seen.has(row.key)) continue;
+        seen.add(row.key);
+        list.push(row);
+      }
     } else {
       list = channels;
     }
     if (view !== 'recent' && group) {
-      list = list.filter((c) => c.group === group);
+      list = list.filter((row) => row.group === group);
     }
     if (normalizedKeyword) {
-      list = list.filter((c) => matchesKeyword(c, normalizedKeyword));
+      list = list.filter(
+        (row) =>
+          matchesKeyword(row, normalizedKeyword) ||
+          row.candidates.some((c) => matchesKeyword(c, normalizedKeyword))
+      );
     }
-    return sortChannels(list, sortMode, { recentOrder, probeOf: (url) => probeResults.get(url) });
-  }, [channels, favSet, liveRecent, view, group, normalizedKeyword, sortMode, recentOrder, probeResults]);
+    return sortChannels(list, sortMode, {
+      recentOrder,
+      probeOf: (url) => {
+        const row = rowByUrl.get(url);
+        return row ? bestProbe(row, (u) => probeResults.get(u)) : probeResults.get(url);
+      },
+    });
+  }, [channels, favSet, liveRecent, rowByUrl, view, group, normalizedKeyword, sortMode, recentOrder, probeResults]);
 
   /** 至少有一个频道测活通过时才启用 auto 隐藏：整批失败（源站全挂/本地代理异常）时
       宁可全部展示并标记失败，也不要把列表清空成“什么都看不了” */
   const hasAliveProbe = useMemo(
-    () => matched.some((c) => probeResults.get(c.url)?.ok === true),
-    [matched, probeResults]
+    () => matched.some((row) => probeOfRow(row)?.ok === true),
+    [matched, probeOfRow]
+  );
+  /** 当前列表里是否已有测活结论（缓存也可能来自别的频道，不能只看 probeResults.size） */
+  const hasProbeForList = useMemo(
+    () => matched.some((row) => Boolean(probeOfRow(row))),
+    [matched, probeOfRow]
   );
 
   const filtered = useMemo(() => {
     if (aliveFilter === 'off') return matched;
     // auto 档在没有任何可用结果时退化为“全部”，避免测活异常时清空列表
     if (aliveFilter === 'auto' && !hasAliveProbe) return matched;
-    return matched.filter((c) => matchesAlive(probeResults.get(c.url), aliveFilter));
-  }, [matched, aliveFilter, probeResults, hasAliveProbe]);
+    return matched.filter((row) => matchesAlive(probeOfRow(row), aliveFilter));
+  }, [matched, aliveFilter, probeOfRow, hasAliveProbe]);
 
   // 上报筛选排序结果给页面（键盘换台用）；列表存父组件 ref，不触发父组件重渲染
   useEffect(() => {
@@ -261,25 +284,35 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
   const aliveCounts = useMemo(() => {
     let ok = 0;
     let green = 0;
-    for (const c of matched) {
-      const p = probeResults.get(c.url);
+    for (const row of matched) {
+      const p = probeOfRow(row);
       if (!p?.ok) continue;
       ok++;
       if (matchesAlive(p, 'green')) green++;
     }
     return { ok, green };
-  }, [matched, probeResults]);
+  }, [matched, probeOfRow]);
 
   /** 当前 auto 档隐藏了多少个「已确认不可用」的频道（含超时；没有可用结果时隐藏不生效） */
   const autoHiddenCount = useMemo(() => {
     if (aliveFilter !== 'auto' || !hasAliveProbe) return 0;
     let n = 0;
-    for (const c of matched) {
-      const p = probeResults.get(c.url);
+    for (const row of matched) {
+      const p = probeOfRow(row);
       if (p && !p.ok) n++;
     }
     return n;
-  }, [aliveFilter, hasAliveProbe, matched, probeResults]);
+  }, [aliveFilter, hasAliveProbe, matched, probeOfRow]);
+
+  /** recent 视图里「这一行对应的那条观看记录」：删除时按真实 URL 删 */
+  const recentUrlByKey = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const record of liveRecent) {
+      const row = rowByUrl.get(record.url);
+      if (row && !map.has(row.key)) map.set(row.key, record.url);
+    }
+    return map;
+  }, [liveRecent, rowByUrl]);
 
   // 键盘/锚定滚动需要按 URL 反查索引；filtered 随测活结果变化（排序含可用性），
   // 用 ref 读取最新值，避免测活写回触发重新锚定打断用户滚动
@@ -292,7 +325,7 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
     // 行高两档：带分组名的双行 / 无分组名单行（含 4px 行距），measureElement 会修正估值
     estimateSize: (i) => (filtered[i].group ? 51 : 47),
     overscan: 10,
-    getItemKey: (i) => filtered[i].url,
+    getItemKey: (i) => filtered[i].key,
   });
 
   // 切换筛选/排序/频道时：重置键盘光标，并把当前播放频道锚定到可视区（找不到则回顶部）
@@ -302,14 +335,14 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
       virtualizer.scrollToOffset(0);
       return;
     }
-    const idx = filteredRef.current.findIndex((c) => c.url === currentUrl);
+    const idx = filteredRef.current.findIndex((row) => row.candidates.some((c) => c.url === currentUrl));
     if (idx >= 0) virtualizer.scrollToIndex(idx, { align: 'auto' });
     else virtualizer.scrollToOffset(0);
   }, [view, group, sortMode, debouncedKeyword, aliveFilter, currentUrl, virtualizer]);
 
   const scrollToChannelRow = useCallback(
     (url: string) => {
-      const idx = filteredRef.current.findIndex((c) => c.url === url);
+      const idx = filteredRef.current.findIndex((row) => row.candidates.some((c) => c.url === url));
       if (idx >= 0) virtualizer.scrollToIndex(idx, { align: 'auto' });
     },
     [virtualizer]
@@ -337,6 +370,20 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
   const removeRecent = useCallback((url: string) => {
     useAppStore.getState().removeLiveRecent(url);
   }, []);
+
+  /** 手动体检：只检测当前筛选出来的频道（默认不跑，避免整页 1477 个频道的后台探测） */
+  const probeFiltered = useCallback(() => {
+    const seen = new Set<string>();
+    const urls: { url: string }[] = [];
+    for (const row of filtered) {
+      for (const candidate of row.candidates) {
+        if (seen.has(candidate.url)) continue;
+        seen.add(candidate.url);
+        urls.push({ url: candidate.url });
+      }
+    }
+    if (urls.length > 0) void probe(urls, { silent: true });
+  }, [filtered, probe]);
 
   return (
     <div className="flex flex-col h-full min-h-0">
@@ -395,25 +442,36 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
         />
       </div>
 
-      {/* 自动测活进度 + 可用性筛选（进入直播页自动进行，不提供手动触发按钮） */}
+      {/* 测活：默认不自动跑（进页面全量测活既慢又会撞 Worker CPU 限额）。
+          需要体检时点一下「测活本列表」；平时点频道本身只对它的候选源做按需探测。 */}
       <div className="flex items-center gap-1.5 px-3 pb-2 shrink-0 flex-wrap">
         {isProbing ? (
           <>
             <span className="text-[10px] text-faint whitespace-nowrap">
-              自动检测中 {probeProgress ? formatProbeProgress(probeProgress) : ''}
+              检测中 {probeProgress ? formatProbeProgress(probeProgress) : ''}
             </span>
             <button
               className="text-[10px] text-faint underline-offset-2 hover:text-content hover:underline"
               onClick={cancelProbe}
-              title="中止本次自动检测，已完成的结果会保留"
+              title="中止本次检测，已完成的结果会保留"
             >
               停止
             </button>
           </>
-        ) : aliveFilter === 'auto' && autoHiddenCount > 0 ? (
+        ) : (
+          <button
+            className="shrink-0 px-2 py-0.5 rounded-full text-[10px] whitespace-nowrap transition-colors border bg-chip text-muted border-line hover:text-content hover:bg-hover disabled:opacity-50 disabled:hover:bg-chip"
+            onClick={probeFiltered}
+            disabled={filtered.length === 0}
+            title="检测当前列表里的频道（进页面不会自动跑）"
+          >
+            测活本列表
+          </button>
+        )}
+        {aliveFilter === 'auto' && autoHiddenCount > 0 ? (
           <>
             <span className="text-[10px] text-faint whitespace-nowrap">
-              已自动隐藏 {autoHiddenCount} 个不可用
+              已隐藏 {autoHiddenCount} 个不可用
             </span>
             <button
               className="text-[10px] text-accent underline-offset-2 hover:underline"
@@ -423,9 +481,9 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
               显示全部
             </button>
           </>
-        ) : aliveFilter === 'auto' && probeResults.size > 0 && !hasAliveProbe ? (
-          <span className="text-[10px] text-warning">自动检测暂未发现可用频道，已显示全部</span>
-        ) : aliveFilter !== 'auto' && probeResults.size > 0 ? (
+        ) : aliveFilter === 'auto' && hasProbeForList && !hasAliveProbe ? (
+          <span className="text-[10px] text-warning">暂未发现可用频道，已显示全部</span>
+        ) : aliveFilter !== 'auto' && hasProbeForList ? (
           <button
             className="text-[10px] text-faint underline-offset-2 hover:text-content hover:underline"
             onClick={() => setAliveFilter('auto')}
@@ -435,7 +493,7 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
           </button>
         ) : null}
         {probeHint && <span className="text-[10px] text-faint">{probeHint}</span>}
-        {probeResults.size > 0 && !isProbing && (
+        {hasProbeForList && !isProbing && (
           <>
             <button
               className={cn(
@@ -515,8 +573,8 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
                   : channels.length === 0
                     ? '暂无频道，请先在设置中添加直播源'
                     : aliveFilter === 'auto' && autoHiddenCount > 0
-                      ? `已自动隐藏 ${autoHiddenCount} 个不可用频道，可点「显示全部」查看`
-                      : aliveFilter !== 'off' && probeResults.size > 0
+                      ? `已隐藏 ${autoHiddenCount} 个不可用频道，可点「显示全部」查看`
+                      : aliveFilter !== 'off' && hasProbeForList
                         ? '没有匹配该可用性的频道，可切换回自动或选择全部'
                         : '没有匹配的频道'
             }
@@ -540,15 +598,19 @@ export function LiveChannelList({ channels, groups, currentUrl, onSelect, onFilt
               >
                 <ChannelRow
                   channel={filtered[vi.index]}
-                  active={filtered[vi.index].url === currentUrl}
+                  active={filtered[vi.index].candidates.some((c) => c.url === currentUrl)}
                   cursor={cursor === vi.index}
-                  isFav={favSet.has(filtered[vi.index].url)}
-                  probe={probeResults.get(filtered[vi.index].url)}
+                  isFav={filtered[vi.index].candidates.some((c) => favSet.has(c.url))}
+                  favUrls={filtered[vi.index].candidates.filter((c) => favSet.has(c.url)).map((c) => c.url)}
+                  probe={probeOfRow(filtered[vi.index])}
+                  sourceCount={filtered[vi.index].candidates.length}
+                  picking={pickingKey === filtered[vi.index].key}
                   logo={filtered[vi.index].logo}
                   imageProxyMode={imageProxyMode}
                   customProxy={customImageProxy}
                   onSelect={onSelect}
                   onRemoveRecent={view === 'recent' ? removeRecent : undefined}
+                  recentUrl={recentUrlByKey.get(filtered[vi.index].key)}
                 />
               </div>
             ))}
@@ -580,24 +642,36 @@ const ChannelRow = memo(function ChannelRow({
   active,
   cursor,
   isFav,
+  favUrls,
   probe,
+  sourceCount,
+  picking,
   logo,
   imageProxyMode,
   customProxy,
   onSelect,
   onRemoveRecent,
+  recentUrl,
 }: {
-  channel: LiveChannelItem;
+  channel: MergedChannel;
   active: boolean;
   cursor: boolean;
   isFav: boolean;
+  /** 该行里已被收藏的候选 URL（取消收藏时逐个移除，避免只删主地址留下别的） */
+  favUrls: string[];
   probe?: ProbeResult;
+  /** 合并后该频道有几个候选源 */
+  sourceCount: number;
+  /** 正在对候选源做按需探测（点了之后给个反馈） */
+  picking: boolean;
   logo?: string;
   imageProxyMode: 'direct' | 'proxy' | 'custom';
   customProxy: string;
-  onSelect: (channel: LiveChannelItem) => void;
+  onSelect: (channel: MergedChannel) => void;
   /** 仅最近视图传入：删除该条观看记录 */
   onRemoveRecent?: (url: string) => void;
+  /** 最近视图下这一行对应的观看记录 URL（可能是任意候选） */
+  recentUrl?: string;
 }) {
   const [logoFailed, setLogoFailed] = useState(false);
   // 虚拟列表会复用行实例：换台（logo 变化）时重置失败态，避免下一个频道误显首字母
@@ -666,15 +740,27 @@ const ChannelRow = memo(function ChannelRow({
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 min-w-0">
-            {probe && (
-              <span
-                className={cn('w-1.5 h-1.5 rounded-full shrink-0', dotClass)}
-                title={probeTitle}
-              />
+            {picking ? (
+              <span className="shrink-0 text-[10px] text-accent whitespace-nowrap">连接中…</span>
+            ) : (
+              probe && (
+                <span
+                  className={cn('w-1.5 h-1.5 rounded-full shrink-0', dotClass)}
+                  title={probeTitle}
+                />
+              )
             )}
             <span className={cn('text-xs truncate', active ? 'text-accent font-medium' : 'text-content')}>
               {channel.name}
             </span>
+            {sourceCount > 1 && (
+              <span
+                className="shrink-0 rounded-full bg-chip px-1.5 text-[10px] text-faint"
+                title={`${sourceCount} 个来源，点击自动挑可用源`}
+              >
+                {sourceCount} 源
+              </span>
+            )}
             {isHevc && (
               <span
                 className="shrink-0 rounded-full bg-warning/15 px-1.5 text-[10px] font-medium text-warning"
@@ -699,7 +785,7 @@ const ChannelRow = memo(function ChannelRow({
             title="删除该观看记录"
             onClick={(e) => {
               e.stopPropagation();
-              onRemoveRecent(channel.url);
+              onRemoveRecent(recentUrl ?? channel.url);
             }}
           >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -719,8 +805,11 @@ const ChannelRow = memo(function ChannelRow({
           title={isFav ? '取消收藏' : '收藏'}
           onClick={(e) => {
             e.stopPropagation();
-            // 点击时读取最新状态：行组件不订阅 store，保证探测期间的重渲染隔离
-            useAppStore.getState().toggleLiveFavorite(channel.url);
+            // 点击时读取最新状态：行组件不订阅 store，保证探测期间的重渲染隔离。
+            // 合并行可能有多条候选被收藏过：取消时逐个移除，收藏时记主地址。
+            const store = useAppStore.getState();
+            if (favUrls.length > 0) for (const url of favUrls) store.toggleLiveFavorite(url);
+            else store.toggleLiveFavorite(channel.url);
           }}
         >
           <svg className="w-3.5 h-3.5" fill={isFav ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">

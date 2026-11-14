@@ -16,11 +16,12 @@ const LivePlayer = dynamic(() => import('@/components/live-player').then((m) => 
     </div>
   ),
 });
-import { LiveChannelList, type LiveChannelItem } from '@/components/live-channel-list';
+import { LiveChannelList } from '@/components/live-channel-list';
+import { mergeChannels, type LiveChannelItem, type MergedChannel } from '@/lib/channel-merge';
 import { LiveEpgPanel } from '@/components/live-epg-panel';
 import { Spinner } from '@/components/states';
 import { useAuth } from '@/components/auth';
-import { allLiveSources, useAppStore } from '@/lib/store';
+import { allLiveSources, useAppStore, type LiveProbeEntry } from '@/lib/store';
 import { collectGroups } from '@/lib/m3u-parser';
 import { cn } from '@/lib/utils';
 import { SmartImage } from '@/components/smart-image';
@@ -64,7 +65,7 @@ function LiveContent() {
   const moreRef = useRef<HTMLDivElement>(null);
   const playerFrameRef = useRef<HTMLDivElement>(null);
   /** 侧栏上报的筛选排序结果（键盘换台沿此列表顺序）；ref 存储，不触发重渲染 */
-  const filteredRef = useRef<LiveChannelItem[]>([]);
+  const filteredRef = useRef<MergedChannel[]>([]);
   /** 当前频道镜像：selectChannel 内读取最近一次播放的频道，用于记录"上一个频道" */
   const currentChannelRef = useRef<LiveChannelItem | undefined>(undefined);
   /** 上一个频道：退格键/按钮一键切回（电视遥控器 back 键习惯） */
@@ -154,7 +155,7 @@ function LiveContent() {
     staleTime: 10 * 60_000,
   });
 
-  const { channels, groups, failedCount } = useMemo(() => {
+  const { channels, merged, groups, failedCount } = useMemo(() => {
     const list: LiveChannelItem[] = [];
     const seen = new Set<string>();
     let failed = 0;
@@ -169,12 +170,21 @@ function LiveContent() {
         list.push({ ...c, epg: source.epg, sourceUrl: source.url });
       }
     }
-    return { channels: list, groups: collectGroups(list), failedCount: failed };
+    // 跨源按频道名/tvg-id 合并：一个频道一行，候选源列表供点选时按需探测
+    const mergedList = mergeChannels(list);
+    return { channels: list, merged: mergedList, groups: collectGroups(mergedList), failedCount: failed };
   }, [playlistsQuery.data]);
 
   // 当前频道：优先取列表内完整对象（含台标），否则由 URL 参数重建
   const currentUrl = searchParams.get('url') || '';
+  /** 当前播放地址所属的合并频道：换源、源数量、「换源」按钮都靠它 */
+  const currentRow = useMemo(
+    () => merged.find((row) => row.candidates.some((c) => c.url === currentUrl)),
+    [merged, currentUrl]
+  );
   const currentChannel = useMemo(() => {
+    const inRow = currentRow?.candidates.find((c) => c.url === currentUrl);
+    if (inRow) return inRow;
     const found = channels.find((c) => c.url === currentUrl);
     if (found) return found;
     if (!currentUrl) return undefined;
@@ -186,7 +196,7 @@ function LiveContent() {
       tvgId: searchParams.get('tvgId') || undefined,
       epg: searchParams.get('epg') || undefined,
     } as LiveChannelItem;
-  }, [channels, currentUrl, searchParams]);
+  }, [channels, currentRow, currentUrl, searchParams]);
 
   useEffect(() => {
     setLogoFailed(false);
@@ -221,7 +231,79 @@ function LiveContent() {
     [router]
   );
 
-  const handleFilteredChange = useCallback((list: LiveChannelItem[]) => {
+  /** 当前播放地址的最新值（selectMerged 里要读，避免闭包过期） */
+  const currentUrlRef = useRef(currentUrl);
+  currentUrlRef.current = currentUrl;
+
+  /** 正在按需探测候选源的频道 key：列表据此显示「连接中」 */
+  const [pickingKey, setPickingKey] = useState('');
+  /** 按需探测的竞态令牌：连续点不同频道时只让最后一次生效 */
+  const pickTokenRef = useRef(0);
+
+  /**
+   * 选中一个合并频道：
+   * - 只有 1 个候选源：直接播，不发任何探测请求；
+   * - 多个候选：缓存里有可用结果就直接播；否则发一次 /api/live/probe（≤8 个 URL，一次 invocation），
+   *   选第一个可用的播；全失败也照播第一个（探测存在假阴性）。
+   * - 再点一次正在播的频道 = 换到下一个源。
+   */
+  const selectMerged = useCallback(
+    (row: MergedChannel) => {
+      const candidates = row.candidates;
+      if (candidates.length === 0) return;
+      const token = ++pickTokenRef.current;
+      const nowUrl = currentUrlRef.current;
+      const currentIndex = candidates.findIndex((c) => c.url === nowUrl);
+      const ordered =
+        currentIndex >= 0
+          ? [...candidates.slice(currentIndex + 1), ...candidates.slice(0, currentIndex)]
+          : candidates;
+      if (ordered.length === 1) {
+        setPickingKey('');
+        selectChannel(ordered[0]);
+        return;
+      }
+      const cached = useAppStore.getState().liveProbeResults;
+      const cachedOk = ordered.find((c) => cached[c.url]?.ok);
+      if (cachedOk) {
+        setPickingKey('');
+        selectChannel(cachedOk);
+        return;
+      }
+      setPickingKey(row.key);
+      void (async () => {
+        try {
+          const { results } = await api.liveProbe(ordered.slice(0, 8).map((c) => c.url));
+          if (pickTokenRef.current !== token) return;
+          const entries: Record<string, LiveProbeEntry> = {};
+          for (const r of results) {
+            entries[r.url] = {
+              ok: r.ok,
+              ms: r.ms,
+              level: r.level,
+              error: r.error,
+              codec: r.codec,
+              timedOut: r.timedOut,
+              kbps: r.kbps,
+              timestamp: Date.now(),
+            };
+          }
+          if (Object.keys(entries).length > 0) useAppStore.getState().setLiveProbeResults(entries);
+          const okCandidate = ordered.find((c) => results.some((r) => r.url === c.url && r.ok));
+          selectChannel(okCandidate ?? ordered[0]);
+        } catch {
+          if (pickTokenRef.current !== token) return;
+          // 探测本身失败不该挡住播放：直接试第一个
+          selectChannel(ordered[0]);
+        } finally {
+          if (pickTokenRef.current === token) setPickingKey('');
+        }
+      })();
+    },
+    [selectChannel]
+  );
+
+  const handleFilteredChange = useCallback((list: MergedChannel[]) => {
     filteredRef.current = list;
   }, []);
 
@@ -231,12 +313,12 @@ function LiveContent() {
       const list = filteredRef.current;
       if (list.length === 0) return;
       const nowUrl = new URLSearchParams(window.location.search).get('url') || '';
-      const idx = list.findIndex((c) => c.url === nowUrl);
+      const idx = list.findIndex((row) => row.candidates.some((c) => c.url === nowUrl));
       const next =
         idx === -1 ? (delta === 1 ? 0 : list.length - 1) : (idx + delta + list.length) % list.length;
-      selectChannel(list[next]);
+      selectMerged(list[next]);
     },
-    [selectChannel]
+    [selectMerged]
   );
 
   const goPrevChannel = useCallback(() => switchChannelByOffset(-1), [switchChannelByOffset]);
@@ -274,12 +356,12 @@ function LiveContent() {
   }, [switchChannelByOffset, backToPrevChannel]);
 
   const handleSelect = useCallback(
-    (c: LiveChannelItem) => {
-      selectChannel(c);
+    (row: MergedChannel) => {
+      selectMerged(row);
       // 移动端抽屉：选中即收起
       closeList();
     },
-    [selectChannel, closeList]
+    [selectMerged, closeList]
   );
 
   if (!verified) {
@@ -358,6 +440,14 @@ function LiveContent() {
                         {currentChannel.group}
                       </span>
                     )}
+                    {currentRow && currentRow.candidates.length > 1 && (
+                      <span
+                        className="shrink-0 rounded-full bg-chip px-1.5 text-[10px] text-faint"
+                        title={`该频道在 ${currentRow.candidates.length} 个来源里都有，播放失败可点「换源」`}
+                      >
+                        {currentRow.candidates.length} 源
+                      </span>
+                    )}
                   </div>
                   {/* 手机上不展示完整流地址：占宽且无信息价值，横屏/桌面再显示 */}
                   <p className="text-xs text-faint truncate mt-0.5 hidden sm:block">{currentChannel.url}</p>
@@ -366,6 +456,17 @@ function LiveContent() {
                   )}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
+                  {/* 换源：同一频道有多个来源时，一键切到下一个（播放失败时的兜底） */}
+                  {currentRow && currentRow.candidates.length > 1 && (
+                    <button
+                      className="hidden lg:inline-flex items-center rounded-md px-2 py-1 text-[11px] text-muted hover:text-accent hover:bg-hover transition-colors"
+                      aria-label="切换到下一个来源"
+                      title={`换源：共 ${currentRow.candidates.length} 个来源`}
+                      onClick={() => selectMerged(currentRow)}
+                    >
+                      换源
+                    </button>
+                  )}
                   {/* 返回上一个频道只在确实有历史时出现；手机上收进「更多」太深，直接不显示 */}
                   {lastChannelName && (
                     <button
@@ -506,6 +607,18 @@ function LiveContent() {
                         >
                           下一台
                         </button>
+                        {currentRow && currentRow.candidates.length > 1 && (
+                          <button
+                            role="menuitem"
+                            className="flex w-full items-center px-3 py-2 text-left text-xs text-content transition-colors hover:bg-hover"
+                            onClick={() => {
+                              setMoreOpen(false);
+                              selectMerged(currentRow);
+                            }}
+                          >
+                            换源（{currentRow.candidates.length}）
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -552,11 +665,12 @@ function LiveContent() {
                 </div>
               ) : (
                 <LiveChannelList
-                  channels={channels}
+                  channels={merged}
                   groups={groups}
                   currentUrl={currentUrl}
                   onSelect={handleSelect}
                   onFilteredChange={handleFilteredChange}
+                  pickingKey={pickingKey}
                 />
               )}
               {(failedCount > 0 || sources.length === 0) && (
