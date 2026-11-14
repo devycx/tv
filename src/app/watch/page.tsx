@@ -28,6 +28,7 @@ import { resolveSource, useAppStore } from '@/lib/store';
 import { qualityKey } from '@/lib/quality';
 import {
   clearProgress,
+  getLatestProgress,
   patchHistoryMeta,
   progressKeyOf,
   saveProgress,
@@ -35,6 +36,7 @@ import {
   upsertHistory,
   db,
 } from '@/lib/db';
+import { useScrolled } from '@/components/use-scrolled';
 import { cn } from '@/lib/utils';
 
 /**
@@ -56,12 +58,17 @@ function WatchContent() {
   const store = useAppStore();
   const { verified } = useAuth();
   const { toast } = useToast();
+  // 与首页顶栏一致：静止无框线，滚动后才出阴影
+  const scrolled = useScrolled();
 
   const sourceKey = searchParams.get('source') || '';
   const vodId = searchParams.get('id') || '';
   const directUrl = searchParams.get('url') || '';
   const titleParam = searchParams.get('title') || '';
-  const indexParam = parseInt(searchParams.get('index') || '0', 10) || 0;
+  const indexRaw = searchParams.get('index');
+  /** 点封面直达播放：集数交给播放页决定（有进度续播，否则最新一集） */
+  const wantsLatest = indexRaw === 'last';
+  const indexParam = parseInt(indexRaw || '0', 10) || 0;
 
   const [reversed, setReversed] = useState(false);
   const [switchOpen, setSwitchOpen] = useState(false);
@@ -155,6 +162,28 @@ function WatchContent() {
     },
     [router, searchParams, episodes, directUrl]
   );
+
+  // `index=last` 的落地：优先回到「最近看过的那一集」，没有进度才落到最新一集。
+  // 解析完立刻把 URL 换成具体集数（刷新/分享都稳定），并且只跑一次，避免来回重定向。
+  const [latestResolved, setLatestResolved] = useState(false);
+  useEffect(() => {
+    if (!wantsLatest || latestResolved || episodes.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const saved = vodId ? await getLatestProgress(sourceKey, vodId) : undefined;
+      if (cancelled) return;
+      setLatestResolved(true);
+      // 源站集数可能变少（下架/重编），越界的进度索引要夹回列表范围
+      const target = saved ? Math.min(saved.episodeIndex, episodes.length - 1) : episodes.length - 1;
+      goEpisode(target);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [wantsLatest, latestResolved, episodes.length, goEpisode, sourceKey, vodId]);
+
+  // 解析「续播 / 最新一集」期间先别渲染播放器：否则会先起播第 1 集、随后又被换掉
+  const resolvingLatest = wantsLatest && !latestResolved && episodes.length > 0;
 
   // 进度恢复优先级：URL position 参数 > IndexedDB 记录
   const getRestorePosition = useCallback(async () => {
@@ -290,7 +319,12 @@ function WatchContent() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="sticky top-0 z-40 bg-surface/90 backdrop-blur border-b border-line">
+      <header
+        className={cn(
+          'sticky top-0 z-40 bg-surface/90 backdrop-blur transition-shadow',
+          scrolled && 'shadow-[0_1px_12px_rgba(0,0,0,0.35)]'
+        )}
+      >
         <div className="max-w-7xl mx-auto px-3 sm:px-4 h-14 flex items-center gap-1.5 sm:gap-3">
           <BackButton />
           <HomeButton />
@@ -332,7 +366,7 @@ function WatchContent() {
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_300px] gap-4">
           <div>
             <div ref={playerFrameRef} className="aspect-video bg-black rounded-lg overflow-hidden">
-              {currentUrl ? (
+              {currentUrl && !resolvingLatest ? (
                 <PlayerShell
                   url={currentUrl}
                   title={videoTitle}
@@ -367,7 +401,7 @@ function WatchContent() {
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center">
-                  {detailQuery.isLoading ? (
+                  {resolvingLatest || detailQuery.isLoading ? (
                     <Spinner size="lg" />
                   ) : (
                     <p className="text-faint text-sm">

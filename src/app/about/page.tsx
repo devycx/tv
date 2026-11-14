@@ -1,7 +1,6 @@
 'use client';
 
 import { Header } from '@/components/header';
-import { SiteFooter } from '@/components/site-footer';
 
 export default function AboutPage() {
   return (
@@ -44,7 +43,6 @@ export default function AboutPage() {
           </p>
         </section>
       </main>
-      <SiteFooter />
     </div>
   );
 }

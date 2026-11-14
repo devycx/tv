@@ -9,10 +9,18 @@ import { HistoryPanel } from './history-panel';
 import { requestShowDownloadManager } from './download-manager';
 import { Icon, type IconName } from './icon';
 import { SearchHistoryDropdown, useSearchHistory } from './search-history';
+import { useScrolled } from './use-scrolled';
 import { cn } from '@/lib/utils';
 
-/** 顶部导航：Logo（首页外）、搜索框（首页外）、历史、设置 */
-export function Header({ showSearch = false }: { showSearch?: boolean }) {
+/** 顶部导航：Logo（首页搜索态与非首页）、搜索框（首页外）、历史、设置 */
+export function Header({
+  showSearch = false,
+  showBrand = true,
+}: {
+  showSearch?: boolean;
+  /** 空白首页不显示品牌（页面中间已有大标题），其它页面/搜索态保留 */
+  showBrand?: boolean;
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -25,9 +33,8 @@ export function Header({ showSearch = false }: { showSearch?: boolean }) {
 
   const closeMenu = () => setMenuOpen(false);
 
-  // 首页已有居中的大标题「夜幕影视」，顶栏再放徽标 + 字标属于重复品牌，
-  // 因此仅非首页渲染（直播/关于页仍需左上角这个回首页的入口）
-  const showBrand = pathname !== '/';
+  // 静止无框线，滚动后才出阴影：顶栏与页面之间不再画一条硬分割线
+  const scrolled = useScrolled();
 
   const submitSearch = (text: string) => {
     const q = text.trim().slice(0, 100);
@@ -46,7 +53,12 @@ export function Header({ showSearch = false }: { showSearch?: boolean }) {
 
   return (
     <>
-      <header className="sticky top-0 z-40 bg-surface/90 backdrop-blur border-b border-line">
+      <header
+        className={cn(
+          'sticky top-0 z-40 bg-surface/90 backdrop-blur transition-shadow',
+          scrolled && 'shadow-[0_1px_12px_rgba(0,0,0,0.35)]'
+        )}
+      >
         <div className="max-w-6xl mx-auto px-4 h-14 flex items-center gap-2 sm:gap-3">
           {showBrand && (
             <Link href="/" aria-label="夜幕影视 首页" className="flex items-center gap-2 shrink-0">

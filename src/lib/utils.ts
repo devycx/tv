@@ -112,7 +112,11 @@ export function hostnameOf(url: string): string {
 export function buildWatchUrl(params: {
   sourceKey: string;
   vodId?: string;
-  index?: number;
+  /**
+   * 集数。数字 = 指定集；`'last'` = 由播放页决定（有进度续播，否则最新一集），
+   * 供「点封面直达播放」使用——搜索页拿不到剧集列表，不该为此先拉一次详情。
+   */
+  index?: number | 'last';
   title?: string;
   episodeUrl?: string;
   sourceUrl?: string;
@@ -121,7 +125,7 @@ export function buildWatchUrl(params: {
   const sp = new URLSearchParams();
   sp.set('source', params.sourceKey);
   if (params.vodId) sp.set('id', params.vodId);
-  if (typeof params.index === 'number') sp.set('index', String(params.index));
+  if (params.index !== undefined) sp.set('index', String(params.index));
   if (params.title) sp.set('title', params.title);
   if (params.episodeUrl) sp.set('url', params.episodeUrl);
   if (params.sourceUrl) sp.set('sourceUrl', params.sourceUrl);

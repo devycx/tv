@@ -11,11 +11,11 @@ import { useAppStore, resolveSource, isInDisabledSubscription, isSourceDisabled 
 import { api } from '@/lib/client-api';
 import type { SearchResultItem, SourceSearchOutcome } from '@/lib/types';
 import { SearchHistoryDropdown, useSearchHistory } from '@/components/search-history';
-import { cn, formatDisableTtl, validateSourceUrl } from '@/lib/utils';
+import { cn, buildWatchUrl, formatDisableTtl, validateSourceUrl } from '@/lib/utils';
+import { addSearchHistory } from '@/lib/db';
 import { useToast } from '@/components/toast';
 import { EmptyState } from '@/components/states';
 import { Icon } from '@/components/icon';
-import { SiteFooter } from '@/components/site-footer';
 
 /**
  * 首页：搜索（URL ?s= 驱动，可后退/分享）+ 豆瓣推荐。
@@ -140,6 +140,23 @@ function HomeContent() {
     runSearch(text);
   };
 
+  /**
+   * 点封面直达播放：不带集数，用 `index=last` 交给播放页决定——
+   * 有本地进度就续播，没有则剧集取最新一集。搜索页不必先拉一次详情。
+   */
+  const playBest = (item: SearchResultItem) => {
+    addSearchHistory(item.name).catch(() => {});
+    router.push(
+      buildWatchUrl({
+        sourceKey: item.sourceKey,
+        vodId: item.vodId,
+        title: item.name,
+        sourceUrl: item.sourceUrl,
+        index: 'last',
+      })
+    );
+  };
+
   const isSearching = Boolean(urlQuery) && searchQuery.isFetching && !searchQuery.data;
   // 聚合数据未就绪时，用已结算源的结果增量渲染（健康源不再等坏源超时）
   const streamedList = useMemo(
@@ -166,7 +183,7 @@ function HomeContent() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <Header />
+      <Header showBrand={Boolean(urlQuery)} />
 
       <main className="relative flex-1 max-w-6xl w-full mx-auto px-4 py-6">
         {/* 首屏氛围渐变 */}
@@ -342,6 +359,7 @@ function HomeContent() {
                       group={group}
                       sources={selectedSources}
                       onOpen={(item) => setDetailItem(item)}
+                      onPlay={playBest}
                     />
                   ))}
                 </div>
@@ -380,7 +398,8 @@ function HomeContent() {
         )}
       </main>
 
-      <SiteFooter />
+      {/* 页脚整块移除，只保留这一句底线声明 */}
+      <p className="text-center text-[11px] text-faint/70 pb-6">我也是有底线的</p>
 
       <DetailModal item={detailItem} onClose={() => setDetailItem(null)} />
     </div>

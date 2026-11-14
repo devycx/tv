@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { guardRequest } from '@/lib/api-guard';
-import { cmsRequestHeaders, filterAdultResults, filterRelevantResults, normalizeTitle, parseSearchList } from '@/lib/cms-parser';
+import { cmsRequestHeaders, filterAdultResults, filterRelevantResults, parseSearchList } from '@/lib/cms-parser';
+import { compareSearchResults } from '@/lib/relevance';
 import { fetchUpstream, getCache, setCache } from '@/lib/fetch-utils';
 import { checkUpstreamAllowed } from '@/lib/ssrf';
 import type { SearchResponse, SearchStreamEvent, SourceConfig, SourceSearchOutcome } from '@/lib/types';
@@ -164,16 +165,9 @@ function aggregateOutcomes(outcomes: SourceSearchOutcome[], wd: string, filterAd
   // 部分源站做分词/OR 模糊搜索（搜「摔跤吧！爸爸」返回一堆「爸爸XXX」），按关键词过滤
   list = filterRelevantResults(list, wd);
 
-  // 精确命中（忽略标点差异）排在最前，其余按名称（与旧版一致），名称相同按源名
-  const exact = normalizeTitle(wd);
-  list.sort((a, b) => {
-    const aExact = normalizeTitle(a.name || '') === exact ? 0 : 1;
-    const bExact = normalizeTitle(b.name || '') === exact ? 0 : 1;
-    if (aExact !== bExact) return aExact - bExact;
-    const nameCompare = (a.name || '').localeCompare(b.name || '', 'zh-Hans-CN');
-    if (nameCompare !== 0) return nameCompare;
-    return (a.sourceName || '').localeCompare(b.sourceName || '', 'zh-Hans-CN');
-  });
+  // 相关性分档（精确 > 前缀 > 全词 > 包含 > 近似）→ 原始写法 → 年份由近及远 → 名称 → 源名。
+  // 旧的「精确优先 + 拼音序」会把「戒色」排到「色戒」前面，见 lib/relevance.ts
+  list.sort((a, b) => compareSearchResults(a, b, wd));
 
   const failures = outcomes
     .filter((o) => !o.ok)

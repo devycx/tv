@@ -1,4 +1,5 @@
 import type { SearchResultItem, VideoDetail } from './types';
+import { isCloseMatch } from './text-similarity';
 
 /**
  * Apple CMS（苹果CMS）资源站响应解析
@@ -292,5 +293,29 @@ export function isRelevant(name: string, wd: string): boolean {
 export function filterRelevantResults<T extends { name?: string }>(items: T[], wd: string): T[] {
   const query = prepareQuery(wd);
   if (!query) return items;
-  return items.filter((item) => isRelevantPrepared(item.name || '', query));
+  // 严格命中之外再放行「近似命中」：源站标题里的错别字/形近字不该让整条结果消失，
+  // 但它们在排序里是最后一档（见 lib/relevance.ts），不会挤掉真正对得上的条目
+  return items.filter(
+    (item) => isRelevantPrepared(item.name || '', query) || isApproximatelyRelevantPrepared(item.name || '', query)
+  );
+}
+
+/**
+ * 近似命中（错别字/形近字级别）。
+ *
+ * 单独一个函数而不是并进 `isRelevant`：后者是严格的「包含 / 全 token」语义，
+ * 已有调用方与单测依赖它判断「够不够格」，放宽会让「钢铁侠」被当成
+ * 「钢铁侠 2008」的命中。
+ */
+function isApproximatelyRelevantPrepared(name: string, query: PreparedQuery): boolean {
+  // 查询带季数时不做近似：第二季不能因为标题像第一季就混进来
+  if (query.season) return false;
+  const normalized = normalizeTitle(name);
+  if (!normalized) return false;
+  return isCloseMatch(normalized, query.normalized);
+}
+
+export function isApproximatelyRelevant(name: string, wd: string): boolean {
+  const query = prepareQuery(wd);
+  return query ? isApproximatelyRelevantPrepared(name, query) : false;
 }

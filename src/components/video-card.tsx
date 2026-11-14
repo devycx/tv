@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import type { SearchResultItem, SourceConfig } from '@/lib/types';
-import { useAppStore } from '@/lib/store';
+import { readQuality, useAppStore } from '@/lib/store';
 import { qualityKey } from '@/lib/quality';
-import { compactRemarks, inferGroupRemarks } from '@/lib/remarks';
+import { compactRemarks, episodeCountOf, inferGroupRemarks } from '@/lib/remarks';
 import { cn } from '@/lib/utils';
 import { SmartImage } from './smart-image';
 import { QualityBadge } from './quality-badge';
@@ -71,16 +71,20 @@ export function aggregateResults(list: SearchResultItem[]): AggregatedGroup[] {
 
 /**
  * 聚合影片卡片：
- * - 单源：点击直接打开该源详情（与旧体验一致）；
- * - 多源：显示「N 个来源」徽章，点击展开各源列表，选择具体源后打开详情。
+ * - 点击封面图 → 立即播放（播放页会挑画质最好的源、剧集默认最新一集）；
+ * - 点击文字区 → 打开详情（看简介 / 选集）；
+ * - 多源：显示「N 个来源」徽章，展开后可选择具体源。
  */
 export function AggregatedCard({
   group,
   onOpen,
+  onPlay,
   sources,
 }: {
   group: AggregatedGroup;
   onOpen: (item: SearchResultItem) => void;
+  /** 点封面直达播放：由页面负责拼播放页 URL */
+  onPlay: (item: SearchResultItem) => void;
   /** 完整源配置：探测画质需要 source.url / source.detail，搜索结果里只带 sourceUrl */
   sources?: SourceConfig[];
 }) {
@@ -103,36 +107,47 @@ export function AggregatedCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [group.key]);
 
-  // 单源卡片没有「展开」这一步：进入视口 500ms 后交给全局队列（并发 2），
-  // 首屏能先亮，又不会把一屏十几张卡同时打向源站
-  const { ref: inViewRef, inView } = useInView<HTMLDivElement>(!multi);
-  useEffect(() => {
-    if (!multi && inView) probeQueued(group.items);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [multi, inView, group.key]);
-
-  // 展开期间来源可能继续追加（流式搜索）：只补探新增的，已探过的被队列内部去重。
-  // items.length 进依赖：流式搜索会陆续追加来源，新来的也要探，否则「最高画质」结论不完整。
+  // 进入视口 500ms 后整组交给全局队列探测：多源卡片在收起态也要有「最高画质」结论，
+  // 否则首屏十几张「N 个来源」全是未知，既不能排序也没法判断该点哪个。
+  // 队列自身限并发（默认 2、每批 8），不会因为一屏卡片同时入队就打出请求风暴。
+  const { ref: inViewRef, inView } = useInView<HTMLDivElement>();
   const itemsSignal = `${group.key}|${group.items.length}`;
   useEffect(() => {
-    if (multi && expanded) probeQueued(group.items);
+    if (inView) probeQueued(group.items);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [multi, expanded, itemsSignal, probeQueued]);
+  }, [inView, itemsSignal, probeQueued]);
 
   const singleItem = multi ? undefined : group.items[0];
   const singleKey = singleItem ? qualityKey(singleItem.sourceKey, singleItem.vodId) : undefined;
 
-  // 展开面板按画质降序（同级保持原有源顺序）：探到一个更好的就往上走，
-  // 用户不必自己横向比较三行灰字。没探到 / 未探到的排在最后。
-  const heightOf = (item: SearchResultItem) => qualities[qualityKey(item.sourceKey, item.vodId)]?.height ?? 0;
+  // 展开面板按「画质降序 → 集数降序」排：同一部剧里画质最高、集数最全的源排第一，
+  // 用户不必自己横向比较三行灰字。都没探到 / 同分时保持原有源顺序。
+  const heightOf = (item: SearchResultItem) =>
+    readQuality(item.sourceKey, item.vodId)?.height ?? qualities[qualityKey(item.sourceKey, item.vodId)]?.height ?? 0;
   const sortedItems = useMemo(() => {
-    const height = (item: SearchResultItem) => qualities[qualityKey(item.sourceKey, item.vodId)]?.height ?? 0;
     return group.items
       .map((item, index) => ({ item, index }))
-      .sort((a, b) => height(b.item) - height(a.item) || a.index - b.index)
+      .sort((a, b) => {
+        const byHeight = heightOf(b.item) - heightOf(a.item);
+        if (byHeight !== 0) return byHeight;
+        // 集数只做同画质内的次级排序：源站备注里写着「全34集」/「更新至12集」，
+        // 12 集的进度不代表这部只有 12 集，所以只用来区分「哪个源更全」
+        const byEpisodes = episodeCountOf(b.item.remarks) - episodeCountOf(a.item.remarks);
+        if (byEpisodes !== 0) return byEpisodes;
+        return a.index - b.index;
+      })
       .map((entry) => entry.item);
+    // qualities 变化时重排：探测结果逐条回来，先到的更好画质要能立刻升到第一行
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [group.items, qualities]);
   const bestHeight = sortedItems.reduce((max, item) => Math.max(max, heightOf(item)), 0);
+  // 封面直达播放用哪个源：排序后的第一行（画质最高；都没结论时沿用源顺序）。
+  // 播放页随时可「切换资源」，所以不需要让用户先选源再播。
+  const bestItem = sortedItems[0] ?? group.items[0];
+  const playFromCover = (e: MouseEvent | KeyboardEvent) => {
+    e.stopPropagation();
+    onPlay(bestItem);
+  };
   // 并列最高时只强调排在第一的那一行：三个源里框两个等于没有推荐
   const firstBest = sortedItems.find((item) => bestHeight > 0 && heightOf(item) === bestHeight);
   const bestKey = firstBest ? qualityKey(firstBest.sourceKey, firstBest.vodId) : undefined;
@@ -175,7 +190,19 @@ export function AggregatedCard({
         }}
       >
         {showImg ? (
-          <div className="relative flex-shrink-0 w-[105px] sm:w-[120px] aspect-[2/3] bg-chip">
+          <div
+            className="relative flex-shrink-0 w-[105px] sm:w-[120px] aspect-[2/3] bg-chip cursor-pointer"
+            role="button"
+            tabIndex={0}
+            aria-label={`直接播放 ${group.name}`}
+            title="直接播放"
+            onClick={playFromCover}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              e.preventDefault();
+              playFromCover(e);
+            }}
+          >
             <SmartImage
               url={group.pic}
               mode={imageProxyMode}
@@ -192,7 +219,19 @@ export function AggregatedCard({
             )}
           </div>
         ) : (
-          <div className="relative flex-shrink-0 w-[105px] sm:w-[120px] aspect-[2/3] bg-chip flex items-center justify-center">
+          <div
+            className="relative flex-shrink-0 w-[105px] sm:w-[120px] aspect-[2/3] bg-chip flex items-center justify-center cursor-pointer"
+            role="button"
+            tabIndex={0}
+            aria-label={`直接播放 ${group.name}`}
+            title="直接播放"
+            onClick={playFromCover}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              e.preventDefault();
+              playFromCover(e);
+            }}
+          >
             <svg className="w-8 h-8 text-faint" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 4v16m10-16v16M3 6a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6zm4 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6zm8 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6zm4 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6z" />
             </svg>

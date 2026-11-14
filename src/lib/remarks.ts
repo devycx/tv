@@ -69,6 +69,19 @@ export function compactRemarks(raw?: string): string | undefined {
 }
 
 /**
+ * 从备注推断集数，用于「同画质时优先更全的源」这类排序。
+ * 归一化后只认 `全N集` / `更新至N集`；`已完结`、`HD国语` 等没有数字的返回 0。
+ *
+ * 注意这是源站自报的进度，不是权威集数：仅作次级排序，不能当总集数展示。
+ */
+export function episodeCountOf(raw?: string): number {
+  const text = formatRemarks(raw);
+  if (!text) return 0;
+  const match = /^(?:全|更新至)(\d+)集$/.exec(text);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+/**
  * 推断整组（同一部剧的所有来源）的统一备注。
  *
  * 单看一个源补不出集数：标「已完结」的源就是没写总集数。但同一部剧的总集数是客观的，

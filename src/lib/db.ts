@@ -190,6 +190,30 @@ export async function clearProgress(sourceKey: string, vodId: string, episodeInd
   await db.progress.delete(progressKeyOf(sourceKey, vodId, episodeIndex));
 }
 
+/**
+ * 找这部片「最近看过的那一集」。
+ *
+ * 点封面直达播放时既不能总跳最新一集（追到一半的剧会被扔到最新集），
+ * 也不能总跳第一集，只能顺着进度记录回到上次看的地方。
+ * 进度表主键是 `${source}_${vod}_${集数}`，按前缀取出全剧记录后挑 updatedAt 最大的一条。
+ */
+export async function getLatestProgress(
+  sourceKey: string,
+  vodId: string
+): Promise<{ episodeIndex: number; position: number } | undefined> {
+  const prefix = `${sourceKey}_${vodId}_`;
+  // 表很小（每条 = 看过的一集），全表过滤比依赖主键前缀查询更稳妥
+  const rows = await db.progress.filter((row) => row.key.startsWith(prefix)).toArray();
+  let best: ProgressEntry | undefined;
+  for (const row of rows) {
+    if (!best || row.updatedAt > best.updatedAt) best = row;
+  }
+  if (!best) return undefined;
+  const index = parseInt(best.key.slice(prefix.length), 10);
+  if (!Number.isFinite(index) || index < 0) return undefined;
+  return { episodeIndex: index, position: best.position };
+}
+
 export async function addSearchHistory(text: string): Promise<void> {
   const t = text.trim().slice(0, 50);
   if (!t) return;
