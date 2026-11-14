@@ -13,6 +13,7 @@ import type { SearchResultItem, SourceSearchOutcome } from '@/lib/types';
 import { SearchHistoryDropdown, useSearchHistory } from '@/components/search-history';
 import { cn, buildWatchUrl, formatDisableTtl, validateSourceUrl } from '@/lib/utils';
 import { addSearchHistory } from '@/lib/db';
+import { applyFrozenOrder, orderDiffers } from '@/lib/result-paging';
 import { useToast } from '@/components/toast';
 import { EmptyState } from '@/components/states';
 import { Icon } from '@/components/icon';
@@ -21,8 +22,12 @@ import { Icon } from '@/components/icon';
  * 首页：搜索（URL ?s= 驱动，可后退/分享）+ 豆瓣推荐。
  * 搜索状态由 React Query 管理，失败源在结果区顶部以非阻塞方式展示。
  */
-/** 搜索结果分批渲染的批大小：一次挂载上千张卡片会明显掉帧 */
-const RESULT_PAGE_SIZE = 60;
+/**
+ * 搜索结果每页条数。
+ * 实测（35 个源）：片名搜索普遍 10–35 部，只有「年份 / 单字」这类宽查询才会超过一页，
+ * 所以 24 足够覆盖绝大多数查询；一次挂太多卡片会让流式阶段每个源结算都整页重渲染。
+ */
+const RESULT_PAGE_SIZE = 24;
 
 export default function HomePage() {
   return (
@@ -178,8 +183,42 @@ function HomeContent() {
   // 分批渲染：新一次搜索（查询/源选择/过滤条件变化）时重置回首批。
   // 不能依赖 groups：流式搜索每追加一个源就会重建数组，会把「加载更多」反复重置。
   const [visibleCount, setVisibleCount] = useState(RESULT_PAGE_SIZE);
-  const visibleGroups = useMemo(() => groups.slice(0, visibleCount), [groups, visibleCount]);
-  useEffect(() => setVisibleCount(RESULT_PAGE_SIZE), [urlQuery, selectedKeys, yellowFilter]);
+  /**
+   * 翻过页之后冻结当前顺序。
+   * 搜索结果是流式的：源陆续结算、`done` 时还会整体按相关性重排。用户已经翻到第二页时
+   * 再跟着重排，正在看的卡片会被顶走；冻结后新条目只追加到尾部，顺序由用户点按钮才更新。
+   */
+  const [frozenKeys, setFrozenKeys] = useState<string[] | null>(null);
+  const orderedGroups = useMemo(
+    () => (frozenKeys ? applyFrozenOrder(groups, frozenKeys) : groups),
+    [groups, frozenKeys]
+  );
+  const visibleGroups = useMemo(
+    () => orderedGroups.slice(0, visibleCount),
+    [orderedGroups, visibleCount]
+  );
+  // 冻结顺序与最新相关性顺序不一致时，给用户一个主动更新的入口
+  const orderChanged = useMemo(
+    () => Boolean(frozenKeys) && orderDiffers(orderedGroups, groups),
+    [frozenKeys, orderedGroups, groups]
+  );
+  const resultsRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    setVisibleCount(RESULT_PAGE_SIZE);
+    setFrozenKeys(null);
+  }, [urlQuery, selectedKeys, yellowFilter]);
+
+  const loadMore = () => {
+    // 先冻结再增加：这一批之后的任何重排都不再影响已渲染的卡片
+    setFrozenKeys((prev) => prev ?? groups.map((g) => g.key));
+    setVisibleCount((v) => v + RESULT_PAGE_SIZE);
+  };
+
+  const applyResort = () => {
+    // 接受最新的相关性顺序，并回到结果区顶部——否则原地重排会让视线失去落点
+    setFrozenKeys(groups.map((g) => g.key));
+    resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -302,7 +341,7 @@ function HomeContent() {
 
         {/* 搜索结果 */}
         {urlQuery && (
-          <section aria-label="搜索结果" className="mb-10">
+          <section aria-label="搜索结果" className="mb-10" ref={resultsRef}>
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm text-muted">
                 “<span className="text-content">{urlQuery}</span>” 的搜索结果
@@ -363,13 +402,19 @@ function HomeContent() {
                     />
                   ))}
                 </div>
-                {groups.length > visibleCount && (
+                {/* 提示条贴着「加载更多」：翻页的用户就在这个位置，放在列表顶部等于看不见 */}
+                {orderChanged && (
+                  <div className="mt-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 rounded-lg bg-chip px-3 py-2 text-xs">
+                    <span className="text-muted">搜索结果已更新，当前保留的是你翻页时的顺序</span>
+                    <button className="btn-ghost btn-sm" onClick={applyResort}>
+                      按相关性重新排序
+                    </button>
+                  </div>
+                )}
+                {orderedGroups.length > visibleCount && (
                   <div className="flex justify-center mt-4">
-                    <button
-                      className="btn-ghost btn-sm"
-                      onClick={() => setVisibleCount((v) => v + RESULT_PAGE_SIZE)}
-                    >
-                      加载更多（还有 {groups.length - visibleCount} 部）
+                    <button className="btn-ghost btn-sm" onClick={loadMore}>
+                      加载更多（还有 {orderedGroups.length - visibleCount} 部）
                     </button>
                   </div>
                 )}
