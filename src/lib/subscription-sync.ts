@@ -7,6 +7,18 @@ import { describeParseStats } from './tvbox-parser';
 import type { AuthStatusResponse, SubscriptionParseStats } from './types';
 
 /**
+ * applyEnvPresets 需要的预置字段：完整的 AuthStatusResponse 与首屏 BootstrapConfig
+ * 都满足这个形状（bootstrap 没有 verified，由 options.verified 显式声明）。
+ */
+export type EnvPresetStatus = Pick<
+  AuthStatusResponse,
+  'defaultSources' | 'defaultLiveSources' | 'defaultSubscriptions' | 'defaultRecommendSource' | 'defaultImageMode'
+> & {
+  /** 当前会话是否已验证（bootstrap 不携带，调用方用 options.verified 覆盖） */
+  verified?: boolean;
+};
+
+/**
  * 数据源订阅同步核心逻辑，供两处复用：
  * - source-manager：用户在设置抽屉中手动添加/重新同步（UI 层加 toast 反馈）；
  * - providers：部署者通过 DEFAULT_SUBSCRIPTIONS 预置的订阅，启动时自动导入与静默重同步。
@@ -62,9 +74,9 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * 预置订阅的刷新周期缺省值：未单独指定 refreshDays 时按天检查。
- * 这里不 import env-subscriptions 的常量——那个模块只被 /api/status 使用，
- * 是服务端模块（读 process.env），而本模块是 'use client'，没必要把它带进客户端 bundle。
- * 两边数值必须一致，由 subscription-sync.test.ts 断言兜住。
+ * 这里不 import env-subscriptions 的常量——那个模块读 process.env，是服务端模块
+ * （只被 /api/status 与首屏 bootstrap 使用），而本模块是 'use client'，
+ * 没必要把它带进客户端 bundle。两边数值必须一致，由 subscription-sync.test.ts 断言兜住。
  */
 export const DEFAULT_ENV_SUB_REFRESH_DAYS = 1;
 
@@ -192,10 +204,14 @@ export async function syncEnvSubscriptions(
 }
 
 /**
- * 应用 /api/status 下发的部署者预置数据（预置点播源 / 预置直播源 / 预置订阅）。
+ * 应用部署者预置数据（预置点播源 / 预置直播源 / 预置订阅）。
+ *
+ * 入参只需要预置字段：首屏用根 layout 内联的 bootstrap（没有 verified 字段），
+ * 登录成功后用同一份 bootstrap；`options.verified` 显式声明当前是否已登录。
+ * 兼容完整的 AuthStatusResponse（外部调用/单测可直接传 /api/status 的返回）。
  *
  * 调用点有两处，缺一不可：
- * - Providers 首屏拿到 /api/status 后调用（此时可能尚未登录）；
+ * - Providers 首屏拿到 bootstrap 后调用（此时可能尚未登录）；
  * - AuthProvider 登录成功后补调一次——预置订阅要经鉴权接口 /api/source-list 拉取，
  *   首屏那次在登录前会 401 静默失败，不补调则本次会话内不会出现预置订阅。
  *
@@ -203,12 +219,11 @@ export async function syncEnvSubscriptions(
  * 对未满刷新周期（各订阅自己的 refreshDays，缺省 1 天）的订阅会跳过，
  * 对已成功过的订阅也不会重复导入。
  *
- * `options.verified` 覆盖「当前是否已登录」的判断：登录成功后 AuthProvider 拿到的
- * 是**登录前**的缓存 status（verified 仍为 false），此时必须由调用方显式告知已登录，
- * 否则用户订阅的自动刷新要等到下次刷新页面才可能生效。
+ * `options.verified` 覆盖「当前是否已登录」的判断：登录成功后 AuthProvider 手里没有
+ * 任何 status，必须由调用方显式告知已登录，否则用户订阅的自动刷新要等到下次刷新页面才可能生效。
  */
 export async function applyEnvPresets(
-  status: AuthStatusResponse,
+  status: EnvPresetStatus,
   options?: { verified?: boolean }
 ): Promise<void> {
   if (Array.isArray(status.defaultSources)) {

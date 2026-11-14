@@ -851,6 +851,19 @@ export const useAppStore = create<AppState>()(
           });
           return;
         }
+        // 关闭过滤时把成人源重新勾上（否则「关掉 18🈲」后成人源仍不参与搜索）
+        if (patch.yellowFilter === false) {
+          const adultKeys = [...get().customAPIs, ...get().envSources]
+            .filter((s) => s.isAdult)
+            .map((s) => s.key);
+          set({
+            ...patch,
+            ...(touched ? { recommendSourceTouched: true } : null),
+            ...(imageTouched ? { imageProxyModeTouched: true } : null),
+            selectedKeys: [...new Set([...get().selectedKeys, ...adultKeys])],
+          });
+          return;
+        }
         set({
           ...patch,
           ...(touched ? { recommendSourceTouched: true } : null),

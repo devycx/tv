@@ -28,7 +28,7 @@ describe('safeNextPath', () => {
     expect(safeNextPath('/login?next=%2Flive')).toBe('/');
     expect(safeNextPath('/login#x')).toBe('/');
     expect(safeNextPath('/api')).toBe('/');
-    expect(safeNextPath('/api/status')).toBe('/');
+    expect(safeNextPath('/api/detail')).toBe('/');
     expect(safeNextPath('/api?url=x')).toBe('/');
   });
 });

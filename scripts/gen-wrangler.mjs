@@ -45,11 +45,11 @@ const sources = [
   { name: '速播资源', url: 'https://subocj.com/api.php/provide/vod', isAdult: false },
   { name: '速博资源', url: 'https://subocaiji.com/api.php/provide/vod', isAdult: false },
   { name: '茅台资源', url: 'https://caiji.maotaizy.cc/api.php/provide/vod', isAdult: false },
-  { name: '废柴', url: 'http://fhapi9.com/api.php/provide/vod', isAdult: false },
-  { name: '155', url: 'https://155api.com/api.php/provide/vod', isAdult: false },
+  { name: '废柴', url: 'http://fhapi9.com/api.php/provide/vod', isAdult: true },
+  { name: '155', url: 'https://155api.com/api.php/provide/vod', isAdult: true },
   { name: '┃量子┃资源', url: 'https://lzizy1.com/api.php/provide/vod', isAdult: false },
   { name: '暴风影音', url: 'https://app.bfzyapi.com/api.php/provide/vod', isAdult: false },
-  { name: '大地', url: 'https://dadiapi.com/api.php/provide/vod', isAdult: false },
+  { name: '大地', url: 'https://dadiapi.com/api.php/provide/vod', isAdult: true },
   { name: '乐播', url: 'https://lbapi9.com/api.php/provide/vod', isAdult: false },
   { name: '尤酷', url: 'https://api.ukuapi.com/api.php/provide/vod', isAdult: false },
   { name: '┃非凡┃资源', url: 'http://ffzy1.tv/api.php/provide/vod', isAdult: false },
@@ -57,14 +57,14 @@ const sources = [
   { name: '红牛资源', url: 'http://www.hongniuzy2.com/api.php/provide/vod', isAdult: false },
   { name: '量子', url: 'http://cj.lziapi.com/api.php/provide/vod', isAdult: false },
   { name: '非凡', url: 'http://cj.ffzyapi.com/api.php/provide/vod', isAdult: false },
-  { name: '森林', url: 'https://slapibf.com/api.php/provide/vod', isAdult: false },
-  { name: '滴滴', url: 'https://api.ddapi.cc/api.php/provide/vod', isAdult: false },
+  { name: '森林', url: 'https://slapibf.com/api.php/provide/vod', isAdult: true },
+  { name: '滴滴', url: 'https://api.ddapi.cc/api.php/provide/vod', isAdult: true },
   { name: '精品下', url: 'http://www.jingpinx.com/api.php/provide/vod', isAdult: false },
   { name: '文才资源', url: 'http://api.zeqaht.com/api.php/provide/vod', isAdult: false },
-  { name: 'jkun', url: 'https://jkunzyapi.com/api.php/provide/vod', isAdult: false },
-  { name: '辣椒', url: 'http://api.11bat.com/api.php/provide/vod', isAdult: false },
-  { name: '魔法', url: 'http://madouse.la/api.php/provide/vod', isAdult: false },
-  { name: '玉兔资源', url: 'https://apiyutu.com/api.php/provide/vod', isAdult: false },
+  { name: 'jkun', url: 'https://jkunzyapi.com/api.php/provide/vod', isAdult: true },
+  { name: '辣椒', url: 'http://api.11bat.com/api.php/provide/vod', isAdult: true },
+  { name: '魔法', url: 'http://madouse.la/api.php/provide/vod', isAdult: true },
+  { name: '玉兔资源', url: 'https://apiyutu.com/api.php/provide/vod', isAdult: true },
 ];
 
 const liveSources = [
@@ -113,4 +113,39 @@ const config = {
 };
 
 fs.writeFileSync('wrangler.jsonc', `${JSON.stringify(config, null, 2)}\n`, 'utf8');
-console.log(`wrangler.jsonc written: ${sources.length} VOD sources, ${liveSources.length} live sources`);
+
+/**
+ * 生成首屏 bootstrap（构建期静态注入，页面加载不再请求 /api/status）。
+ * 必须与 env-sources.ts / env-live-sources.ts 的 key 与归一化规则保持一致：
+ * key 用 env_N / envlive_N，URL 去掉尾部斜杠，字段名不变。
+ */
+const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const bootstrap = {
+  version: pkg.version || '0.0.0',
+  // 本部署始终配置了 PASSWORD secret；未配置时登录接口会 503 并显示错误。
+  passwordRequired: true,
+  defaultSources: sources.map((s, i) => ({
+    key: `env_${i}`,
+    name: s.name,
+    url: s.url.replace(/\/+$/, ''),
+    ...(s.detail ? { detail: s.detail } : {}),
+    isAdult: s.isAdult === true,
+  })),
+  defaultLiveSources: liveSources.map((s, i) => ({
+    key: `envlive_${i}`,
+    name: s.name,
+    url: s.url.replace(/\/+$/, ''),
+    ...(s.epg ? { epg: s.epg } : {}),
+  })),
+  defaultSubscriptions: [],
+  defaultRecommendSource: null,
+  defaultImageMode: null,
+};
+fs.writeFileSync(
+  'src/lib/bootstrap.generated.json',
+  `${JSON.stringify(bootstrap, null, 2)}\n`,
+  'utf8'
+);
+console.log(
+  `wrangler.jsonc + bootstrap.generated.json written: ${sources.length} VOD sources, ${liveSources.length} live sources`
+);

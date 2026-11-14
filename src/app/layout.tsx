@@ -1,6 +1,17 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { Providers } from '@/components/providers';
+import generatedBootstrap from '@/lib/bootstrap.generated.json';
+import type { BootstrapConfig } from '@/lib/bootstrap';
+
+/**
+ * 首屏 bootstrap 在**构建期**由 scripts/gen-wrangler.mjs 从同一份源列表生成并写进
+ * src/lib/bootstrap.generated.json，静态预渲染时内联进 HTML。
+ *
+ * 不能改成在请求期读 process.env：那会让根 layout 变成动态渲染（connection()），
+ * 实测页面 CPU 从 ~20ms 涨到 300ms+，直接撞免费版 10ms CPU 配额。
+ */
+const bootstrap = generatedBootstrap as BootstrapConfig;
 
 export const metadata: Metadata = {
   title: {
@@ -42,7 +53,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
-        <Providers>{children}</Providers>
+        <Providers bootstrap={bootstrap}>{children}</Providers>
       </body>
     </html>
   );

@@ -30,18 +30,21 @@ export function parseSearchList(
   }
   return (Array.isArray(list) ? list : []).map((item) => {
     const vod = item as Record<string, unknown>;
+    const typeName = typeof vod.type_name === 'string' ? vod.type_name : undefined;
     return {
       sourceKey: source.key,
       sourceName: source.name,
       vodId: String(vod.vod_id ?? ''),
       name: String(vod.vod_name ?? ''),
       pic: typeof vod.vod_pic === 'string' ? vod.vod_pic : undefined,
-      typeName: typeof vod.type_name === 'string' ? vod.type_name : undefined,
+      typeName,
       year: typeof vod.vod_year === 'string' ? vod.vod_year : undefined,
       area: typeof vod.vod_area === 'string' ? vod.vod_area : undefined,
       remarks: typeof vod.vod_remarks === 'string' ? vod.vod_remarks : undefined,
       sourceUrl: source.url,
-      isAdult: source.isAdult,
+      // 源级 18+ 标记之外，再按分类名识别成人/伦理内容：
+      // 这样即使源没标 isAdult，搜索结果也能打 18🈲 徽章，并参与「成人内容过滤」。
+      isAdult: Boolean(source.isAdult) || isAdultContent(typeName),
     };
   });
 }
@@ -155,16 +158,24 @@ const ADULT_KEYWORDS = [
   '伦理片', '福利', '倫理片', '福利片', '日本伦理', '日本福利', '日本福利片', '日本伦理片', '擦边短剧', '擦边', '韩国伦理','里番动漫', '门事件', '萝莉少女', '制服诱惑', '国产传媒',
   'cosplay', '黑丝诱惑', '无码', '日本无码', '有码', '日本有码', 'SWAG',
   '网红主播', '色情片', '同性片', '福利视频', '无码高清', '有码高清', '91视频', '自拍偷拍', 'mini传媒', '福利片',
+  // 用户反馈补充：成人 / 情色 / 三级 / 女优 / 换脸等分类也要能打 18🈲 并参与过滤
+  '成人', '色情', '情色', '三级', 'R18', '18禁', '女优', '换脸', '日本片商', '伦理', '无码', '有码',
+  '里番', 'H漫', '自拍', '偷拍', 'AV',
 ];
 
-export function isAdultContent(typeName: string | undefined): boolean {
-  if (!typeName) return false;
-  return ADULT_KEYWORDS.some((k) => typeName.includes(k));
+export function isAdultContent(text: string | undefined): boolean {
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return ADULT_KEYWORDS.some((k) => lower.includes(k.toLowerCase()));
 }
 
-export function filterAdultResults<T extends { typeName?: string }>(items: T[], enabled: boolean): T[] {
+export function filterAdultResults<
+  T extends { typeName?: string; name?: string; isAdult?: boolean },
+>(items: T[], enabled: boolean): T[] {
   if (!enabled) return items;
-  return items.filter((item) => !isAdultContent(item.typeName));
+  return items.filter(
+    (item) => !item.isAdult && !isAdultContent(item.typeName) && !isAdultContent(item.name)
+  );
 }
 
 /**

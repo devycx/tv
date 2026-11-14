@@ -199,7 +199,7 @@ export function AggregatedCard({
             <div className="flex flex-wrap gap-1 mb-1.5">
               {group.typeName && <span className="tag bg-accent/15 text-accent">{group.typeName}</span>}
               {group.year && <span className="tag bg-purple-500/15 text-purple-600 dark:text-purple-300">{group.year}</span>}
-              {adult && <span className="tag bg-pink-500/15 text-pink-600 dark:text-pink-400">(18+)</span>}
+              {adult && <span className="tag bg-pink-500/15 text-pink-600 dark:text-pink-400">18🈲</span>}
               {/* 单源卡片没有展开列表，画质只能在这里露出；失败态可点重试 */}
               {singleKey && (
                 <QualityBadge

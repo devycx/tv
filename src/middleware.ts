@@ -19,7 +19,7 @@ import { safeNextPath } from '@/lib/safe-next';
 
 const SESSION_COOKIE = 'ltv_session';
 
-/** 匿名可访问：登录页、登录/登出接口、站点状态（登录页与首屏都依赖 /api/status） */
+/** 匿名可访问：登录页、登录/登出接口、站点状态（页面首屏已改用内联 bootstrap，仅外部脚本仍用 /api/status） */
 const PUBLIC_PATHS = ['/login', '/api/auth', '/api/status'];
 
 /**

@@ -129,7 +129,7 @@ describe('isWebAudioSafeForVideo', () => {
   it('同源直连与本站路径安全', async () => {
     installFakeAudio();
     const mod = await freshModule();
-    expect(mod.isWebAudioSafeForVideo(video('http://localhost:8080/api/status'))).toBe(true);
+    expect(mod.isWebAudioSafeForVideo(video('http://localhost:8080/api/auth'))).toBe(true);
     expect(mod.isWebAudioSafeForVideo(video('/player-poster.png'))).toBe(true);
   });
 
@@ -150,7 +150,7 @@ describe('增益链接线', () => {
   it('接入后按 source → gain(1.8) → compressor(软限幅) → destination 接线', async () => {
     const h = installFakeAudio('running');
     const mod = await freshModule();
-    const handle = mod.attachVolumeBoost(video('http://localhost:8080/api/status'));
+    const handle = mod.attachVolumeBoost(video('http://localhost:8080/api/auth'));
     expect(handle).not.toBeNull();
     expect(h.edges().sort()).toEqual([...BOOSTED].sort());
     const nodes = h.nodes();

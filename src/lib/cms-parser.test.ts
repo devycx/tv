@@ -37,6 +37,26 @@ describe('parseSearchList', () => {
     expect(items[0].name).toBe('');
   });
 
+  it('按分类名给成人内容打 isAdult 标记（源未标 isAdult 时也生效）', () => {
+    const items = parseSearchList(
+      {
+        list: [
+          { vod_id: 1, vod_name: '某伦理片', type_name: '伦理片' },
+          { vod_id: 2, vod_name: '流浪地球', type_name: '科幻片' },
+        ],
+      },
+      source
+    );
+    expect(items[0].isAdult).toBe(true);
+    expect(items[1].isAdult).toBe(false);
+    // 源级标记优先
+    const adultSourceItems = parseSearchList(
+      { list: [{ vod_id: 3, vod_name: '普通片', type_name: '剧情片' }] },
+      { ...source, isAdult: true }
+    );
+    expect(adultSourceItems[0].isAdult).toBe(true);
+  });
+
   it('拒绝无效响应；list 缺失或 null 视为空结果', () => {
     expect(() => parseSearchList(null, source)).toThrow();
     expect(() => parseSearchList({ list: 'nope' }, source)).toThrow();
@@ -147,6 +167,16 @@ describe('成人内容过滤', () => {
     const items = [{ typeName: '伦理片' }, { typeName: '剧情片' }];
     expect(filterAdultResults(items, true)).toEqual([{ typeName: '剧情片' }]);
     expect(filterAdultResults(items, false)).toHaveLength(2);
+  });
+
+  it('标题/源标记命中成人关键词时也参与过滤', () => {
+    const items = [
+      { typeName: 'AI换脸', name: '[换脸]某剧' },
+      { typeName: '女优明星', name: '某作品' },
+      { typeName: '剧情片', name: '普通剧', isAdult: true },
+      { typeName: '剧情片', name: '普通剧' },
+    ];
+    expect(filterAdultResults(items, true)).toEqual([{ typeName: '剧情片', name: '普通剧' }]);
   });
 });
 

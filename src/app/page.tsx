@@ -16,6 +16,7 @@ import { useToast } from '@/components/toast';
 import { EmptyState } from '@/components/states';
 import { Icon } from '@/components/icon';
 import { SiteFooter } from '@/components/site-footer';
+import { Switch } from '@/components/settings-shared';
 
 /**
  * 首页：搜索（URL ?s= 驱动，可后退/分享）+ 豆瓣推荐。
@@ -43,6 +44,7 @@ function HomeContent() {
   const envSources = useAppStore((s) => s.envSources);
   const selectedKeys = useAppStore((s) => s.selectedKeys);
   const yellowFilter = useAppStore((s) => s.yellowFilter);
+  const updateSettings = useAppStore((s) => s.updateSettings);
   const sourceHealth = useAppStore((s) => s.sourceHealth);
   const subscriptions = useAppStore((s) => s.subscriptions);
   const [input, setInput] = useState(urlQuery);
@@ -277,6 +279,18 @@ function HomeContent() {
                 onClearAll={searchHistory.clearAll}
               />
             )}
+          </div>
+
+          {/* 搜索时的 18🈲 开关：与设置里的「成人内容过滤」同一状态，切换后立即重搜 */}
+          <div className="mt-2 flex items-center justify-end gap-2 text-xs text-muted">
+            <span className="tag bg-pink-500/15 text-pink-600 dark:text-pink-400">18🈲</span>
+            <span className="select-none">过滤成人内容</span>
+            <Switch
+              checked={yellowFilter}
+              onChange={(v) => updateSettings({ yellowFilter: v })}
+              label="过滤成人内容"
+              title="开启后隐藏伦理/福利等 18+ 分类；关闭后显示，并在卡片上打 18🈲 标记"
+            />
           </div>
         </section>
 

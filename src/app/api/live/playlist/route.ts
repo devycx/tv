@@ -3,7 +3,7 @@ import { guardRequest, jsonError } from '@/lib/api-guard';
 import { checkLiveUrlAllowed } from '@/lib/ssrf';
 import { fetchUpstream } from '@/lib/fetch-utils';
 import { getLiveCache, setLiveCache } from '@/lib/live-cache';
-import { parseM3u } from '@/lib/m3u-parser';
+import { buildLivePlaylist } from '@/lib/m3u-parser';
 import type { LivePlaylistResponse } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -13,12 +13,6 @@ const CACHE_TTL_MS = 10 * 60 * 1000;
 
 function cacheKey(url: string): string {
   return `live:playlist:${url}`;
-}
-
-function extractPlaylistName(content: string): string | undefined {
-  const m = content.match(/^#PLAYLIST:(.+)$/m);
-  const name = m?.[1]?.trim();
-  return name || undefined;
 }
 
 /** 反序列化为 M3U 文本（订阅导出用） */
@@ -78,11 +72,8 @@ export async function GET(req: Request) {
       return jsonError(`订阅地址请求失败: ${err instanceof Error ? err.message : '未知错误'}`, 502);
     }
 
-    const channels = parseM3u(text, url);
-    const groups = [...new Set(channels.map((c) => c.group).filter((g): g is string => Boolean(g)))].sort(
-      (a, b) => a.localeCompare(b, 'zh')
-    );
-    playlist = { name: extractPlaylistName(text), channels, groups };
+    // 解析逻辑与客户端直连共用（buildLivePlaylist），保证两条路径的结构完全一致
+    playlist = buildLivePlaylist(text, url);
     setLiveCache(cacheKey(url), playlist, CACHE_TTL_MS, text.length);
   }
 

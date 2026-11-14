@@ -68,10 +68,11 @@ function LiveContent() {
   }, [liveSelectedUrls, liveEnvSources, liveSubscriptions]);
 
   // 聚合全部直播源的 M3U 解析结果（单源失败不影响整体）
+  // api.livePlaylistAuto：浏览器直连上游列表（12 个预置源均允许跨域），失败才回退服务端代理
   const playlistsQuery = useQuery({
     queryKey: ['livePlaylists', sources.map((s) => s.url).join('|')],
     queryFn: async () => {
-      const results = await Promise.allSettled(sources.map((s) => api.livePlaylist(s.url)));
+      const results = await Promise.allSettled(sources.map((s) => api.livePlaylistAuto(s.url)));
       return sources.map((source, i) => ({ source, result: results[i] }));
     },
     enabled: verified && sources.length > 0,

@@ -144,7 +144,12 @@ export function DetailModal({ item, onClose }: { item: SearchResultItem | null; 
         <div className="flex items-start justify-between gap-4 p-5 pb-3 border-b border-line shrink-0">
           <div className="min-w-0">
             <h2 className="text-lg font-semibold text-content break-words">{item.name}</h2>
-            <span className="text-sm text-faint">{item.sourceName}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-faint">{item.sourceName}</span>
+              {item.isAdult && (
+                <span className="tag bg-pink-500/15 text-pink-600 dark:text-pink-400">18🈲</span>
+              )}
+            </div>
           </div>
           <button
             className="p-1.5 rounded-md text-muted hover:text-content hover:bg-hover shrink-0"

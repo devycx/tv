@@ -2,32 +2,34 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { api, onUnauthorized, STATUS_QUERY_KEY } from '@/lib/client-api';
+import { api, onUnauthorized } from '@/lib/client-api';
 import { applyEnvPresets } from '@/lib/subscription-sync';
-import type { AuthStatusResponse } from '@/lib/types';
+import type { BootstrapConfig } from '@/lib/bootstrap';
 import { useToast } from './toast';
 
 /**
  * 认证上下文：
- * - 页面加载时查询 /api/status 判断会话有效性；
+ * - 首屏不再查询 /api/status：能渲染受保护页面即已登录（middleware 保证），
+ *   版本 / 是否配置 PASSWORD / 预置源等静态配置由根 layout 通过 bootstrap 内联下发；
  * - 任何 API 返回 401/503 时全局打开登录框（客户端 API 层统一触发，不再散落检查）。
  */
 
 type SetupRequired = boolean;
 
 interface AuthContextValue {
+  /** 首屏即完成「校验」（bootstrap 是同步下发的），保留字段兼容既有调用方 */
   checked: boolean;
   verified: boolean;
   /** 服务器未设置 PASSWORD，需要管理员配置 */
   setupRequired: SetupRequired;
-  /** /api/status 返回的应用版本（构建时从 package.json 注入） */
+  /** 应用版本（构建时从 package.json 注入，经首屏 bootstrap 下发） */
   version: string | null;
   openLogin: () => void;
   logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue>({
-  checked: false,
+  checked: true,
   verified: false,
   setupRequired: false,
   version: null,
@@ -39,34 +41,25 @@ export function useAuth(): AuthContextValue {
   return useContext(AuthContext);
 }
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [checked, setChecked] = useState(false);
-  const [verified, setVerified] = useState(false);
-  const [setupRequired, setSetupRequired] = useState(false);
-  const [version, setVersion] = useState<string | null>(null);
+export function AuthProvider({
+  children,
+  bootstrap,
+  initialVerified = true,
+}: {
+  children: ReactNode;
+  /** 根 layout 内联的首屏配置（版本、passwordRequired、预置源等） */
+  bootstrap: BootstrapConfig;
+  /**
+   * 首屏是否已登录：受保护页面能渲染即已登录；/login 由 Providers 传 false。
+   * 同步可用，不再等 /api/status 返回（live/watch 不会先闪「等待访问验证」）。
+   */
+  initialVerified?: boolean;
+}) {
+  const [verified, setVerified] = useState(initialVerified);
+  const [setupRequired, setSetupRequired] = useState(!bootstrap.passwordRequired);
   const [modalOpen, setModalOpen] = useState(false);
   const { toast } = useToast();
   const queryClient = useQueryClient();
-
-  // 与 Providers 共用同一 query key 与缓存，避免 /api/status 被请求两次
-  useEffect(() => {
-    let cancelled = false;
-    queryClient
-      .fetchQuery({ queryKey: STATUS_QUERY_KEY, queryFn: () => api.status() })
-      .then((s) => {
-        if (cancelled) return;
-        setVerified(s.verified);
-        setSetupRequired(!s.passwordRequired);
-        setVersion(s.version);
-        setChecked(true);
-      })
-      .catch(() => {
-        if (!cancelled) setChecked(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [queryClient]);
 
   useEffect(
     () =>
@@ -100,25 +93,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 登录前以 401 失败的查询（如豆瓣推荐）需要重新拉取
     queryClient.invalidateQueries();
     toast('验证成功', 'success');
-    // 预置订阅（DEFAULT_SUBSCRIPTIONS）的首屏同步发生在登录之前，会 401 静默失败，
-    // 这里用缓存中的 /api/status 补跑一次（缓存缺失时回落为一次请求）
+    // 预置订阅 / 用户订阅自动刷新要经鉴权接口：登录前那次 401 静默失败，
+    // 这里用首屏同一份 bootstrap 补跑一次（applyEnvPresets 幂等），不再补拉 status
     try {
-      const cached = queryClient.getQueryData<AuthStatusResponse>(STATUS_QUERY_KEY);
-      const status =
-        cached ??
-        (await queryClient.fetchQuery<AuthStatusResponse>({
-          queryKey: STATUS_QUERY_KEY,
-          queryFn: () => api.status(),
-          staleTime: 0,
-        }));
-      if (status) await applyEnvPresets(status, { verified: true });
+      await applyEnvPresets(bootstrap, { verified: true });
     } catch {
-      // 补拉预置数据失败不影响登录后的正常使用
+      // 补跑预置数据失败不影响登录后的正常使用
     }
-  }, [toast, queryClient]);
+  }, [toast, queryClient, bootstrap]);
+
+  // bootstrap 同步下发，没有异步「校验中」阶段
+  const checked = true;
 
   return (
-    <AuthContext.Provider value={{ checked, verified, setupRequired, version, openLogin, logout }}>
+    <AuthContext.Provider
+      value={{ checked, verified, setupRequired, version: bootstrap.version, openLogin, logout }}
+    >
       {children}
       {modalOpen && (
         <LoginModal

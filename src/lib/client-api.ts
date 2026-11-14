@@ -1,6 +1,7 @@
 'use client';
 
-import type { SearchResponse, SearchStreamEvent, SourceSearchOutcome, VideoDetail, DoubanResponse, BangumiCalendarResponse, AuthStatusResponse, SourceConfig, SearchResultItem, LivePlaylistResponse, LiveEpgResponse, SourceListPayload, QualityProbeItem, QualityProbeResult } from './types';
+import type { SearchResponse, SearchStreamEvent, SourceSearchOutcome, VideoDetail, DoubanResponse, BangumiCalendarResponse, SourceConfig, SearchResultItem, LivePlaylistResponse, LiveEpgResponse, SourceListPayload, QualityProbeItem, QualityProbeResult } from './types';
+import { fetchLivePlaylistDirect, livePlaylistApiUrl } from './live-playlist';
 
 /**
  * 客户端 API 封装。401 时触发全局事件打开登录框，
@@ -34,9 +35,6 @@ export interface LiveProbeResult {
   /** 分片吞吐估算（kbps）：低于阈值的源前端标记为「源限速」 */
   kbps?: number;
 }
-
-/** /api/status 的 React Query key：Providers 与 AuthProvider 共用，避免同一页面重复请求 */
-export const STATUS_QUERY_KEY = ['app-status'] as const;
 
 export function onUnauthorized(handler: (event: CustomEvent) => void): () => void {
   const wrapped = (e: Event) => handler(e as CustomEvent);
@@ -106,8 +104,6 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  status: () => request<AuthStatusResponse>('/api/status'),
-
   login: (password: string) =>
     request<{ success: boolean }>('/api/auth', {
       method: 'POST',
@@ -249,12 +245,15 @@ export const api = {
 
   /** —— 直播 / IPTV —— */
 
-  /** 拉取并解析 M3U 订阅；force=1 跳过服务端缓存 */
-  livePlaylist: (url: string, force = false, signal?: AbortSignal) => {
-    const sp = new URLSearchParams({ url });
-    if (force) sp.set('force', '1');
-    return request<LivePlaylistResponse>(`/api/live/playlist?${sp.toString()}`, { signal });
-  },
+  /**
+   * 直播列表（页面主路径）：浏览器直连上游 M3U，网络/CORS/解析失败时自动回退
+   * `/api/live/playlist`。12 个预置源都允许跨域，直连可省掉每个列表一次 Worker 请求。
+   */
+  livePlaylistAuto: (url: string, signal?: AbortSignal) => fetchLivePlaylistDirect(url, signal),
+
+  /** 拉取并解析 M3U 订阅（走服务端代理；测活等需要服务端视角/强制刷新时用），force=1 跳过服务端缓存 */
+  livePlaylist: (url: string, force = false, signal?: AbortSignal) =>
+    request<LivePlaylistResponse>(livePlaylistApiUrl(url, force), { signal }),
 
   /** 查询某频道的节目单（服务端缓存 6h） */
   liveEpg: (epgUrl: string, tvgId: string, force = false, signal?: AbortSignal) => {

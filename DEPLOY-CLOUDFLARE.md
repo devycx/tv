@@ -48,9 +48,20 @@ Cloudflare 明确限制「站外托管的视频/大文件经其 CDN 分发给访
 - 直播源：`/api/live/playlist` 实测 12 个列表共 **2059 个频道**（`/live` 页按 URL 去重后约 1489）；
   但直连模式下只有 **https + 带 `ACAO`** 的频道能播，估算约 30%（≈619 条），
   http 流会被浏览器混合内容拦截、无 CORS 的会被拦——**这是「很多频道看不了」的主因**，换频道即可。
-- 修改源：编辑 `scripts/gen-wrangler.mjs` 里的数组 → `node scripts/gen-wrangler.mjs` →
-  `npx wrangler deploy`（只改变量，不用重新 build）。
+- 修改源：编辑 `scripts/gen-wrangler.mjs` 里的数组 → `npm run cf:build`（会同时重写 `wrangler.jsonc` 与
+  `src/lib/bootstrap.generated.json`）→ `npx wrangler deploy`。**不再支持「只改变量不重建」**：
+  首屏预置源是构建期静态注入的，改完必须重新构建。
 - 这些是**第三方公开接口**，可用性、内容与合规责任都不在本仓库。
+
+### 18🈲 成人内容标识与开关
+
+- 9 个成人向源（废柴 / 155 / 大地 / 森林 / 滴滴 / jkun / 辣椒 / 魔法 / 玉兔）在 `DEFAULT_SOURCES` 里标了
+  `isAdult: true`；搜索结果的 `isAdult` 还会按分类名/标题关键词（伦理、情色、三级、女优、换脸、无码、有码、
+  AV、自拍、偷拍…）兜底识别，源没标也能命中。
+- 搜索框下方新增 **18🈲 过滤成人内容** 开关（与设置里的「成人内容过滤」同一状态）：
+  - 开：服务端直接丢弃 18+ 结果，并自动取消勾选成人源；
+  - 关：自动重新勾选成人源，结果显示并在卡片/详情打 `18🈲` 徽章。
+- 切换开关会让搜索立即重跑（React Query key 包含该状态）。
 
 ### 源调研与合并结论（2026-11-14）
 
@@ -104,10 +115,22 @@ npm run cf:preview        # 默认 http://127.0.0.1:8787
 
 Next.js 15（App Router）+ OpenNext → 单个 Worker：
 
-- 页面（`/`、`/live`、`/watch`、`/about`）是静态预渲染，由 Workers Assets 直接出；
+- 页面（`/`、`/live`、`/watch`、`/about`）是**静态预渲染**，HTML 由 Worker 直接返回
+  （HTML 不在 Assets 里，因为要过 middleware 门禁；`/_next/static`、图标才由 Assets 免费直出）；
 - 所有 `/api/*` 是 Worker 里的 Route Handler（Node 兼容运行时，`nodejs_compat`），只出 JSON / 少量图片元数据；
 - 首页推荐 / 搜索 / 详情 / 直播列表等**文本请求**走 Cloudflare 边缘网络；
 - **媒体流量（m3u8 / ts / mp4 / flv）与封面图都不经过 Worker**，由浏览器直连源站。
+
+### 省 Worker 请求的优化（2026-11-14）
+
+- **直播列表客户端直连**：12 个 M3U 上游实测都返回 `Access-Control-Allow-Origin: *`，`/live` 页改为浏览器
+  直接拉取 + 本地解析（`src/lib/live-playlist.ts`，与服务端共用 `buildLivePlaylist`）。只有失败（CORS/超时/
+  非 M3U/0 频道）才回退一次 `/api/live/playlist`。**/live 页的 13 次 Worker API 请求降到 0 次**。
+- **首屏配置内联**：预置源/直播源/版本等由 `gen-wrangler.mjs` 在构建期写入
+  `src/lib/bootstrap.generated.json`，静态 HTML 内联，页面加载**不再请求 `/api/status`**（每页少 1 次）。
+  `/api/status` 路由保留给外部脚本，页面代码已无调用。
+- 典型会话（登录 + 首页 + 3 次搜索 + 5 个详情）约 **15 次 Worker 请求**，10 万/天约 6000+ 次会话。
+- 注意：改源必须重新构建（bootstrap 是构建期产物），不能只改 vars。
 
 ## 为 Workers 改了什么
 
@@ -120,7 +143,7 @@ Next.js 15（App Router）+ OpenNext → 单个 Worker：
 | `src/lib/session-webcrypto.ts` / `src/lib/safe-next.ts` | 新增。WebCrypto 会话校验（与 `auth.ts` 同算法）与回跳路径校验 |
 | `open-next.config.ts` | 新增。OpenNext Cloudflare 默认配置 |
 | `wrangler.jsonc` | 新增。Worker 入口、Assets 绑定、`nodejs_compat`、自定义域、预置源 vars |
-| `scripts/gen-wrangler.mjs` | 新增。生成 `wrangler.jsonc`（源列表的唯一维护点） |
+| `scripts/gen-wrangler.mjs` | 新增。生成 `wrangler.jsonc` + `src/lib/bootstrap.generated.json`（源列表的唯一维护点） |
 | `package.json` | 升级 `next` 到 15.5.29（OpenNext 1.20 的 peer 要求）；加 `cf:build` / `cf:preview` / `cf:deploy`；devDependencies 加 OpenNext、wrangler、cross-env |
 | `.gitignore` | 忽略 `.open-next/`、`.wrangler/`、`.dev.vars`、`.tmp/` |
 
@@ -133,7 +156,8 @@ Node 版（Docker / `npm start`）继续用原来的 `src/lib/ssrf.ts`：undici 
   但不会把域名解析一遍再校验。Cloudflare 边缘本身到不了内网，所以内网横向不可达。
 - **限流是单 isolate 内存实现**（登录 10 次 / 10 分钟）：多 isolate 时只是近似限流。
 - **内存缓存**（搜索短缓存、豆瓣推荐、直播列表）只活在单个 isolate 内，命中率看流量分布，属正常。
-- **实测 CPU**：`/` 约 17–26ms，`/api/status` 约 6–40ms，直播列表解析约 30ms，
+- **实测 CPU**：静态预渲染 + 构建期 bootstrap 后，热 isolate 上 `/` 约 23–46ms、`/live` 约 16–69ms、
+  `/api/status` 约 28ms；新部署后的首批请求会有 200–400ms 的冷启动尖峰（isolate 初始化），属正常。
   35 源聚合搜索约 2.7s（其中 CPU 很小），均未被 CPU 限制掐断。
 - **直连播放依赖源站 CORS**：没有 `Access-Control-Allow-Origin`、防盗链、或 `http://` 混合内容
   的源只能换源；直播对这个最敏感（现有 12 个直播源约 30% 频道可直连，http 运营商流基本不可用）。

@@ -1,4 +1,4 @@
-import type { LiveChannel } from './types';
+import type { LiveChannel, LivePlaylistResponse } from './types';
 
 /**
  * M3U / M3U8 直播播放列表解析。
@@ -116,4 +116,29 @@ export function parseM3u(content: string, baseUrl?: string): LiveChannel[] {
   }
 
   return channels;
+}
+
+/** 播放列表名：M3U 头部的 `#PLAYLIST:` 指令（没有或为空时返回 undefined） */
+export function extractPlaylistName(content: string): string | undefined {
+  const m = content.match(/^#PLAYLIST:(.+)$/m);
+  const name = m?.[1]?.trim();
+  return name || undefined;
+}
+
+/** 分组名：去空、去重后按中文排序（与直播页侧栏的分组展示顺序一致） */
+export function collectGroups(channels: LiveChannel[]): string[] {
+  return [...new Set(channels.map((c) => c.group).filter((g): g is string => Boolean(g)))].sort(
+    (a, b) => a.localeCompare(b, 'zh')
+  );
+}
+
+/**
+ * 完整的直播播放列表响应（`/api/live/playlist` 的 JSON 结构）。
+ *
+ * **同一份实现同时用于服务端路由与客户端直连**：name / channels / groups 的生成规则
+ * 只有这一处，直连与代理回退不可能解析出不同结果。
+ */
+export function buildLivePlaylist(content: string, baseUrl?: string): LivePlaylistResponse {
+  const channels = parseM3u(content, baseUrl);
+  return { name: extractPlaylistName(content), channels, groups: collectGroups(channels) };
 }

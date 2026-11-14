@@ -11,7 +11,7 @@
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "cf:build": "cross-env BUILD_TARGET=workers opennextjs-cloudflare build",
+    "cf:build": "node scripts/gen-wrangler.mjs && cross-env BUILD_TARGET=workers opennextjs-cloudflare build",
     "cf:preview": "cross-env BUILD_TARGET=workers opennextjs-cloudflare preview",
     "cf:deploy": "cross-env BUILD_TARGET=workers opennextjs-cloudflare deploy"
   },
