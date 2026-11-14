@@ -93,11 +93,15 @@ const liveSources = [
 const config = {
   $schema: 'node_modules/wrangler/config-schema.json',
   name: 'tv',
-  main: '.open-next/worker.js',
+  // 入口包了一层缓存（src/cf-entry.ts）：已登录用户的重复页面/API 请求直接由
+  // Cloudflare Cache API 命中，不再进入 Next 运行时，以压低免费套餐的 CPU 占用。
+  main: 'src/cf-entry.ts',
   compatibility_date: '2026-11-01',
   compatibility_flags: ['nodejs_compat'],
   assets: { directory: '.open-next/assets', binding: 'ASSETS' },
   observability: { enabled: true },
+  // 每次部署生成新的版本 ID，cf-entry.ts 用它当前缀让旧缓存自然失效
+  version_metadata: { binding: 'CF_VERSION_METADATA' },
   workers_dev: true,
   preview_urls: false,
   routes: [{ pattern: 'tv.ycxdev.com', custom_domain: true }],
