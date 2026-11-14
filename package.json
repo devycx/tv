@@ -12,6 +12,7 @@
     "icons": "node scripts/gen-icons.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "shot": "node scripts/shot.mjs",
     "cf:build": "node scripts/gen-wrangler.mjs && cross-env BUILD_TARGET=workers opennextjs-cloudflare build",
     "cf:preview": "cross-env BUILD_TARGET=workers opennextjs-cloudflare preview",
     "cf:deploy": "cross-env BUILD_TARGET=workers opennextjs-cloudflare deploy"

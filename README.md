@@ -217,6 +217,20 @@ npm test                            # 核心库单元测试（cms-parser / m3u8 
 npm run typecheck
 ```
 
+### UI 截图 / 层级验证
+
+`scripts/shot.mjs` 用本机 Chrome 的移动视口截图并读取 DOM 数值，不依赖浏览器扩展，也不影响日常标签页：
+
+```bash
+npm run shot -- --url "http://localhost:8080/" --out .tmp/shots/home.png
+
+# 播放页：等播放器挂载，打开设置抽屉再截图
+npm run shot -- --url "http://localhost:8080/watch?source=env_4&url=<test.m3u8>&title=测试" \
+  --selector ".art-video-player" --out .tmp/shots/watch-settings.png --open-settings
+```
+
+要求 Node ≥ 22 与本机 Chrome；登录密码从 `SHOT_PASSWORD` 或 `.dev.vars` 的 `PASSWORD=` 读取。参数、播放页 UI 不变量、artplayer 层级隔离的说明见 [docs/ui-verification.md](docs/ui-verification.md)。
+
 发布流程见 [DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md)。
 
 ## 发布新版本
