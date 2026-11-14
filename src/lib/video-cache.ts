@@ -31,6 +31,7 @@ export interface CacheSettings {
   maxTotalBytes: number;
 }
 
+/** 桌面默认：暂停时可铺满整集，2GB 总量上限 */
 export const DEFAULT_CACHE_SETTINGS: CacheSettings = {
   enabled: true,
   horizonSeconds: 300,
@@ -38,7 +39,45 @@ export const DEFAULT_CACHE_SETTINGS: CacheSettings = {
   maxTotalBytes: 2 * 1024 * 1024 * 1024,
 };
 
+/**
+ * 手机 / 省流默认：手机浏览器把站点数据聚合成一项展示，300MB 就会让用户以为「网站吃了我
+ * 300MB cookie」；1080p 下 300s 窗口本身就有 100–200MB。这里把单集/总量上限收紧到
+ * 够用又不吓人的量级，暂停预取也不再无限铺满（见 player-shell 的 video:pause）。
+ */
+const MOBILE_CACHE_SETTINGS: CacheSettings = {
+  enabled: true,
+  horizonSeconds: 120,
+  maxBytesPerEpisode: 160 * 1024 * 1024,
+  maxTotalBytes: 400 * 1024 * 1024,
+};
+
 const SETTINGS_KEY = 'libretv-video-cache-settings';
+
+/**
+ * 是否属于「存储/流量要克制」的环境：手机（粗指针）、省流模式、2G/3G 网络。
+ * 只影响默认值与暂停预取策略，用户手动改过的设置仍然优先。
+ */
+export function isConstrainedCacheProfile(): boolean {
+  try {
+    if (typeof navigator !== 'undefined') {
+      const conn = (navigator as Navigator & {
+        connection?: { saveData?: boolean; effectiveType?: string };
+      }).connection;
+      if (conn?.saveData === true) return true;
+      const type = conn?.effectiveType;
+      if (type === 'slow-2g' || type === '2g' || type === '3g') return true;
+    }
+    if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+      if (window.matchMedia('(pointer: coarse)').matches) return true;
+    }
+  } catch { /* 取不到能力信息时按桌面处理 */ }
+  return false;
+}
+
+/** 按当前环境取默认缓存设置（不读用户已保存的设置） */
+export function defaultCacheSettings(): CacheSettings {
+  return isConstrainedCacheProfile() ? { ...MOBILE_CACHE_SETTINGS } : { ...DEFAULT_CACHE_SETTINGS };
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
@@ -58,9 +97,11 @@ export function normalizeCacheSettings(input: unknown): CacheSettings {
 export function loadCacheSettings(): CacheSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    return normalizeCacheSettings(raw ? JSON.parse(raw) : undefined);
+    // 没有保存过设置时用当前环境的默认值（手机/省流会拿到更小的上限）
+    if (!raw) return defaultCacheSettings();
+    return normalizeCacheSettings(JSON.parse(raw));
   } catch {
-    return { ...DEFAULT_CACHE_SETTINGS };
+    return defaultCacheSettings();
   }
 }
 
@@ -248,6 +289,26 @@ export async function getCacheSummary(): Promise<CacheSummary> {
     };
   } catch {
     return { segments: 0, bytes: 0, episodes: 0 };
+  }
+}
+
+export interface StorageEstimateInfo {
+  /** 本站已用字节（含 Cache Storage / IndexedDB / localStorage） */
+  usage: number;
+  /** 浏览器给本站的配额（浏览器估算值） */
+  quota: number;
+  /** 是否已获浏览器持久化授权（获批后浏览器不会在磁盘压力下自动清） */
+  persisted: boolean;
+}
+
+/** 读取浏览器实际配额与本站占用，供设置页展示（失败时返回 0，不抛错） */
+export async function getStorageEstimate(): Promise<StorageEstimateInfo> {
+  try {
+    const est = await navigator.storage?.estimate?.();
+    const persisted = (await navigator.storage?.persisted?.()) ?? false;
+    return { usage: est?.usage ?? 0, quota: est?.quota ?? 0, persisted };
+  } catch {
+    return { usage: 0, quota: 0, persisted: false };
   }
 }
 

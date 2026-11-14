@@ -58,7 +58,7 @@ Cloudflare 明确限制「站外托管的视频/大文件经其 CDN 分发给访
 - 9 个成人向源（废柴 / 155 / 大地 / 森林 / 滴滴 / jkun / 辣椒 / 魔法 / 玉兔）在 `DEFAULT_SOURCES` 里标了
   `isAdult: true`；搜索结果的 `isAdult` 还会按分类名/标题关键词（伦理、情色、三级、女优、换脸、无码、有码、
   AV、自拍、偷拍…）兜底识别，源没标也能命中。
-- 搜索框下方新增 **18🈲 过滤成人内容** 开关（与设置里的「成人内容过滤」同一状态）：
+- 过滤开关统一放在「**设置 → 偏好设置 → 首页与内容过滤 → 成人内容过滤**」（2026-11-14 起首页搜索框下方不再有行内 `18🈲` 开关，避免同一状态两处入口）：
   - 开：服务端直接丢弃 18+ 结果，并自动取消勾选成人源；
   - 关：自动重新勾选成人源，结果显示并在卡片/详情打 `18🈲` 徽章。
 - 切换开关会让搜索立即重跑（React Query key 包含该状态）。
@@ -188,6 +188,12 @@ Node 版（Docker / `npm start`）继续用原来的 `src/lib/ssrf.ts`：undici 
   但不会把域名解析一遍再校验。Cloudflare 边缘本身到不了内网，所以内网横向不可达。
 - **限流是单 isolate 内存实现**（登录 10 次 / 10 分钟）：多 isolate 时只是近似限流。
 - **内存缓存**（搜索短缓存、豆瓣推荐、直播列表）只活在单个 isolate 内，命中率看流量分布，属正常。
+- **客户端存储（播放器片段缓存）**：Cache Storage `libretv-video-v1` + IndexedDB `segmentMeta`，
+  默认桌面 2GB 总量 / 800MB 每集 / 300s 预取；手机、省流模式、2G/3G 自动收紧到
+  400MB / 160MB / 120s，且暂停时不再「无限铺满整集」、不预热下一集（2026-11-14 调整）。
+  手机浏览器会把 Cache Storage 一起显示成「Cookie 及站点数据」，设置页「播放与过滤」底部
+  现在直接展示浏览器视角的「本站数据 / 配额」并可一键清理。下载断点缓存 `libretv-dl-v1`
+  在任务完成/删除时清理；刷新页面后遗留的「下载中」任务会自动标成「已暂停」而不是卡死。
 - **实测 CPU**（2026-11-14）：Cloudflare GraphQL 近 7 天 1869 次调用、总 CPU 68.4s，
   P50 **7.5ms**、P75 **20.4ms**、P99 **407ms**、均值 36.6ms（含冷启动尖峰 200–600ms）；仪表盘 24h 中位数显示 8ms。
   加了入口缓存层后，命中请求降到 **0–2ms**；MISS 仍 28–152ms、冷启动 230–300ms。
@@ -203,9 +209,12 @@ Node 版（Docker / `npm start`）继续用原来的 `src/lib/ssrf.ts`：undici 
 
 站点从上游 LibreTV 品牌换成了自有的 **夜幕TV**（slogan：夜色启幕，好戏随时开场）。
 
-- Logo：Gemini 生成的 1024×1024 artwork（深色 #0b101a 底 + 霓虹蓝 #00b8e6 播放键/银幕符号），
-  原图存在 `public/icons/icon-1024.png`，其余尺寸（16/32/48/96/144/192/512/180）由它缩放导出，
-  `public/favicon.ico` 内嵌 16/32/48 三张 PNG。
+- Logo：YouTube 风格蓝色圆角播放徽标，主题色沿用站点霓虹蓝 **#00b8e6**，深色底 **#0b101a**。
+  矢量源放在 `public/icons/`：`icon-source.svg`（深色底 app icon）与 `brand-mark.svg`（透明徽标，
+  顶栏/登录页/favicon 使用）；`npm run icons` 由这两个 SVG 导出 48/96/144/192/512/1024 与
+  180px apple-touch-icon，`public/favicon.ico` 内嵌 16/32/48 三张透明底 PNG。
+- 顶栏与登录页的「夜幕TV」字标改为纯色（跟随 `text-content`），与 YouTube 的单色字标一致；
+  首页 hero 大标题仍保留原有蓝→粉渐变。
 - 文案落点：`src/app/layout.tsx`（title/description）、`src/app/manifest.ts`（PWA 名称）、
   `src/components/header.tsx`（顶栏 logo + 站名）、`src/components/site-footer.tsx`（页脚，已去掉上游
   GitHub 链接与版本检测请求）、`src/app/login/page.tsx`、`src/app/page.tsx`（首页 hero）、

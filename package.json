@@ -9,6 +9,7 @@
     "build": "next build",
     "start": "next start -p 8080",
     "lint": "eslint src",
+    "icons": "node scripts/gen-icons.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "cf:build": "node scripts/gen-wrangler.mjs && cross-env BUILD_TARGET=workers opennextjs-cloudflare build",

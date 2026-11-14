@@ -204,6 +204,22 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
     setCapability(detectSavingCapability());
     setChunkCache(supportsChunkCache());
     refresh();
+    // 刷新页面/重开抽屉后，上次被中断的任务在库里仍是「下载中」但没有运行句柄。
+    // 统一改回「已暂停」：用户能看到真实状态，也能点「继续」接着下（分片缓存还在），
+    // 而不是卡在永远 100% 不动也不会自动跑的状态。
+    void (async () => {
+      try {
+        const stale = await db.downloads.where('status').equals('downloading').toArray();
+        const orphans = stale.filter((t) => !running.current.has(t.id));
+        if (orphans.length === 0) return;
+        await Promise.all(
+          orphans.map((t) => db.downloads.update(t.id, { status: 'paused', updatedAt: Date.now() }))
+        );
+        refresh();
+      } catch {
+        /* IndexedDB 不可用时忽略，不影响正常下载 */
+      }
+    })();
     scheduleNext();
   }, [isOpen, refresh, scheduleNext]);
 

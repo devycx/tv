@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   description:
     '夜幕TV 是一个私人影视聚合平台：汇聚多个公开点播源与直播源，提供搜索、播放、收藏与观看记录，仅供个人学习使用。',
   manifest: '/manifest.webmanifest',
-  // 同一张品牌 artwork（由 Gemini 设计）导出的多尺寸 PNG + 根目录 favicon.ico 兜底。
+  // 同一套品牌矢量（YouTube 风格蓝色播放徽标）导出的多尺寸 PNG + 根目录 favicon.ico 兜底。
   // 只声明单张 512 时，抓取端只能拿大图缩放，小尺寸下易糊、看起来「没填满」。
   icons: {
     icon: [

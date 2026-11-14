@@ -17,7 +17,16 @@ import {
   useSourceTests,
   type TestState,
 } from './settings-shared';
-import { loadCacheSettings, saveCacheSettings, getCacheSummary, clearVideoCache, type CacheSummary } from '@/lib/video-cache';
+import {
+  loadCacheSettings,
+  saveCacheSettings,
+  getCacheSummary,
+  getStorageEstimate,
+  clearVideoCache,
+  isConstrainedCacheProfile,
+  type CacheSummary,
+  type StorageEstimateInfo,
+} from '@/lib/video-cache';
 import { EmptyState, Spinner } from './states';
 import { useSourceProbe } from './use-source-probe';
 import { allLiveSources, isSourceDisabled, keyBelongsToSubscription, resolveSource, subKeyPrefix, useAppStore } from '@/lib/store';
@@ -634,10 +643,14 @@ function PlaybackPanel() {
 function VideoCachePanel() {
   const [enabled, setEnabled] = useState(() => loadCacheSettings().enabled);
   const [summary, setSummary] = useState<CacheSummary>({ segments: 0, bytes: 0, episodes: 0 });
+  const [estimate, setEstimate] = useState<StorageEstimateInfo>({ usage: 0, quota: 0, persisted: false });
+  const [cap, setCap] = useState(() => loadCacheSettings().maxTotalBytes);
   const [clearing, setClearing] = useState(false);
 
   const refresh = useCallback(() => {
     void getCacheSummary().then(setSummary);
+    void getStorageEstimate().then(setEstimate);
+    setCap(loadCacheSettings().maxTotalBytes);
   }, []);
 
   useEffect(() => {
@@ -679,6 +692,14 @@ function VideoCachePanel() {
           清理缓存
         </button>
       </div>
+      {/* 手机浏览器会把 Cache Storage / IndexedDB 一起显示成「Cookie 及站点数据」，
+          这里直接给出浏览器视角的真实占用，避免用户误以为站点在偷偷存 cookie */}
+      <p className="text-[11px] text-faint leading-relaxed">
+        浏览器里本站数据：{formatBytes(estimate.usage)}
+        {estimate.quota > 0 && <> / 配额 {formatBytes(estimate.quota)}</>}
+        {estimate.persisted ? ' · 已申请持久化' : ''} · 缓存上限 {formatBytes(cap)}
+        {isConstrainedCacheProfile() ? '（手机/省流自动收紧）' : ''}
+      </p>
     </div>
   );
 }

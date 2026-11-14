@@ -12,7 +12,7 @@ import {
 } from '@/lib/video-prefetcher';
 import { attachVolumeBoost, type VolumeBoostHandle } from '@/lib/volume-boost';
 import { CONTROL_SHOW_CLASS, syncMiniProgressBar } from '@/lib/mini-progress-bar';
-import { loadCacheSettings } from '@/lib/video-cache';
+import { isConstrainedCacheProfile, loadCacheSettings } from '@/lib/video-cache';
 import { formatTime } from '@/lib/utils';
 import { prefersTouchPointer } from '@/lib/touch-pointer';
 import {
@@ -247,8 +247,9 @@ export function PlayerShell({
       episodeKey: p.episodeKey,
       horizonSeconds,
       onProgress: (stats) => {
-        // 当前集预取完成且存在下一集：用独立预取器预热下一集前 7 分钟
-        if (stats.state === 'done' && p.nextUrl && p.nextEpisodeKey) {
+        // 当前集预取完成且存在下一集：用独立预取器预热下一集前 7 分钟。
+        // 手机/省流环境不预热下一集：断点续播收益小于多占的几百 MB 与流量。
+        if (stats.state === 'done' && p.nextUrl && p.nextEpisodeKey && !isConstrainedCacheProfile()) {
           getNextEpisodePrefetcher().ensure({
             m3u8Url: p.nextUrl,
             currentTime: 0,
@@ -780,10 +781,15 @@ export function PlayerShell({
     art.on('video:pause', () => {
       // 跳过片尾会主动 pause：此时已按「看完」处理，不能再把片尾位置写回进度
       if (!endedRef.current) propsRef.current.onPause?.(art.currentTime, art.duration);
-      // 暂停 = 预取黄金窗口：解除限速并无限铺满整集（用户主动行为，带宽占用可接受）
-      // waiting 触发的限速在此解除，否则黄金窗口会被 500ms 轮询冻结
+      // 暂停 = 预取黄金窗口：解除限速，桌面端无限铺满整集（用户主动行为，带宽/存储可接受）；
+      // 手机/省流环境只铺 settings.horizonSeconds（默认 120s，另有单集/总量上限兜底），
+      // 否则挂机暂停一集就能把站点数据撑到几百 MB。
       getVideoPrefetcher().setThrottled(false);
-      ensurePrefetch(propsRef.current.url, art.currentTime, 0);
+      ensurePrefetch(
+        propsRef.current.url,
+        art.currentTime,
+        isConstrainedCacheProfile() ? undefined : 0
+      );
     });
     art.on('video:waiting', () => {
       // 卡顿：预取临时让出带宽给播放
