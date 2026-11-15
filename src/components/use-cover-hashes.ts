@@ -32,6 +32,8 @@ const states = new Map<string, CoverHashState>();
 const cache = loadCache();
 const queue: string[] = [];
 const listeners = new Set<() => void>();
+/** 图床 CORS 直连结论：避免同一 host 的每个封面都先失败一次再走代理 */
+const hostModes = new Map<string, 'cors' | 'proxy'>();
 let active = 0;
 let version = 0;
 let consecutiveFailures = 0;
@@ -133,6 +135,36 @@ async function hashCoverBlob(blob: Blob): Promise<string> {
 }
 
 async function hashCoverUrl(url: string): Promise<string> {
+  const host = (() => {
+    try {
+      return new URL(url).hostname.toLowerCase();
+    } catch {
+      return undefined;
+    }
+  })();
+  const mode = host ? hostModes.get(host) : undefined;
+
+  // 不少图床允许浏览器 CORS 直连，但 Cloudflare Worker 出网会 525（源站 TLS 握手失败）。
+  // 先试浏览器直连，按 host 记住结论；CORS 失败/非 2xx 再退回同源代理。
+  if (host && mode !== 'proxy' && /^https:/i.test(url)) {
+    try {
+      const direct = await fetch(url, {
+        mode: 'cors',
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer',
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+      if (direct.ok) {
+        const blob = await direct.blob();
+        hostModes.set(host, 'cors');
+        return hashCoverBlob(blob);
+      }
+    } catch {
+      // CORS / 网络失败：走代理
+    }
+    hostModes.set(host, 'proxy');
+  }
+
   const res = await fetch(`/api/cover?url=${encodeURIComponent(url)}`, {
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     credentials: 'same-origin',

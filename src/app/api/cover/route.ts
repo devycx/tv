@@ -20,6 +20,20 @@ const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 const IMAGE_EXT = /\.(?:jpe?g|png|webp|gif|avif|bmp|jxl)(?:$|[?#])/i;
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+const IMAGE_HEADERS = { 'User-Agent': UA, Accept: 'image/*,*/*;q=0.8' };
+
+/**
+ * 取图；部分图床从 Cloudflare 边缘走 HTTPS 会返回 525/526（源站 TLS 握手失败），
+ * 但同一路径的 HTTP 能正常返回。降级只用于「算指纹」的公开图片，且同样过 SSRF 校验。
+ * 不做 403/404 的降级：那通常是防盗链/路径不存在，换 HTTP 也不会变。
+ */
+async function fetchCoverImage(target: string): Promise<Response> {
+  const res = await fetchUpstream(target, { timeoutMs: 8000, headers: IMAGE_HEADERS });
+  if (res.ok || (res.status !== 525 && res.status !== 526) || !/^https:/i.test(target)) return res;
+
+  const httpTarget = target.replace(/^https:/i, 'http:');
+  return fetchUpstream(httpTarget, { timeoutMs: 8000, headers: IMAGE_HEADERS });
+}
 
 export async function GET(req: Request) {
   const guarded = guardRequest(req);
@@ -32,10 +46,7 @@ export async function GET(req: Request) {
 
   let upstream: Response;
   try {
-    upstream = await fetchUpstream(target, {
-      timeoutMs: 8000,
-      headers: { 'User-Agent': UA, Accept: 'image/*,*/*;q=0.8' },
-    });
+    upstream = await fetchCoverImage(target);
   } catch (err) {
     const message = err instanceof Error ? err.message : '取图失败';
     return new NextResponse(message, { status: /拒绝|私有|保留/.test(message) ? 403 : 502 });

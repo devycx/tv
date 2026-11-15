@@ -58,6 +58,15 @@ function stubImageFetch(): void {
           headers: { 'content-type': 'image/jpeg', 'content-length': String(4 * 1024 * 1024) },
         });
       }
+      if (url.includes('img.example.com/tls.jpg') && url.startsWith('https:')) {
+        return new Response('ssl handshake failed', { status: 525 });
+      }
+      if (url.includes('img.example.com/tls.jpg') && url.startsWith('http:')) {
+        return new Response(new Uint8Array([9, 8, 7]), {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        });
+      }
       return new Response('not found', { status: 404 });
     })
   );
@@ -99,6 +108,13 @@ describe('GET /api/cover', () => {
     stubImageFetch();
     const res = await GET(makeRequest('https://img.example.com/big.jpg'));
     expect(res.status).toBe(413);
+  });
+
+  it('HTTPS 返回 525（源站 TLS 失败）时降级 HTTP 重试', async () => {
+    stubImageFetch();
+    const res = await GET(makeRequest('https://img.example.com/tls.jpg'));
+    expect(res.status).toBe(200);
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([9, 8, 7]));
   });
 
   it('内网地址被 SSRF 防护拒绝', async () => {
