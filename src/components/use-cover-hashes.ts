@@ -5,8 +5,9 @@
  *
  * 浏览器直连图床时 canvas 会被跨域污染，读不到像素；这里通过同源的
  * `/api/cover?url=` 取图（登录后才能用、SSRF 校验在服务端），先按统一画幅（4:5）
- * 中心裁切、画到 9×8 canvas 上算 dHash，再由 aggregateResults 按指纹聚类。
- * 裁切是必须的：整图拉伸会把同一主视觉的 2:3 海报和 9:16（带台标/赞助条）算成两张。
+ * 中心裁切、**两段缩放**到 9×8 canvas 上算 dHash，再由 aggregateResults 按指纹聚类。
+ * 裁切是必须的：整图拉伸会把同一主视觉的 2:3 海报和 9:16（带台标/赞助条）算成两张；
+ * 两段缩放也是必须的：一步缩到 9×8 会随压缩噪声产生锯齿，同一张海报的扫描件差 15 位。
  *
  * 性能与降级：
  * - 每个 URL 只算一次；结果存 localStorage（600 条上限），刷新/重复搜索不再取图；
@@ -22,7 +23,7 @@ import { coverCropRect, dHashFromRgba } from '@/lib/cover-visual-hash';
 
 export type CoverHashState = { status: 'pending' } | { status: 'done'; hash: string } | { status: 'failed' };
 
-const CACHE_KEY = 'cover-visual-hashes-v2';
+const CACHE_KEY = 'cover-visual-hashes-v3';
 const MAX_CACHED = 600;
 const MAX_PER_SEARCH = 48;
 const MAX_ACTIVE = 5;
@@ -97,7 +98,16 @@ function cachedHash(url: string): string | undefined {
   return hash && HASH_HEX.test(hash) ? hash : undefined;
 }
 
-/** 9×8 canvas 上画图取像素；优先 createImageBitmap，Safari 旧版退回 <img> */
+/** 两段缩放的中间图倍数：先缩到 9×5 × 8×5，再缩到 9×8 */
+const HASH_MID_SCALE = 5;
+
+/**
+ * 9×8 canvas 上画图取像素；优先 createImageBitmap，Safari 旧版退回 <img>。
+ *
+ * 必须两段缩放：把 540×770 的大图一步 drawImage 到 9×8 时，浏览器走的是快速滤波，
+ * 会随压缩噪声产生锯齿；同一张海报的不同扫描件实测差 **15** 位，超过阈值 10 被拆成两张卡。
+ * 先缩到 45×40 再缩到 9×8 后，同一对只差 **1** 位，而不同海报仍在 29–36。
+ */
 async function hashCoverBlob(blob: Blob): Promise<string> {
   const canvas = document.createElement('canvas');
   canvas.width = 9;
@@ -107,11 +117,21 @@ async function hashCoverBlob(blob: Blob): Promise<string> {
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 
+  const mid = document.createElement('canvas');
+  mid.width = 9 * HASH_MID_SCALE;
+  mid.height = 8 * HASH_MID_SCALE;
+  const midCtx = mid.getContext('2d', { willReadFrequently: true });
+  if (!midCtx) throw new Error('浏览器不支持 canvas 2d');
+  midCtx.imageSmoothingEnabled = true;
+  midCtx.imageSmoothingQuality = 'high';
+
   const draw = (source: CanvasImageSource, width: number, height: number): string => {
     // 先按统一画幅（4:5）中心裁切：整图拉伸会把「2:3 海报 vs 9:16 同主视觉」算成两张图
     const { sx, sy, sw, sh } = coverCropRect(width, height);
+    midCtx.clearRect(0, 0, mid.width, mid.height);
+    midCtx.drawImage(source, sx, sy, sw, sh, 0, 0, mid.width, mid.height);
     ctx.clearRect(0, 0, 9, 8);
-    ctx.drawImage(source, sx, sy, sw, sh, 0, 0, 9, 8);
+    ctx.drawImage(mid, 0, 0, mid.width, mid.height, 0, 0, 9, 8);
     return dHashFromRgba(ctx.getImageData(0, 0, 9, 8).data);
   };
 
