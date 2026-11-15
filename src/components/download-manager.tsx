@@ -339,14 +339,12 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
     <Drawer open={isOpen} onClose={onClose} title="下载管理" width="max-w-lg">
       <div className="space-y-3">
         <p className="text-xs text-faint">
-          保存能力：{capability === 'fs-access' ? '磁盘直写（边下边存）' : '内存聚合（完成后浏览器下载）'}
-          {chunkCache ? ' · 支持断点续传' : ' · 当前环境无断点缓存（需 HTTPS 访问）'} ·
-          同时进行 {Math.min(running.current.size, MAX_CONCURRENT_DOWNLOADS)}/{MAX_CONCURRENT_DOWNLOADS} 个任务
+          {capability === 'fs-access' ? '磁盘直写' : '内存聚合'}
+          {chunkCache ? ' · 支持断点续传' : ' · 无断点缓存（需 HTTPS）'} ·
+          同时进行 {Math.min(running.current.size, MAX_CONCURRENT_DOWNLOADS)}/{MAX_CONCURRENT_DOWNLOADS}
         </p>
         {tasks.length === 0 && (
-          <div className="py-10 text-center text-sm text-faint">
-            暂无下载任务。在播放页点击「下载本集」开始。
-          </div>
+          <div className="py-10 text-center text-sm text-faint">暂无下载任务</div>
         )}
         {tasks.map((t) => (
           <div key={t.id} className="card p-3 space-y-2">

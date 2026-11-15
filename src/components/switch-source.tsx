@@ -158,7 +158,7 @@ export function SwitchSourceModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentTitle, store.yellowFilter]);
 
-  const { qualities, probing, progress, probe, retry } = useQualityProbe(sources);
+  const { qualities, progress, probe, retry } = useQualityProbe(sources);
 
   // 测速完成后补探画质：用户正是在这里比较来源，「快」和「清楚」要能一起看。
   // 只探测速成功的候选——详情接口都打不通的源，再花 8s 探 m3u8 没有意义。
@@ -309,7 +309,7 @@ export function SwitchSourceModal({
         {/* 内容区独占剩余高度并自己滚动：标题与拖拽条始终可见，不随内容滚走 */}
         <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin">
         {phase !== 'done' ? (
-          <LoadingState label={phase === 'searching' ? '搜索各资源中...' : '测速中...'} />
+          <LoadingState />
         ) : sorted.length === 0 ? (
           <EmptyState variant="plain" title="其他点播源未找到同名资源" />
         ) : (
@@ -398,10 +398,7 @@ export function SwitchSourceModal({
                       <h3 className="text-sm font-semibold text-content truncate" title={c.source.name}>
                         {c.source.name}
                       </h3>
-                      <QualityBadge entry={qualities[qKey]} loading={probing[qKey]} onRetry={() => retry([c.result])} />
-                      {isCurrent && (
-                        <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-accent/15 text-accent">播放中</span>
-                      )}
+                      <QualityBadge entry={qualities[qKey]} />
                     </div>
                     <div className="mt-2 grid grid-cols-2 gap-2 sm:max-w-[16rem]">
                       <div className="rounded-md bg-chip px-2 py-1.5">

@@ -320,7 +320,7 @@ function WatchContent() {
         <div className="text-center max-w-md">
           <h1 className="text-content font-medium mb-2">点播源不存在</h1>
           <p className="text-sm text-muted mb-4">
-            该视频来自点播源「{sourceKey}」，但它可能已被删除。请在设置中重新添加后重试。
+            点播源「{sourceKey}」不存在或已被删除，请到设置中重新添加。
           </p>
           <Link href="/" className="btn-primary">返回首页</Link>
         </div>
@@ -459,16 +459,13 @@ function WatchContent() {
           {/* 剧集侧栏 */}
           <aside className="bg-surface-raised rounded-lg p-3 h-fit">
             <div className="flex items-center justify-between gap-2 mb-2.5">
-              <h2 className="text-sm font-semibold text-content">
-                剧集列表{episodes.length > 0 && `（${episodes.length}）`}
-              </h2>
+              <h2 className="text-sm font-semibold text-content">剧集列表</h2>
               {/* 排列开关紧贴它所作用的列表：放在这里才看得出它管的是这一栏的顺序 */}
               {episodes.length > 1 && (
                 <button
                   className="btn-ghost btn-sm shrink-0"
                   onClick={() => setReversed((v) => !v)}
                   aria-label={reversed ? '切换为正序排列' : '切换为倒序排列'}
-                  title="调整剧集列表的排列顺序"
                 >
                   <Icon
                     name="arrowDown"
@@ -496,9 +493,6 @@ function WatchContent() {
                 ))}
               </div>
             )}
-            <p className="hidden md:block text-[10px] text-faint mt-3 leading-relaxed">
-              快捷键：空格 播放/暂停 · ←/→ 快退/快进 5s · ↑/↓ 音量 · F 全屏 · Alt+←/→ 切换集数
-            </p>
           </aside>
         </div>
       </main>

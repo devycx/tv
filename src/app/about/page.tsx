@@ -10,8 +10,7 @@ export default function AboutPage() {
         <section>
           <h1 className="text-xl font-bold text-content mb-3">关于 夜幕影视</h1>
           <p className="text-sm text-muted leading-relaxed">
-            夜幕影视 是一个私人影视聚合平台。输入片名即可在多个点播源中聚合搜索，
-            无内嵌广告、不存储任何视频文件。所有播放内容均来自第三方公开接口，仅供个人学习使用。
+            私人影视聚合平台：输入片名，在多个公开点播源中聚合搜索与播放。
           </p>
         </section>
 
@@ -28,18 +27,16 @@ export default function AboutPage() {
         </section>
 
         <section>
-          <h2 className="text-base font-semibold text-content mb-2.5">隐私与数据</h2>
+          <h2 className="text-base font-semibold text-content mb-2.5">数据</h2>
           <p className="text-sm text-muted leading-relaxed">
-            你的搜索历史、观看进度等数据仅保存在本设备浏览器中（IndexedDB），不会上传到服务器。
-            聚合搜索请求由服务端代理转发，第三方数据源不会看到你的 IP 地址。
+            搜索历史与观看进度仅保存在本机浏览器；聚合搜索由服务端转发，源站看不到你的 IP。
           </p>
         </section>
 
         <section>
           <h2 className="text-base font-semibold text-content mb-2.5">免责声明</h2>
           <p className="text-sm text-faint leading-relaxed">
-            本项目不存储、不制作任何视频内容，仅提供第三方公开接口的聚合与播放能力。
-            请尊重版权，所有内容的合法性由对应数据源负责。
+            本站不存储、不制作视频，内容均来自第三方公开接口。
           </p>
         </section>
       </main>

@@ -325,7 +325,7 @@ function VodSourcesPanel() {
         <EmptyState
           icon="link"
           title="还没有添加任何点播源"
-          description="添加一个 Apple CMS 采集站 API 即可开始搜索影片；也可到「数据源订阅」一次导入点播源与直播源"
+          description="添加 Apple CMS 采集站 API；也可用「数据源订阅」一次导入"
           action={
             <button className="btn-primary btn-sm" onClick={() => setEditing('__new__')}>
               添加第一个点播源
@@ -512,7 +512,7 @@ function VodSourceRow({
             {fromSubscription && (
               <span
                 className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent align-middle"
-                title="来自数据源订阅，重新同步时此源的名称/地址会以订阅内容为准"
+                title="来自数据源订阅"
               >
                 订阅
               </span>
@@ -524,7 +524,7 @@ function VodSourceRow({
         <TestBadge
           state={testState}
           onTest={onTest}
-          title="测试可用性（搜索耗时与结果量）"
+          title="测速"
           badgeWhenOk={({ ms }) => `✓ ${ms}ms`}
         />
         {!isEnv &&
@@ -535,7 +535,7 @@ function VodSourceRow({
                 className="rounded-md p-2 text-muted/30 cursor-not-allowed shrink-0"
                 disabled
                 aria-label="订阅源不可单独编辑"
-                title="该源来自订阅，修改会在下次同步时被覆盖；请修改远端订阅后重新同步"
+                title="该源来自订阅，修改会在下次同步时被覆盖"
               >
                 <Icon name="edit" className="w-4 h-4" />
               </button>
@@ -543,7 +543,7 @@ function VodSourceRow({
                 className="rounded-md p-2 text-muted/30 cursor-not-allowed shrink-0"
                 disabled
                 aria-label="订阅源不可单独删除"
-                title="该源来自订阅，单独删除会在下次同步时恢复；请到「数据源订阅」删除整个订阅"
+                title="该源来自订阅，请删除整个订阅"
               >
                 <Icon name="trash" className="w-4 h-4" />
               </button>
@@ -562,7 +562,7 @@ function VodSourceRow({
                 className="rounded-md p-2 text-muted transition-colors hover:bg-hover hover:text-danger shrink-0"
                 onClick={remove}
                 aria-label="删除"
-                title="移除（可在提示中撤销）"
+                title="移除"
               >
                 <Icon name="trash" className="w-4 h-4" />
               </button>
@@ -586,31 +586,30 @@ function PlaybackPanel() {
       <div className="space-y-3">
         <ToggleRow
           label="广告切片过滤"
-          description="剔除播放列表中的广告分片段落（按分片 URL 特征、片头插入与长片间超短中插识别，不动 DISCONTINUITY 时间轴）"
+          description="按分片特征剔除广告片段"
           checked={store.adFilter}
           onChange={(v) => store.updateSettings({ adFilter: v })}
         />
         <ToggleRow
           label="自动连播"
-          description="单集播放结束后自动播放下一集"
           checked={store.autoplayNext}
           onChange={(v) => store.updateSettings({ autoplayNext: v })}
         />
         <ToggleRow
           label="自动跳过片段"
-          description="命中片头/中段标记时跳到片段末尾，命中片尾标记时结束本集（是否连播下一集由「自动连播」决定）；关闭后三类都只显示跳过按钮（标记在播放页「跳过标记」中设置）"
+          description="命中片段自动跳过；关闭后只显示跳过按钮"
           checked={store.autoSkipSegments}
           onChange={(v) => store.updateSettings({ autoSkipSegments: v })}
         />
         <ToggleRow
           label="音量增强"
-          description="音量拉到 100% 仍偏小时用：经 Web Audio 增益链把输出再放大约 1.8 倍并软限幅防破音。增益与音量滑块相乘，会让所有档位的响度整体抬高，故默认关闭。跨域直连且未开启 CORS 的直播流受浏览器限制不生效（走代理或 hls.js 的源正常）"
+          description="适合音量偏小的片源（约 +1.8 倍）"
           checked={store.volumeBoost}
           onChange={(v) => store.updateSettings({ volumeBoost: v })}
         />
         <ToggleRow
           label="底部细进度条"
-          description="控制栏收起后，在画面底边常驻一条 3px 进度线，不开控件也能瞄一眼进度。关闭后鼠标移开即完全隐藏（全屏观影不留任何控件），需要看进度时把鼠标移回画面即可"
+          description="控制栏收起时，画面底边常驻一条进度线"
           checked={store.miniProgressBar}
           onChange={(v) => store.updateSettings({ miniProgressBar: v })}
         />
@@ -620,7 +619,7 @@ function PlaybackPanel() {
         <div className="flex items-center justify-between gap-3 pt-3 mt-3 border-t border-line">
           <div className="min-w-0">
             <div className="text-sm text-content">跳过片段标记</div>
-            <div className="text-xs text-faint">已记录 {markCount} 部；在播放页「跳过标记」中设置，可逐剧关闭</div>
+            <div className="text-xs text-faint">已记录 {markCount} 部</div>
           </div>
           <button className="btn-ghost btn-sm shrink-0" onClick={() => setClearMarksOpen(true)}>
             清除全部
@@ -632,7 +631,7 @@ function PlaybackPanel() {
         open={clearMarksOpen}
         danger
         title="清除全部跳过片段？"
-        message={`将删除已记录的 ${markCount} 部剧的跳过片段，之后播放不再自动跳过；可重新在播放页标记。`}
+        message={`将删除 ${markCount} 部剧的跳过片段，清除后不再自动跳过。`}
         confirmLabel="清除全部"
         onCancel={() => setClearMarksOpen(false)}
         onConfirm={() => {
@@ -676,7 +675,7 @@ function VideoCachePanel() {
     <div className="space-y-3 pt-3 mt-3 border-t border-line">
       <ToggleRow
         label="片段本地缓存"
-        description="暂停或观看时把后续分片缓存到浏览器本地，二次播放与断网卡顿时直接命中（存储于本机，不计入配置导出）"
+        description="把播放过的分片缓存在本机"
         checked={enabled}
         onChange={(v) => {
           const next = saveCacheSettings({ enabled: v });
@@ -685,7 +684,7 @@ function VideoCachePanel() {
       />
       <ToggleRow
         label="预取下一集"
-        description="当前集预取完成后，提前缓存下一集前 7 分钟：自动连播几乎秒开，但只看一集就离开时这部分流量是白费的。手机/省流环境始终不预取。"
+        description="提前缓存下一集前 7 分钟；手机/省流不预取"
         checked={prefetchNext}
         onChange={(v) => {
           const next = saveCacheSettings({ prefetchNextEpisode: v });
@@ -713,10 +712,10 @@ function VideoCachePanel() {
       {/* 手机浏览器会把 Cache Storage / IndexedDB 一起显示成「Cookie 及站点数据」，
           这里直接给出浏览器视角的真实占用，避免用户误以为站点在偷偷存 cookie */}
       <p className="text-[11px] text-faint leading-relaxed">
-        浏览器里本站数据：{formatBytes(estimate.usage)}
+        本站数据 {formatBytes(estimate.usage)}
         {estimate.quota > 0 && <> / 配额 {formatBytes(estimate.quota)}</>}
-        {estimate.persisted ? ' · 已申请持久化' : ''} · 缓存上限 {formatBytes(cap)}
-        {isConstrainedCacheProfile() ? '（手机/省流自动收紧）' : ''}
+        {estimate.persisted ? ' · 已持久化' : ''} · 上限 {formatBytes(cap)}
+        {isConstrainedCacheProfile() ? '（手机/省流收紧）' : ''}
       </p>
     </div>
   );
@@ -727,8 +726,8 @@ function ImagePanel() {
   // 旧版「内置图片代理」已移除：持久化里的 'proxy' 一律按直连展示与处理
   const mode = store.imageProxyMode === 'custom' ? 'custom' : 'direct';
   const description: Record<'direct' | 'custom', string> = {
-    direct: '浏览器直连；豆瓣封面自动走公共镜像（cmliussss），封面流量不经本站',
-    custom: '使用你填写的模板转发封面图（第三方服务，不经本站）',
+    direct: '浏览器直连；豆瓣封面走公共镜像',
+    custom: '用你的模板转发封面图',
   };
   return (
     <section>
@@ -787,13 +786,12 @@ function HomePanel() {
       <div className="space-y-3">
         <ToggleRow
           label="成人内容过滤"
-          description="过滤“伦理片”等分类的结果"
+          description="过滤伦理片等分类"
           checked={store.yellowFilter}
           onChange={(v) => store.updateSettings({ yellowFilter: v })}
         />
         <ToggleRow
           label="首页推荐"
-          description="在首页展示推荐内容"
           checked={store.doubanEnabled}
           onChange={(v) => store.updateSettings({ doubanEnabled: v })}
         />
@@ -1030,8 +1028,8 @@ function SourceSubscriptions() {
             </button>
           </div>
           <p className="mt-1.5 text-[11px] text-faint leading-relaxed">
-            已发布到 {published.provider}（{published.sources} 个点播源、{published.liveSources} 个直播源）。
-            链接内容公开可读，粘贴板也可能随时清理——长期使用建议自行托管。
+            已发布到 {published.provider}（{published.sources} 点播 / {published.liveSources} 直播）。
+            链接公开可读，粘贴板随时可能清理。
           </p>
         </div>
       )}
@@ -1054,12 +1052,7 @@ function SourceSubscriptions() {
           {syncing.size > 0 ? '同步中…' : '订阅'}
         </button>
       </div>
-      {store.subscriptions.length === 0 ? (
-        <p className="text-xs text-faint">
-          一份订阅可同时下发点播源与直播源，支持源列表 JSON 与 TVBOX 配置（仅导入可直接使用的接口，Spider 类站点自动跳过）；
-          「导出数据源」生成的 JSON 托管到任意 URL 即可分享给他人订阅。
-        </p>
-      ) : (
+      {store.subscriptions.length === 0 ? null : (
         <ul className="space-y-2">
           {store.subscriptions.map((sub) => {
             const vodCount = store.customAPIs.filter((a) => keyBelongsToSubscription(a.key, subKeyPrefix(sub.url))).length;
@@ -1103,7 +1096,7 @@ function SourceSubscriptions() {
                         </span>
                       ) : sub.lastStatus === 'ok' && sub.lastCounts ? (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-success/15 text-success">
-                          上次导入 {sub.lastCounts.vod} 点播 / {sub.lastCounts.live} 直播
+                          同步成功
                         </span>
                       ) : null}
                     </div>
@@ -1139,9 +1132,7 @@ function SourceSubscriptions() {
                     onChange={(v) => store.setSubscriptionEnabled(sub.url, v)}
                     label={sub.enabled === false ? '启用该订阅' : '停用该订阅'}
                     title={
-                      sub.enabled === false
-                        ? '当前已停用（其源不参与搜索），点击启用'
-                        : '停用后该订阅下的源暂不参与搜索；已导入的数据与各源勾选状态都保留'
+                      sub.enabled === false ? '已停用，点击启用' : '停用该订阅（源保留）'
                     }
                   />
                   <button
@@ -1149,7 +1140,7 @@ function SourceSubscriptions() {
                     disabled={isSyncing}
                     onClick={() => sync(sub.url)}
                     aria-label="重新同步"
-                    title="重新同步（以远端列表为准，整体替换该订阅名下的点播源与直播源）"
+                    title="以远端列表为准重新同步"
                   >
                     {isSyncing ? (
                       <Spinner size="sm" />
@@ -1161,7 +1152,7 @@ function SourceSubscriptions() {
                     className="rounded-md p-2 shrink-0 text-muted transition-colors hover:bg-hover hover:text-danger"
                     onClick={() => setPendingDelete(sub.url)}
                     aria-label="删除订阅"
-                    title="删除订阅及其导入的点播源与直播源（保留收藏的频道）"
+                    title="删除订阅及其导入的源"
                   >
                     <Icon name="trash" className="w-4 h-4" />
                   </button>
@@ -1252,7 +1243,7 @@ function ConfigIoPanel() {
 
   return (
     <section>
-      <SectionTitle title="配置导入导出" hint="导出/导入包含数据源、订阅与偏好设置的整机配置" />
+      <SectionTitle title="配置导入导出" hint="含数据源、订阅与偏好设置" />
       <div className="flex gap-2">
         <button className="btn-ghost flex-1 text-xs" onClick={doExport}>
           导出配置
@@ -1396,7 +1387,7 @@ function SourceForm({
           checked={isAdult}
           onChange={(e) => setIsAdult(e.target.checked)}
         />
-        标记为成人内容源（受成人过滤控制）
+        标记为成人源
       </label>
       <div className="flex gap-2 justify-end">
         <button className="btn-ghost btn-sm" onClick={onCancel}>

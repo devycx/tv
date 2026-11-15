@@ -42,7 +42,7 @@ export function AggregatedCard({
   const multi = group.items.length > 1;
   const adult = useMemo(() => group.items.some((i) => i.isAdult), [group.items]);
 
-  const { qualities, probing, progress, prime, probe, probeQueued, retry } = useQualityProbe(sources);
+  const { qualities, progress, prime, probe, probeQueued } = useQualityProbe(sources);
 
   // 收起态就要有结论：先读缓存（展开时才真正探测）。
   // 依赖 group.key 而不是 items 数组——搜索页每次重渲染都会重建分组对象，
@@ -96,12 +96,6 @@ export function AggregatedCard({
   // 并列最高时只强调排在第一的那一行：三个源里框两个等于没有推荐
   const firstBest = sortedItems.find((item) => bestHeight > 0 && heightOf(item) === bestHeight);
   const bestKey = firstBest ? qualityKey(firstBest.sourceKey, firstBest.vodId) : undefined;
-  // 各源集数一致时（常见：同剧多源同步更新）只在表头说一次，逐行不再重复
-  const remarksList = sortedItems.map((item) => compactRemarks(item.remarks));
-  const sharedRemarks =
-    remarksList.length > 0 && remarksList.every((label) => label && label === remarksList[0])
-      ? remarksList[0]
-      : undefined;
 
   const activate = () => {
     if (multi) {
@@ -187,15 +181,9 @@ export function AggregatedCard({
               {group.year && <span className="tag bg-purple-500/15 text-purple-600 dark:text-purple-300">{group.year}</span>}
               {adult && <span className="tag bg-pink-500/15 text-pink-600 dark:text-pink-400">18🈲</span>}
               {/* 单源卡片没有展开列表，画质只能在这里露出；失败态可点重试 */}
-              {singleKey && (
-                <QualityBadge
-                  entry={qualities[singleKey]}
-                  loading={probing[singleKey]}
-                  onRetry={singleItem ? () => retry([singleItem]) : undefined}
-                />
-              )}
+              {singleKey && <QualityBadge entry={qualities[singleKey]} />}
             </div>
-            <p className="text-xs text-muted line-clamp-2 mb-2">{group.remarks || '暂无介绍'}</p>
+            {group.remarks && <p className="text-xs text-muted line-clamp-2 mb-2">{group.remarks}</p>}
           </div>
           <div className="flex items-center justify-between gap-1.5 mt-auto pt-1.5 border-t border-line">
             <span className="tag bg-chip text-muted truncate max-w-[80%]">
@@ -203,15 +191,11 @@ export function AggregatedCard({
             </span>
             {multi && (
               <span className="flex items-center gap-1 shrink-0">
-                {/* 收起态先给结论：最高画质比「N 个来源」更影响要不要点开 */}
-                {progress.best && (
+                {/* 收起态先给结论；展开后表头已有「最高 X」，这里不再重复 */}
+                {progress.best && !expanded && (
                   <span
                     className="tag bg-accent/15 text-accent font-medium"
-                    title={
-                      progress.known < progress.total
-                        ? `已探到 / 实测的最高画质（${progress.known}/${progress.total} 个来源已有结论）`
-                        : '已探到 / 实测的最高画质'
-                    }
+                    title={`最高画质（${progress.known}/${progress.total}）`}
                   >
                     {progress.best}
                   </span>
@@ -233,24 +217,7 @@ export function AggregatedCard({
 
       {multi && expanded && (
         <div className="border-t border-line p-2.5 animate-fade-in">
-          <div className="flex items-baseline justify-between gap-2 mb-1.5">
-            <p className="text-[10px] text-faint">
-              选择来源
-              {sharedRemarks ? ` · 均 ${sharedRemarks}` : ''}
-            </p>
-            {progress.total > 0 &&
-              (progress.done < progress.total ? (
-                <p className="text-[10px] text-faint tabular-nums">
-                  探测中 {progress.done}/{progress.total}
-                </p>
-              ) : (
-                // 探完后「3/3」已经没有信息量，换成用户真正要的结论
-                <p className="text-[10px] text-accent tabular-nums">
-                  {progress.best ? `最高 ${progress.best}` : '未能探到画质'}
-                  {progress.failed > 0 ? ` · ${progress.failed} 源未探到` : ''}
-                </p>
-              ))}
-          </div>
+          {/* 不加表头：来源行本身就是内容，画质/集数已逐行显示，表头只会重复 */}
           {/*
             单列全宽行：两列在卡片实际宽度（约 330px）下每列只剩 148px，
             源名必截断，且源数为奇数时必然留半行空。一行内「源名 / 画质 / 集数 / 播放」
@@ -285,7 +252,7 @@ export function AggregatedCard({
                     e.stopPropagation();
                     onOpen(item);
                   }}
-                  aria-label={`使用 ${item.sourceName} 播放${label && !sharedRemarks ? `，${label}` : ''}`}
+                  aria-label={`使用 ${item.sourceName} 播放${label ? `，${label}` : ''}`}
                 >
                   <span className="font-medium text-content truncate flex-1 min-w-0">{item.sourceName}</span>
                   {/* 最高画质来源给明确文字标记：边框高亮在窄屏上不够显眼 */}
@@ -294,15 +261,10 @@ export function AggregatedCard({
                   )}
                   <QualityBadge
                     entry={qualities[itemKey]}
-                    loading={probing[itemKey]}
-                    onRetry={() => retry([item])}
                     // 定宽 + 等宽数字：三行的 360P / 540P / 1080P 左缘对齐，不随字符数抖动
                     className="min-w-[3.25rem] justify-center tabular-nums"
                   />
-                  {/* 集数一致时已提到表头，逐行不再重复 */}
-                  {!sharedRemarks && label && (
-                    <span className="text-faint shrink-0 tabular-nums">{label}</span>
-                  )}
+                  {label && <span className="text-faint shrink-0 tabular-nums">{label}</span>}
                   <svg
                     className="w-3.5 h-3.5 text-accent shrink-0 transition-transform group-hover:translate-x-0.5"
                     fill="currentColor"

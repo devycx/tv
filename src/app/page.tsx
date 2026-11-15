@@ -195,11 +195,6 @@ function HomeContent() {
     () => searchQuery.data?.list ?? (isSearching ? streamedList : []),
     [searchQuery.data, isSearching, streamedList]
   );
-  const failures =
-    searchQuery.data?.failures ??
-    streamedOutcomes
-      .filter((o) => !o.ok)
-      .map((o) => ({ sourceKey: o.sourceKey, error: o.error || '请求失败', timedOut: o.timedOut }));
   // 封面视觉指纹：浏览器经 /api/cover 取图后算 dHash，用于「同一张封面」聚合。
   // 指纹还没算完的条目先不参与聚合，避免先按片名分组、随后又跳变。
   const coverUrls = useMemo(
@@ -441,28 +436,16 @@ function HomeContent() {
                 “<span className="text-content">{urlQuery}</span>” 的搜索结果
                 {isSearching ? (
                   <span className="text-faint">
-                    （已就绪 {streamedOutcomes.length}/{selectedSources.length} 个源…）
+                    （{streamedOutcomes.length}/{selectedSources.length} 源已完成）
                   </span>
                 ) : (
                   searchQuery.data && (
                     <span className="text-faint">
-                      {pendingCovers > 0 ? (
-                        <>
-                          （已聚合 {groups.length} 部影片 · {visibleList.length} 条来源结果…）
-                        </>
-                      ) : filtersActive ? (
-                        <>
-                          （筛选出 {filteredGroups.length} 部影片 · {filteredSourceCount} 条来源结果 / 共{' '}
-                          {groups.length} 部 · {visibleList.length} 条
-                          {failures.length > 0 ? `，${failures.length} 个源失败` : ''}）
-                        </>
-                      ) : (
-                        <>
-                          （{groups.length} 部影片 · {visibleList.length} 条来源结果
-                          {visibleList.length > groups.length ? '，同封面已聚合' : ''}
-                          {failures.length > 0 ? `，${failures.length} 个源失败` : ''}）
-                        </>
-                      )}
+                      {pendingCovers > 0
+                        ? '（识别封面中…）'
+                        : filtersActive
+                          ? `（筛选出 ${filteredGroups.length} 部 · ${filteredSourceCount} 条 / 共 ${groups.length} 部 · ${visibleList.length} 条）`
+                          : `（${groups.length} 部 · ${visibleList.length} 条）`}
                     </span>
                   )
                 )}
@@ -478,41 +461,19 @@ function HomeContent() {
               )}
             </div>
 
-            {pendingCovers > 0 && (
-              <p className="mb-3 text-xs text-faint" role="status">
-                正在识别封面并按封面聚合（还有 {pendingCovers} 张…）
-              </p>
-            )}
-
             {hiddenCovers > 0 && (
-              <p className="mb-3 text-xs text-faint">
-                封面取图失败，已隐藏 {hiddenCovers} 条来源
-              </p>
-            )}
-
-            {failures.length > 0 && (
-              <div className="mb-3 text-xs bg-chip rounded-lg px-3 py-2 flex flex-wrap gap-x-3 gap-y-1">
-                <span className="text-faint">{isSearching ? '以下源暂时无响应：' : '部分点播源请求失败：'}</span>
-                {failures.map((f) => (
-                  <span key={f.sourceKey} className={f.timedOut ? 'text-warning' : 'text-faint'}>
-                    {f.timedOut ? '⏱' : '✗'} {sourceName(f.sourceKey)}
-                    {f.timedOut ? ' 超时' : ''}
-                  </span>
-                ))}
-              </div>
+              <p className="mb-3 text-xs text-faint">已隐藏 {hiddenCovers} 条（封面取图失败）</p>
             )}
 
             {disabledSources.length > 0 && (
               <div className="mb-3 text-xs text-faint bg-chip rounded-lg px-3 py-2">
-                {disabledSources.length} 个源因连续超时/失败已暂停参与搜索（临时停用的到期自动恢复，
-                长期停用的需在设置中手动恢复）：{disabledSources.map((key) => sourceName(key)).join('、')}
+                已停用：{disabledSources.map((key) => sourceName(key)).join('、')}
               </div>
             )}
 
             {offSubscriptionSources.length > 0 && (
               <div className="mb-3 text-xs text-faint bg-chip rounded-lg px-3 py-2">
-                {offSubscriptionSources.length} 个源所属的订阅已停用，未参与本次搜索（在设置 → 数据源订阅中可重新启用）：
-                {offSubscriptionSources.map((key) => sourceName(key)).join('、')}
+                订阅已停用：{offSubscriptionSources.map((key) => sourceName(key)).join('、')}
               </div>
             )}
 
@@ -535,9 +496,9 @@ function HomeContent() {
                   {/* 提示条贴着「加载更多」：翻页的用户就在这个位置，放在列表顶部等于看不见 */}
                   {orderChanged && (
                     <div className="mt-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 rounded-lg bg-chip px-3 py-2 text-xs">
-                      <span className="text-muted">搜索结果已更新，当前保留的是你翻页时的顺序</span>
+                      <span className="text-muted">结果已更新（保留翻页顺序）</span>
                       <button className="btn-ghost btn-sm" onClick={applyResort}>
-                        按相关性重新排序
+                        按相关性排序
                       </button>
                     </div>
                   )}
@@ -555,7 +516,6 @@ function HomeContent() {
                 <EmptyState
                   icon="search"
                   title="没有符合筛选条件的结果"
-                  description="当前筛选条件下没有影片，清除筛选后可查看全部结果。"
                   action={
                     <button className="btn-ghost btn-sm" onClick={clearFilters}>
                       清除筛选
@@ -570,7 +530,6 @@ function HomeContent() {
               <EmptyState
                 icon="search"
                 title="没有找到匹配的结果"
-                description="请尝试其他关键词或更换点播源"
                 className="!py-16"
               />
             )}
@@ -618,15 +577,14 @@ function ResultsSkeleton() {
 function NoSourceGuide({ hasSources = false }: { hasSources?: boolean }) {
   return (
     <div className="border border-dashed border-line rounded-xl p-10 text-center max-w-lg mx-auto">
-      <h3 className="text-content font-medium mb-2">{hasSources ? '尚未勾选点播源' : '先添加一个点播源'}</h3>
+      <h3 className="text-content font-medium mb-2">{hasSources ? '尚未勾选点播源' : '还没有点播源'}</h3>
       <p className="text-sm text-muted leading-relaxed">
         {hasSources ? (
-          <>点击右上角「设置」，勾选要参与搜索的点播源后重新搜索。</>
+          <>到「设置 → 点播源」勾选后重新搜索。</>
         ) : (
           <>
-            夜幕影视 不内置任何采集站。点击右上角「设置 → 添加 API」，填入一个
-            Apple CMS 采集站地址（如 <code className="text-accent text-xs">https://example.com/api.php/provide/vod</code>），
-            勾选后即可开始搜索。
+            到「设置 → 添加 API」填入 Apple CMS 接口地址，如{' '}
+            <code className="text-accent text-xs">https://example.com/api.php/provide/vod</code>。
           </>
         )}
       </p>

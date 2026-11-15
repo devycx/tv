@@ -413,7 +413,7 @@ export function LiveChannelList({
       <div className="px-3 py-2 shrink-0 flex items-center gap-1.5">
         <input
           className="input w-full !py-1.5 text-xs"
-          placeholder="搜索频道 / tvg-id / 分组..."
+          placeholder="搜索频道"
           value={keyword}
           maxLength={60}
           onChange={(e) => setKeyword(e.target.value)}
@@ -463,7 +463,7 @@ export function LiveChannelList({
             className="shrink-0 px-2 py-0.5 rounded-full text-[10px] whitespace-nowrap transition-colors border bg-chip text-muted border-line hover:text-content hover:bg-hover disabled:opacity-50 disabled:hover:bg-chip"
             onClick={probeFiltered}
             disabled={filtered.length === 0}
-            title="检测当前列表里的频道（进页面不会自动跑）"
+            title="检测当前列表的频道"
           >
             测活本列表
           </button>
@@ -503,9 +503,9 @@ export function LiveChannelList({
                   : 'bg-chip text-muted border-line hover:text-content hover:bg-hover'
               )}
               onClick={() => setAliveFilter((v) => (v === 'green' ? 'auto' : 'green'))}
-              title="只看分片级验证通过的频道"
+              title="只看已验证的频道"
             >
-              绿点 {aliveCounts.green}
+              通过 {aliveCounts.green}
             </button>
             <button
               className={cn(
@@ -515,7 +515,7 @@ export function LiveChannelList({
                   : 'bg-chip text-muted border-line hover:text-content hover:bg-hover'
               )}
               onClick={() => setAliveFilter((v) => (v === 'ok' ? 'auto' : 'ok'))}
-              title="看所有验证通过（含直链/清单级弱验证）的频道"
+              title="看所有验证通过的频道"
             >
               可播 {aliveCounts.ok}
             </button>
@@ -567,16 +567,14 @@ export function LiveChannelList({
             className="!py-10"
             title={
               view === 'fav'
-                ? '暂无收藏频道，点击频道右侧星标即可收藏'
+                ? '暂无收藏'
                 : view === 'recent'
                   ? '暂无观看记录'
                   : channels.length === 0
                     ? '暂无频道，请先在设置中添加直播源'
                     : aliveFilter === 'auto' && autoHiddenCount > 0
-                      ? `已隐藏 ${autoHiddenCount} 个不可用频道，可点「显示全部」查看`
-                      : aliveFilter !== 'off' && hasProbeForList
-                        ? '没有匹配该可用性的频道，可切换回自动或选择全部'
-                        : '没有匹配的频道'
+                      ? '没有可用频道'
+                      : '没有匹配的频道'
             }
           />
         ) : (
@@ -685,11 +683,7 @@ const ChannelRow = memo(function ChannelRow({
   const amber = Boolean(probe && (weakLevel || (!probe.ok && probe.timedOut) || slow));
   const dotClass = amber ? 'bg-warning' : probe?.ok ? 'bg-success' : 'bg-danger';
   const levelText =
-    probe?.level === 'segment'
-      ? '分片可用'
-      : probe?.level === 'head'
-        ? '直链可达（未验证可播性）'
-        : '播放列表可达（无分片，未验证可播）';
+    probe?.level === 'segment' ? '分片可用' : probe?.level === 'head' ? '直链可达' : '列表可达';
   const speedText =
     probe?.kbps != null && probe.level === 'segment'
       ? ` · ≈${probe.kbps >= 1000 ? `${(probe.kbps / 1000).toFixed(1)}Mbps` : `${probe.kbps}kbps`}`
@@ -756,7 +750,7 @@ const ChannelRow = memo(function ChannelRow({
             {sourceCount > 1 && (
               <span
                 className="shrink-0 rounded-full bg-chip px-1.5 text-[10px] text-faint"
-                title={`${sourceCount} 个来源，点击自动挑可用源`}
+                title={`${sourceCount} 个来源`}
               >
                 {sourceCount} 源
               </span>

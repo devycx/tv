@@ -66,7 +66,8 @@ export function ToggleRow({
   onChange,
 }: {
   label: string;
-  description: string;
+  /** 可选：只在标签本身说不清取舍时才写一句 */
+  description?: string;
   checked: boolean;
   onChange: (v: boolean) => void;
 }) {
@@ -74,7 +75,7 @@ export function ToggleRow({
     <div className="flex items-center justify-between gap-4 py-0.5">
       <div className="min-w-0">
         <div className="text-sm text-content">{label}</div>
-        <div className="text-xs text-faint">{description}</div>
+        {description && <div className="text-xs text-faint">{description}</div>}
       </div>
       <Switch checked={checked} onChange={onChange} label={label} />
     </div>
@@ -230,7 +231,7 @@ export function HealthBadge({ sourceKey }: { sourceKey: string }) {
     return (
       <span
         className="text-[10px] px-1.5 py-0.5 rounded bg-warning/15 text-warning shrink-0"
-        title="所属订阅已被停用，该源暂不参与搜索；到「数据源订阅」重新启用即可"
+        title="所属订阅已停用"
       >
         订阅已停用
       </span>
@@ -253,8 +254,8 @@ export function HealthBadge({ sourceKey }: { sourceKey: string }) {
           )}
           title={
             permanent
-              ? `已第 ${entry.disableCount} 次被自动停用，暂停参与搜索；点「恢复」重新启用`
-              : `连续 ${entry.failStreak} 次超时/失败，${remainText}后自动恢复`
+              ? `已第 ${entry.disableCount} 次被自动停用`
+              : `连续 ${entry.failStreak} 次失败，${remainText}后自动恢复`
           }
         >
           <Icon name="clock" className="w-3 h-3" />
@@ -263,7 +264,7 @@ export function HealthBadge({ sourceKey }: { sourceKey: string }) {
         <button
           className="text-[10px] px-1.5 py-0.5 rounded text-muted hover:text-accent hover:bg-hover transition-colors"
           aria-label="恢复此源"
-          title="清除健康度记录，立即恢复参与搜索"
+          title="立即恢复参与搜索"
           onClick={() => {
             useAppStore.getState().clearSourceHealth(sourceKey);
             toast('已恢复，下次搜索重新参与', 'success');

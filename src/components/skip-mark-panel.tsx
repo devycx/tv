@@ -284,9 +284,7 @@ export function SkipMarkPanel({
             <span className="text-muted"> / {formatTime(clock.duration)}</span>
             {clock.paused && <span className="ml-1 text-muted">· 已暂停</span>}
           </p>
-          <p className="mt-1 text-[11px] text-muted">
-            已标记 {segments.length} 段 · 按剧名对本剧各集与同名资源生效
-          </p>
+          <p className="mt-1 text-[11px] text-muted">已标记 {segments.length} 段</p>
         </div>
         <label
           className={cn(
@@ -308,8 +306,7 @@ export function SkipMarkPanel({
 
       {segments.length === 0 ? (
         <p className="mt-3 rounded-lg border border-dashed border-line px-3 py-3 text-xs leading-relaxed text-muted">
-          尚未标记跳过片段。播放到目标位置后，用下方按钮记录，或使用快捷键：
-          Shift+I 片头结束 / Shift+O 片尾开始 / Shift+S · Shift+E 中段区间。
+          播放到目标位置后点下方按钮记录。快捷键：Shift+I 片头 / Shift+O 片尾 / Shift+S 起点 · Shift+E 终点。
         </p>
       ) : (
         <ul className="mt-3 space-y-2">
@@ -347,7 +344,7 @@ export function SkipMarkPanel({
                   <button
                     type="button"
                     className="btn-ghost btn-sm"
-                    title="跳到片段起点，验证起点是否准确"
+                    title="跳到片段起点"
                     onClick={() => jump(seg, 'start')}
                   >
                     起点
@@ -356,7 +353,7 @@ export function SkipMarkPanel({
                     <button
                       type="button"
                       className="btn-ghost btn-sm"
-                      title="跳到终点前 1 秒，验证是否会切掉正片或漏掉一段"
+                      title="跳到终点前 1 秒"
                       onClick={() => jump(seg, 'end')}
                     >
                       终点
@@ -394,10 +391,7 @@ export function SkipMarkPanel({
           </span>
         </div>
         <p className="mt-1 text-[11px] leading-relaxed text-muted">
-          {autoSkipSegments
-            ? '命中片头/中段自动跳段，片尾结束本集（是否连播看「自动连播」）。'
-            : '命中片段只显示按钮，不自动跳。'}
-          影响所有剧，在「设置 → 偏好设置」修改。
+          {autoSkipSegments ? '命中片头/中段自动跳，片尾结束本集（连播看「自动连播」）' : '命中片段只显示按钮'}
         </p>
       </div>
 
@@ -413,7 +407,6 @@ export function SkipMarkPanel({
             {SEGMENT_LABELS[t]}
           </span>
         ))}
-        <span className="w-full">跳过时播放器顶部会出现「撤销」，可回退刚跳过的那一次。</span>
       </div>
     </Drawer>
   );

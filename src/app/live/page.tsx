@@ -398,16 +398,12 @@ function LiveContent() {
                 />
               ) : (
                 <div className="w-full h-full flex flex-col items-center justify-center gap-2 bg-black">
-                  <span className="live-dot" />
-                  <p className="text-white/60 text-sm">
-                    {sources.length === 0
-                      ? liveEnvSources.length + liveSubscriptions.length > 0
-                        ? '所有直播源均已停用，请在设置中勾选启用'
-                        : '请先在设置中添加直播源（M3U 订阅）'
-                      : playlistsQuery.isLoading
-                        ? '频道列表加载中...'
-                        : '从频道列表选择一个频道开始观看'}
-                  </p>
+                  {(sources.length === 0 || playlistsQuery.isLoading) && (
+                    <>
+                      <span className="live-dot" />
+                      <p className="text-white/60 text-sm">{sources.length === 0 ? '暂无直播源' : '加载中…'}</p>
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -443,7 +439,7 @@ function LiveContent() {
                     {currentRow && currentRow.candidates.length > 1 && (
                       <span
                         className="shrink-0 rounded-full bg-chip px-1.5 text-[10px] text-faint"
-                        title={`该频道在 ${currentRow.candidates.length} 个来源里都有，播放失败可点「换源」`}
+                        title={`共 ${currentRow.candidates.length} 个来源`}
                       >
                         {currentRow.candidates.length} 源
                       </span>
@@ -673,13 +669,9 @@ function LiveContent() {
                   pickingKey={pickingKey}
                 />
               )}
-              {(failedCount > 0 || sources.length === 0) && (
+              {failedCount > 0 && (
                 <p className="text-[10px] text-faint px-3 py-1.5 border-t border-line shrink-0">
-                  {sources.length === 0
-                    ? liveEnvSources.length + liveSubscriptions.length > 0
-                      ? '所有直播源均已停用，请在设置中勾选启用'
-                      : '暂无直播源，请在设置 → 直播源中添加'
-                    : `${failedCount > 0 ? `${failedCount} 个订阅拉取失败 · ` : ''}共 ${sources.length} 个已启用源`}
+                  {failedCount} 个订阅拉取失败
                 </p>
               )}
             </div>

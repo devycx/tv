@@ -181,14 +181,12 @@ function LoginModal({
           <>
             <h2 className="text-lg font-semibold text-content mb-3">需要配置密码</h2>
             <p className="text-sm text-muted leading-relaxed">
-              为确保安全，必须设置 <code className="text-accent">PASSWORD</code> 环境变量才能使用本服务。
-              请联系管理员在部署配置中添加该变量后重启服务。
+              请在部署配置中设置 <code className="text-accent">PASSWORD</code> 环境变量后重启服务。
             </p>
           </>
         ) : (
           <>
-            <h2 className="text-lg font-semibold text-content mb-1">访问验证</h2>
-            <p className="text-sm text-muted mb-4">请输入密码继续访问</p>
+            <h2 className="text-lg font-semibold text-content mb-3">访问验证</h2>
             <form
               onSubmit={(e) => {
                 e.preventDefault();

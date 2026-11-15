@@ -110,7 +110,7 @@ export function LiveSourceManager() {
     <section>
       <SectionTitle
         title="直播源"
-        hint={empty ? 'M3U 订阅 · /live 页面播放' : `共 ${store.liveEnvSources.length + store.liveSubscriptions.length} 个 · 已启用 ${store.liveSelectedUrls.length}`}
+        hint={empty ? undefined : `共 ${store.liveEnvSources.length + store.liveSubscriptions.length} 个 · 已启用 ${store.liveSelectedUrls.length}`}
         extra={
           <button className="btn-primary btn-sm" onClick={() => setAdding(true)}>
             <Icon name="plus" className="w-3.5 h-3.5" />
@@ -144,7 +144,7 @@ export function LiveSourceManager() {
         <EmptyState
           icon="link"
           title="还没有添加任何直播源"
-          description="添加 M3U 地址后即可在「直播」页按分组浏览与播放频道；也可在「数据源订阅」中一次导入点播源与直播源；部署者还可通过 DEFAULT_LIVE_SOURCES 环境变量预置。"
+          description="添加 M3U 地址即可在「直播」页观看；也可通过数据源订阅导入。"
           action={
             <button className="btn-primary btn-sm" onClick={() => setAdding(true)}>
               添加第一个直播源
@@ -199,7 +199,6 @@ export function LiveSourceManager() {
                         checked={enabled}
                         onChange={() => useAppStore.getState().toggleLiveSelected(row.url)}
                         aria-label={enabled ? `停用 ${row.label}` : `启用 ${row.label}`}
-                        title={enabled ? '已启用，取消勾选可停用' : '已停用，勾选后生效'}
                       />
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium text-content truncate">
@@ -212,7 +211,7 @@ export function LiveSourceManager() {
                           {fromSubscription && (
                             <span
                               className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-accent/10 text-accent align-middle"
-                              title={`来自 ${row.fromSubscriptions.length} 个数据源订阅；删除单个订阅不影响此源，仅当不再被任何订阅引用时才会移除`}
+                              title={`来自 ${row.fromSubscriptions.length} 个数据源订阅`}
                             >
                               订阅
                             </span>
@@ -227,7 +226,7 @@ export function LiveSourceManager() {
                       <TestBadge
                         state={tests[row.url]}
                         onTest={() => runTest(row.url, () => api.liveTest(row.url))}
-                        title="拉取解析并测速（频道数量与耗时）"
+                        title="测速"
                         badgeWhenOk={({ count }) => `✓ ${count ?? 0} 频道`}
                       />
                       <button
@@ -245,7 +244,7 @@ export function LiveSourceManager() {
                             className="rounded-md p-2 text-muted/30 cursor-not-allowed shrink-0"
                             disabled
                             aria-label="订阅源不可单独编辑"
-                            title="该源来自数据源订阅，修改会在下次同步时被覆盖；请修改远端订阅内容后重新同步"
+                            title="该源来自订阅，修改会在下次同步时被覆盖"
                           >
                             <Icon name="edit" className="w-4 h-4" />
                           </button>
@@ -253,7 +252,7 @@ export function LiveSourceManager() {
                             className="rounded-md p-2 text-muted/30 cursor-not-allowed shrink-0"
                             disabled
                             aria-label="订阅源不可单独删除"
-                            title="该源来自数据源订阅；请到「数据源订阅」中删除整个订阅"
+                            title="该源来自订阅，请删除整个订阅"
                           >
                             <Icon name="trash" className="w-4 h-4" />
                           </button>
@@ -272,7 +271,7 @@ export function LiveSourceManager() {
                             className="rounded-md p-2 text-muted transition-colors hover:bg-hover hover:text-danger shrink-0"
                             onClick={() => removeWithUndo(row)}
                             aria-label="删除直播源"
-                            title="移除（可在提示中撤销）"
+                            title="移除"
                           >
                             <Icon name="trash" className="w-4 h-4" />
                           </button>
@@ -340,7 +339,7 @@ function LiveSourceForm({
         value={url}
         maxLength={500}
         disabled={!!initial}
-        title={initial ? '地址不可修改；如需更换请删除后重新添加' : undefined}
+        title={initial ? '地址不可修改，需更换请删除后重新添加' : undefined}
         onChange={(e) => setUrl(e.target.value)}
       />
       <input

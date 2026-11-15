@@ -153,7 +153,7 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
       ) : query.isLoading ? (
         <GridSkeleton />
       ) : items.length === 0 ? (
-        <p className="text-center text-sm text-faint py-8">该分类暂无推荐内容</p>
+        <p className="text-center text-sm text-faint py-8">暂无推荐</p>
       ) : (
         <div data-recommendation-grid className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2.5">
           {items.map((item) => (
@@ -164,17 +164,15 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
       {tag !== null && items.length > 0 && (
         <div ref={loadMoreRef} data-recommendation-more className="text-center text-sm text-muted py-6">
           {query.isFetchingNextPage ? (
-            <p role="status">正在加载更多推荐...</p>
+            <p role="status">加载中…</p>
           ) : query.isFetchNextPageError ? (
             <div role="status">
               <p>加载更多失败，已加载内容仍可浏览</p>
-              <button className="btn-ghost btn-sm mt-2" onClick={() => void query.fetchNextPage({ cancelRefetch: false })}>重试加载更多</button>
+              <button className="btn-ghost btn-sm mt-2" onClick={() => void query.fetchNextPage({ cancelRefetch: false })}>重试</button>
             </div>
           ) : query.hasNextPage ? (
             <button className="btn-ghost btn-sm" onClick={() => void query.fetchNextPage({ cancelRefetch: false })}>加载更多</button>
-          ) : (
-            <p role="status">已显示全部 {items.length} 部推荐</p>
-          )}
+          ) : null}
         </div>
       )}
     </section>
@@ -235,7 +233,7 @@ function BangumiView({ onPick }: { onPick: (title: string) => void }) {
       </div>
 
       {weekday === null ? null : query.isError ? (
-        <p className="text-center text-sm text-faint py-8">推荐内容加载失败，可稍后重试或在设置中关闭</p>
+        <p className="text-center text-sm text-faint py-8">推荐内容加载失败</p>
       ) : query.isLoading ? (
         <GridSkeleton />
       ) : (
@@ -308,7 +306,7 @@ function HotListView({ onPick }: { onPick: (title: string) => void }) {
       </div>
 
       {listId === null ? null : query.isError ? (
-        <p className="text-center text-sm text-faint py-8">推荐内容加载失败，可稍后重试或在设置中关闭</p>
+        <p className="text-center text-sm text-faint py-8">推荐内容加载失败</p>
       ) : query.isLoading ? (
         <GridSkeleton />
       ) : (

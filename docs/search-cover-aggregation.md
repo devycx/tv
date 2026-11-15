@@ -212,10 +212,9 @@ npm run shot -- --url "https://tv.ycxdev.com/?s=%E8%89%B2%E6%88%92" --init-js $i
 
 断言（`--log`）：
 
-- 结果头：`N 部影片 · M 条来源结果，同封面已聚合`；
+- 结果头：`N 部 · M 条`（识别封面期间显示 `识别封面中…`）；
 - 筛选条存在类型/年份/18禁 chip；
-- 点「伦理片」后：`筛选出 X 部影片 · Y 条来源结果 / 共 N 部 · M 条`，chip `aria-pressed=true`，出现「清除筛选」；
-- 等待状态 `role=status` 最终消失（pending=0）。
+- 点「伦理片」后：`筛选出 X 部 · Y 条 / 共 N 部 · M 条`，chip `aria-pressed=true`，出现「清除筛选」；
 
 线上基线（2026-11-15，`0fecf87`）：
 

@@ -107,7 +107,7 @@ export function HistoryPanel({ open, onClose }: { open: boolean; onClose: () => 
         <>
           {!keyword && total > VISIBLE_LIMIT && (
             <p className="text-xs text-faint mb-2">
-              共 {total} 条记录，仅显示最近 {VISIBLE_LIMIT} 条，可用上方搜索查找更早的记录
+              共 {total} 条 · 显示最近 {VISIBLE_LIMIT} 条
             </p>
           )}
           <ul className="space-y-2">

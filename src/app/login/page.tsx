@@ -85,7 +85,6 @@ export default function LoginPage() {
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/icons/brand-mark.svg" alt="" width={64} height={45} className="w-16 h-auto" />
           <h1 className="mt-3 text-2xl font-bold tracking-tight text-content">夜幕影视</h1>
-          <p className="mt-1.5 text-sm text-muted">请输入访问密码以继续</p>
         </div>
 
         <form onSubmit={submit} className="card p-6 space-y-3">
@@ -97,7 +96,6 @@ export default function LoginPage() {
             id="login-password"
             type="password"
             className="input w-full"
-            placeholder="密码"
             value={password}
             onChange={(e) => {
               setPassword(e.target.value);
@@ -120,7 +118,7 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <p className="mt-4 text-center text-xs text-faint">登录状态会保存在本机浏览器，有效期 90 天</p>
+        <p className="mt-4 text-center text-xs text-faint">登录状态保留 90 天</p>
       </div>
     </main>
   );

@@ -164,7 +164,7 @@ export function DetailModal({ item, onClose }: { item: SearchResultItem | null; 
         </div>
 
         <div className="p-5 pt-4 pb-[calc(1.25rem_+_env(safe-area-inset-bottom))] sm:pb-5 flex-1 min-h-0 overflow-y-auto overscroll-contain scrollbar-thin">
-          {loading && <LoadingState label="正在获取剧集信息..." />}
+          {loading && <LoadingState label="加载剧集…" />}
 
           {!loading && error && <ErrorState message={error || '获取失败'} />}
 
@@ -208,7 +208,6 @@ export function DetailModal({ item, onClose }: { item: SearchResultItem | null; 
                         className="btn-ghost btn-sm"
                         onClick={() => setReversed((v) => !v)}
                         aria-label={reversed ? '切换为正序排列' : '切换为倒序排列'}
-                        title="调整剧集列表的排列顺序"
                       >
                         <Icon
                           name="arrowDown"
@@ -238,11 +237,7 @@ export function DetailModal({ item, onClose }: { item: SearchResultItem | null; 
                   </div>
                 </>
               ) : (
-                <EmptyState
-                  icon="alert"
-                  title="未找到播放资源"
-                  description="该视频可能暂时无法播放，请尝试其他视频"
-                />
+                <EmptyState icon="alert" title="未找到播放资源" />
               )}
             </>
           )}
