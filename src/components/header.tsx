@@ -138,6 +138,7 @@ export function Header({
           {/* 桌面 / 平板：完整导航 */}
           <nav className="hidden sm:flex items-center gap-1 ml-auto">
             <HeaderLink href="/live" active={pathname === '/live'}>
+              <Icon name="tv" className="w-4 h-4" />
               直播
             </HeaderLink>
             <HeaderLink href="/about" active={pathname === '/about'}>
@@ -155,8 +156,21 @@ export function Header({
             </IconButton>
           </nav>
 
-          {/* 手机：主题 + 设置直接露出（最常用），其余收进汉堡菜单 */}
+          {/* 手机：直播 + 主题 + 设置直接露出（最常用），其余收进汉堡菜单 */}
           <div className="sm:hidden flex items-center gap-1 shrink-0">
+            <Link
+              href="/live"
+              aria-label="直播"
+              title="直播"
+              className={cn(
+                'p-2 rounded-md transition-colors',
+                pathname === '/live'
+                  ? 'text-accent bg-hover'
+                  : 'text-muted hover:text-content hover:bg-hover'
+              )}
+            >
+              <Icon name="tv" />
+            </Link>
             <ThemeToggle />
             {/* 与菜单项一致：打开抽屉前先收起菜单，否则关掉设置后汉堡菜单还摊在那儿 */}
             <IconButton
@@ -184,20 +198,17 @@ export function Header({
             aria-label="主菜单"
             className="sm:hidden border-t border-line bg-surface/95 backdrop-blur px-3 py-2 pb-[calc(0.5rem_+_env(safe-area-inset-bottom))] animate-fade-in"
           >
-            {/* 直播页顶栏有搜索框（<sm 隐藏）：这里补一个入口，进了直播页再搜频道 */}
+            {/* 直播已在顶栏直接露出；这里只留首页 / 关于 / 历史 / 下载 */}
             <div className="grid grid-cols-2 gap-1.5">
-              {/* 播放页等「自带返回」的页面也复用本菜单，所以首页入口放在第一位 */}
               <MenuRow href="/" active={pathname === '/'} icon="home" onNavigate={closeMenu}>
                 首页
-              </MenuRow>
-              <MenuRow href="/live" active={pathname === '/live'} icon="bolt" onNavigate={closeMenu}>
-                直播
               </MenuRow>
               <MenuRow href="/about" active={pathname === '/about'} icon="alert" onNavigate={closeMenu}>
                 关于
               </MenuRow>
               <MenuAction
                 icon="clock"
+                className="col-span-2"
                 onClick={() => {
                   closeMenu();
                   setHistoryOpen(true);
@@ -231,7 +242,7 @@ function HeaderLink({ href, active, children }: { href: string; active: boolean;
     <Link
       href={href}
       className={cn(
-        'px-2.5 py-1.5 rounded-md text-sm transition-colors',
+        'inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-sm transition-colors',
         active ? 'text-content bg-hover' : 'text-muted hover:text-content'
       )}
     >

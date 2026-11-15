@@ -25,6 +25,7 @@ export type IconName =
   | 'alert'
   | 'gear'
   | 'home'
+  | 'tv'
   | 'menu';
 
 const PATHS: Record<IconName, ReactNode> = {
@@ -141,6 +142,14 @@ const PATHS: Record<IconName, ReactNode> = {
       strokeWidth={2}
       d="m2.25 12 8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75"
     />
+  ),
+  /** 电视：直播入口（手机顶栏放在这里，比闪电图标直观） */
+  tv: (
+    <>
+      <rect x="2.25" y="4.5" width="19.5" height="12" rx="2.25" strokeWidth={2} />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="m10.125 8.25 4.125 2.25-4.125 2.25Z" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.25 20.25h7.5" />
+    </>
   ),
   /** 汉堡菜单（移动端顶栏折叠入口） */
   menu: <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />,

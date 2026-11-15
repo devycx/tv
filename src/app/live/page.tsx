@@ -30,7 +30,7 @@ import { SmartImage } from '@/components/smart-image';
  * 直播页：左侧播放器 + 频道信息 + 节目单；右侧频道侧栏。
  * 状态由 URL 驱动（?url=&name=&group=&tvgId=&epg=），支持频道深链与刷新保持。
  * 换台路径：侧栏点击、全局 ↑↓ 键盘、播放器控制条上一台/下一台（全屏可用）。
- * 移动端侧栏为底部抽屉（右下角 FAB 呼出，选中频道后自动收起）。
+ * 移动端频道列表直接展开在播放器下方（页内滚动），选中频道后不收起。
  */
 export default function LivePage() {
   return (
@@ -53,72 +53,18 @@ function LiveContent() {
   const customImageProxy = useAppStore((s) => s.customImageProxy);
   const { verified } = useAuth();
   const [copied, setCopied] = useState(false);
-  // 移动端频道抽屉开合
-  const [listOpen, setListOpen] = useState(false);
   const [logoFailed, setLogoFailed] = useState(false);
-  /** 移动端抽屉顶边（= 播放器底边 + 8）：非模态抽屉只占播放器以下，画面和控制条保持可用 */
-  const [sheetTop, setSheetTop] = useState<number | undefined>(undefined);
   /** 上一个频道名：只在确实有历史时渲染「返回上一个」按钮（ref 不触发重渲染，故另存一份名称） */
   const [lastChannelName, setLastChannelName] = useState<string | null>(null);
   /** 手机端「更多频道操作」菜单（上一台/下一台收进来，给标题让位） */
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
-  const playerFrameRef = useRef<HTMLDivElement>(null);
   /** 侧栏上报的筛选排序结果（键盘换台沿此列表顺序）；ref 存储，不触发重渲染 */
   const filteredRef = useRef<MergedChannel[]>([]);
   /** 当前频道镜像：selectChannel 内读取最近一次播放的频道，用于记录"上一个频道" */
   const currentChannelRef = useRef<LiveChannelItem | undefined>(undefined);
   /** 上一个频道：退格键/按钮一键切回（电视遥控器 back 键习惯） */
   const lastChannelRef = useRef<LiveChannelItem | null>(null);
-
-  /** 打开移动端抽屉：先量播放器底边，避免首帧没有 top 导致高度塌一下再跳到位 */
-  const openList = useCallback(() => {
-    const frame = playerFrameRef.current;
-    if (frame && window.matchMedia('(max-width: 1023.98px)').matches) {
-      setSheetTop(Math.max(64, Math.min(window.innerHeight - 160, Math.round(frame.getBoundingClientRect().bottom + 8))));
-    }
-    setMoreOpen(false);
-    setListOpen(true);
-  }, []);
-
-  const closeList = useCallback(() => {
-    setListOpen(false);
-    setSheetTop(undefined);
-  }, []);
-
-  // 抽屉打开期间锁背景滚动（列表自己滚），并跟随 resize/横竖屏重新量播放器底边
-  useEffect(() => {
-    if (!listOpen) return;
-    const mq = window.matchMedia('(max-width: 1023.98px)');
-    if (!mq.matches) return;
-    const measure = () => {
-      if (!mq.matches) return;
-      const frame = playerFrameRef.current;
-      if (!frame) return;
-      setSheetTop(
-        Math.max(64, Math.min(window.innerHeight - 160, Math.round(frame.getBoundingClientRect().bottom + 8)))
-      );
-    };
-    measure();
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const onViewportChange = () => {
-      if (mq.matches) measure();
-      else {
-        setSheetTop(undefined);
-        document.body.style.overflow = prevOverflow;
-      }
-    };
-    window.addEventListener('resize', measure);
-    window.visualViewport?.addEventListener('resize', measure);
-    mq.addEventListener('change', onViewportChange);
-    return () => {
-      document.body.style.overflow = prevOverflow;
-      window.removeEventListener('resize', measure);
-      window.visualViewport?.removeEventListener('resize', measure);
-      mq.removeEventListener('change', onViewportChange);
-    };
-  }, [listOpen]);
 
   // 「更多」菜单：点外部 / Esc 收起
   useEffect(() => {
@@ -355,15 +301,6 @@ function LiveContent() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [switchChannelByOffset, backToPrevChannel]);
 
-  const handleSelect = useCallback(
-    (row: MergedChannel) => {
-      selectMerged(row);
-      // 移动端抽屉：选中即收起
-      closeList();
-    },
-    [selectMerged, closeList]
-  );
-
   if (!verified) {
     return (
       <div className="min-h-screen flex flex-col">
@@ -384,10 +321,11 @@ function LiveContent() {
     <div className="min-h-screen flex flex-col">
       <Header showSearch />
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 py-4">
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
-          {/* 主栏：播放器 + 信息条 + 节目单 */}
-          <div className="min-w-0">
-            <div ref={playerFrameRef} className="aspect-video bg-black rounded-lg overflow-hidden">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] lg:gap-4 lg:items-start">
+          {/* 主栏：播放器 + 信息条 + 节目单。手机端用 display:contents 把三块摊平，
+              以便频道列表插在信息条与节目单之间（见下方 order 类） */}
+          <div className="min-w-0 max-lg:contents">
+            <div className="aspect-video bg-black rounded-lg overflow-hidden max-lg:order-1">
               {currentUrl ? (
                 <LivePlayer
                   url={currentUrl}
@@ -410,7 +348,7 @@ function LiveContent() {
 
             {/* 频道信息条 */}
             {currentChannel && (
-              <div className="bg-surface-raised border border-line rounded-lg p-3 mt-3 flex items-center gap-3">
+              <div className="bg-surface-raised border border-line rounded-lg p-3 mt-3 flex items-center gap-3 max-lg:order-2">
                 <div className="w-10 h-10 shrink-0 rounded bg-chip flex items-center justify-center overflow-hidden">
                   {logo && !logoFailed ? (
                     <SmartImage
@@ -624,36 +562,21 @@ function LiveContent() {
 
             {/* 节目单：无 EPG 配置时不渲染整张卡 */}
             {currentChannel && hasEpg && (
-              <section className="bg-surface-raised border border-line rounded-lg p-3 mt-3">
+              <section className="bg-surface-raised border border-line rounded-lg p-3 mt-3 max-lg:order-4">
                 <h2 className="text-sm font-semibold text-content mb-2.5">节目单</h2>
                 <LiveEpgPanel epgUrl={currentChannel.epg} tvgId={currentChannel.tvgId} />
               </section>
             )}
           </div>
 
-          {/* 侧栏：桌面常驻 sticky；移动端非模态底部抽屉（从播放器底边开始，不压画面和控制条） */}
+          {/* 频道列表：手机直接展开在播放器下方（页内滚动）；桌面为右侧常驻栏 */}
           <aside
             className={cn(
-              'bg-surface-raised border border-line flex-col overflow-hidden',
-              'fixed inset-x-0 bottom-0 z-40 rounded-t-2xl shadow-2xl pb-[env(safe-area-inset-bottom)]',
-              listOpen ? 'flex' : 'hidden',
-              'lg:sticky lg:top-20 lg:flex lg:h-[calc(100vh-6.5rem)] lg:rounded-xl lg:pb-0 lg:shadow-none'
+              'mt-4 flex flex-col overflow-hidden rounded-xl border border-line bg-surface-raised max-lg:order-3',
+              'h-[62vh] min-h-[18rem]',
+              'lg:sticky lg:top-20 lg:mt-0 lg:h-[calc(100vh-6.5rem)]'
             )}
-            style={sheetTop != null ? { top: sheetTop } : undefined}
           >
-            {/* 抽屉把手栏（仅移动端） */}
-            <div className="flex items-center justify-between px-3 pt-3 pb-1 shrink-0 lg:hidden">
-              <span className="text-sm font-semibold text-content">频道列表</span>
-              <button
-                className="rounded-md p-1.5 text-muted hover:text-content hover:bg-hover transition-colors"
-                aria-label="关闭频道列表"
-                onClick={closeList}
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
             <div className="flex-1 min-h-0 flex flex-col">
               {playlistsQuery.isLoading && channels.length === 0 ? (
                 <div className="flex-1 flex items-center justify-center">
@@ -664,7 +587,7 @@ function LiveContent() {
                   channels={merged}
                   groups={groups}
                   currentUrl={currentUrl}
-                  onSelect={handleSelect}
+                  onSelect={selectMerged}
                   onFilteredChange={handleFilteredChange}
                   pickingKey={pickingKey}
                 />
@@ -677,25 +600,6 @@ function LiveContent() {
             </div>
           </aside>
         </div>
-
-        {/* 移动端呼出频道列表的悬浮按钮 */}
-        {!listOpen && channels.length > 0 && (
-          <button
-            className="fixed bottom-[calc(1rem_+_env(safe-area-inset-bottom))] right-4 z-30 flex items-center gap-1.5 rounded-full bg-accent px-4 py-2.5 text-sm text-on-accent shadow-lg lg:hidden"
-            aria-label="打开频道列表"
-            onClick={openList}
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 6h16M4 12h16M4 18h16"
-              />
-            </svg>
-            频道
-          </button>
-        )}
       </main>
     </div>
   );
