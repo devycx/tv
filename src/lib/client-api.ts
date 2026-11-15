@@ -4,6 +4,7 @@ import type { SearchResponse, SearchStreamEvent, SourceSearchOutcome, VideoDetai
 import { fetchLivePlaylistDirect, livePlaylistApiUrl } from './live-playlist';
 import { UNAUTHORIZED_EVENT } from './unauthorized-event';
 import { isPasswordSetupResponse } from './api-failure';
+import { compareSearchResults } from './relevance';
 
 /** 401/503 全局事件名；对外导出保持兼容（事件常量已抽到 unauthorized-event，避免循环依赖） */
 export { UNAUTHORIZED_EVENT };
@@ -131,15 +132,17 @@ export const api = {
   ): Promise<SearchResponse> => {
     const signal = opts?.signal;
     const onSource = opts?.onSource;
-    if (!onSource) {
-      return request<SearchResponse>('/api/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wd, sources, filterAdult }),
-        signal,
-      });
+    const chunks = splitSearchSources(sources);
+    // 源少时保持单请求：拆批只会多一次 invocation，排队本来就不存在
+    if (chunks.length === 1) {
+      return searchOnce(wd, chunks[0], filterAdult, onSource, signal);
     }
-    return searchStream(wd, sources, filterAdult, onSource, signal);
+    // 两个独立 invocation 各自拥有 6 个「等待响应头」的连接槽，35 源的整体墙钟
+    // 从 ~8s 降到 ~2s（线上实测 8147ms → 2016ms，结果数一致）。
+    const parts = await Promise.all(
+      chunks.map((subset) => searchOnce(wd, subset, filterAdult, onSource, signal))
+    );
+    return mergeSearchResponses(parts, wd);
   },
 
   detail: (id: string, source: SourceConfig, signal?: AbortSignal) => {
@@ -322,6 +325,59 @@ export interface SearchFailure {
   sourceKey: string;
   error: string;
   timedOut?: boolean;
+}
+
+/**
+ * 单次搜索请求承载的源数上限。
+ *
+ * Cloudflare Workers 每次 invocation 最多只有 6 个连接同时「等待响应头」，
+ * 单请求里塞 35 个源时后面的源要排队，线上实测整次搜索 8.1s；拆成两个
+ * 独立 invocation（各 6 个槽）后 2.0s。源数 ≤ 8 时本来一轮就发完，
+ * 拆分只会白多一次 invocation，所以不拆。
+ */
+const SEARCH_SPLIT_THRESHOLD = 8;
+
+/** 把选中源对半拆成 1~2 组；组数只影响 invocation 数，不影响最终结果集 */
+function splitSearchSources(sources: SourceConfig[]): SourceConfig[][] {
+  if (sources.length <= SEARCH_SPLIT_THRESHOLD) return [sources];
+  const half = Math.ceil(sources.length / 2);
+  return [sources.slice(0, half), sources.slice(half)];
+}
+
+/** 单组源的搜索：有 onSource 走 NDJSON 流（逐源回调），否则一次性 JSON */
+function searchOnce(
+  wd: string,
+  sources: SourceConfig[],
+  filterAdult: boolean,
+  onSource?: (outcome: SourceSearchOutcome) => void,
+  signal?: AbortSignal
+): Promise<SearchResponse> {
+  if (onSource) return searchStream(wd, sources, filterAdult, onSource, signal);
+  return request<SearchResponse>('/api/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ wd, sources, filterAdult }),
+    signal,
+  });
+}
+
+/**
+ * 合并两组结果：按 sourceKey + vodId 去重，再用与单请求一致的全局相关性排序。
+ * 服务端每组已经过滤/排序过，但两组之间仍需重新排序，否则第二组会整段排在第一组后面。
+ */
+function mergeSearchResponses(parts: SearchResponse[], wd: string): SearchResponse {
+  const seen = new Set<string>();
+  const list: SearchResultItem[] = [];
+  for (const part of parts) {
+    for (const item of part.list) {
+      const key = `${item.sourceKey}_${item.vodId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      list.push(item);
+    }
+  }
+  list.sort((a, b) => compareSearchResults(a, b, wd));
+  return { list, failures: parts.flatMap((part) => part.failures) };
 }
 
 /** 聚合搜索流式消费：逐源回调 + 最终聚合结果（NDJSON 行协议，同 liveProbeStream） */
