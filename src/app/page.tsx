@@ -6,7 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/header';
 import { RecommendSection } from '@/components/douban-section';
 import { DetailModal } from '@/components/detail-modal';
-import { AggregatedCard, aggregateResults } from '@/components/video-card';
+import { AggregatedCard } from '@/components/video-card';
 import { useAppStore, resolveSource, isInDisabledSubscription, isSourceDisabled } from '@/lib/store';
 import { api } from '@/lib/client-api';
 import type { SearchResultItem, SourceSearchOutcome } from '@/lib/types';
@@ -15,6 +15,17 @@ import { cn, buildWatchUrl, formatDisableTtl, validateSourceUrl } from '@/lib/ut
 import { addSearchHistory } from '@/lib/db';
 import { compareSearchResults } from '@/lib/relevance';
 import { applyFrozenOrder, orderDiffers } from '@/lib/result-paging';
+import { aggregateResults } from '@/lib/search-groups';
+import {
+  EMPTY_FILTERS,
+  buildFacets,
+  filterGroups,
+  hasActiveFilters,
+  type FacetOption,
+  type SearchFacets,
+  type SearchFilters,
+} from '@/lib/search-facets';
+import { useCoverHashes } from '@/components/use-cover-hashes';
 import { useToast } from '@/components/toast';
 import { EmptyState } from '@/components/states';
 import { Icon } from '@/components/icon';
@@ -55,6 +66,8 @@ function HomeContent() {
   const [detailItem, setDetailItem] = useState<SearchResultItem | null>(null);
   /** 流式搜索中已结算的源（data 就绪前用于增量渲染） */
   const [streamedOutcomes, setStreamedOutcomes] = useState<SourceSearchOutcome[]>([]);
+  /** 结果标签筛选（类型 / 年份 / 18禁）；查询变化时清空 */
+  const [filters, setFilters] = useState<SearchFilters>(EMPTY_FILTERS);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // URL 驱动搜索：?s= 变化时回填输入框
@@ -187,8 +200,46 @@ function HomeContent() {
     streamedOutcomes
       .filter((o) => !o.ok)
       .map((o) => ({ sourceKey: o.sourceKey, error: o.error || '请求失败', timedOut: o.timedOut }));
-  // 跨源同名聚合：同名影片合并为一张卡片，展开后可选择具体来源
-  const groups = useMemo(() => aggregateResults(list), [list]);
+  // 封面视觉指纹：浏览器经 /api/cover 取图后算 dHash，用于「同一张封面」聚合。
+  // 指纹还没算完的条目先不参与聚合，避免先按片名分组、随后又跳变。
+  const coverUrls = useMemo(
+    () =>
+      list
+        .map((item) => item.pic)
+        .filter(
+          (pic): pic is string =>
+            typeof pic === 'string' && pic.length > 0 && !pic.startsWith('data:') && !pic.startsWith('blob:')
+        ),
+    [list]
+  );
+  const coverHashes = useCoverHashes(coverUrls);
+  const settledList = useMemo(
+    () => list.filter((item) => !coverHashes.isPending(item.pic)),
+    [list, coverHashes]
+  );
+  const coverHashMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const url of coverUrls) {
+      const hash = coverHashes.hashOf(url);
+      if (hash) map.set(url, hash);
+    }
+    return map;
+  }, [coverUrls, coverHashes]);
+  const pendingCovers = coverHashes.pending;
+
+  // 跨源聚合：视觉指纹相同（同一张封面）合并为一张卡片，展开后可选择具体来源
+  const groups = useMemo(
+    () => aggregateResults(settledList, { coverHashes: coverHashMap }),
+    [settledList, coverHashMap]
+  );
+  // 结果标签自动生成筛选项：只收集当前结果里出现过的类型 / 年份 / 18禁
+  const facets = useMemo(() => buildFacets(groups, filters), [groups, filters]);
+  const filteredGroups = useMemo(() => filterGroups(groups, filters), [groups, filters]);
+  const filtersActive = hasActiveFilters(filters);
+  const filteredSourceCount = useMemo(
+    () => filteredGroups.reduce((sum, group) => sum + group.items.length, 0),
+    [filteredGroups]
+  );
 
   // 分批渲染：新一次搜索（查询/源选择/过滤条件变化）时重置回首批。
   // 不能依赖 groups：流式搜索每追加一个源就会重建数组，会把「加载更多」反复重置。
@@ -200,8 +251,8 @@ function HomeContent() {
    */
   const [frozenKeys, setFrozenKeys] = useState<string[] | null>(null);
   const orderedGroups = useMemo(
-    () => (frozenKeys ? applyFrozenOrder(groups, frozenKeys) : groups),
-    [groups, frozenKeys]
+    () => (frozenKeys ? applyFrozenOrder(filteredGroups, frozenKeys) : filteredGroups),
+    [filteredGroups, frozenKeys]
   );
   const visibleGroups = useMemo(
     () => orderedGroups.slice(0, visibleCount),
@@ -209,26 +260,40 @@ function HomeContent() {
   );
   // 冻结顺序与最新相关性顺序不一致时，给用户一个主动更新的入口
   const orderChanged = useMemo(
-    () => Boolean(frozenKeys) && orderDiffers(orderedGroups, groups),
-    [frozenKeys, orderedGroups, groups]
+    () => Boolean(frozenKeys) && orderDiffers(orderedGroups, filteredGroups),
+    [frozenKeys, orderedGroups, filteredGroups]
   );
   const resultsRef = useRef<HTMLElement | null>(null);
+  // 换了关键词就回到「未筛选」：上一部片的类型/年份不该继续约束新结果
+  useEffect(() => {
+    setFilters(EMPTY_FILTERS);
+  }, [urlQuery]);
   useEffect(() => {
     setVisibleCount(RESULT_PAGE_SIZE);
     setFrozenKeys(null);
-  }, [urlQuery, selectedKeys, yellowFilter]);
+  }, [urlQuery, selectedKeys, yellowFilter, filters]);
 
   const loadMore = () => {
     // 先冻结再增加：这一批之后的任何重排都不再影响已渲染的卡片
-    setFrozenKeys((prev) => prev ?? groups.map((g) => g.key));
+    setFrozenKeys((prev) => prev ?? filteredGroups.map((g) => g.key));
     setVisibleCount((v) => v + RESULT_PAGE_SIZE);
   };
 
   const applyResort = () => {
     // 接受最新的相关性顺序，并回到结果区顶部——否则原地重排会让视线失去落点
-    setFrozenKeys(groups.map((g) => g.key));
+    setFrozenKeys(filteredGroups.map((g) => g.key));
     resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
+
+  const toggleFacet = (facet: 'types' | 'years', value: string) => {
+    setFilters((prev) => {
+      const next = new Set(prev[facet]);
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      return { ...prev, [facet]: [...next] };
+    });
+  };
+  const clearFilters = () => setFilters(EMPTY_FILTERS);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -346,14 +411,24 @@ function HomeContent() {
               />
             )}
           </div>
+          {/* 结果标签筛选：类型 / 年份 / 18禁，从当前结果自动收集，放在搜索框正下方 */}
+          {urlQuery && (
+            <SearchFacetBar
+              facets={facets}
+              filters={filters}
+              onToggleType={(value) => toggleFacet('types', value)}
+              onToggleYear={(value) => toggleFacet('years', value)}
+              onToggleAdult={() => setFilters((prev) => ({ ...prev, adultOnly: !prev.adultOnly }))}
+            />
+          )}
           {/* 成人内容过滤只在「设置 → 首页与内容过滤」里统一开关，首页不再放行内开关 */}
         </section>
 
         {/* 搜索结果 */}
         {urlQuery && (
           <section aria-label="搜索结果" className="mb-10" ref={resultsRef}>
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm text-muted">
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
+              <h2 className="w-full text-sm text-muted sm:w-auto">
                 “<span className="text-content">{urlQuery}</span>” 的搜索结果
                 {isSearching ? (
                   <span className="text-faint">
@@ -362,14 +437,43 @@ function HomeContent() {
                 ) : (
                   searchQuery.data && (
                     <span className="text-faint">
-                      （{groups.length} 部影片 · {list.length} 条来源结果
-                      {list.length > groups.length ? '，同名已聚合' : ''}
-                      {failures.length > 0 && `，${failures.length} 个源失败`}）
+                      {pendingCovers > 0 ? (
+                        <>
+                          （已聚合 {groups.length} 部影片 · {settledList.length} 条来源结果…）
+                        </>
+                      ) : filtersActive ? (
+                        <>
+                          （筛选出 {filteredGroups.length} 部影片 · {filteredSourceCount} 条来源结果 / 共{' '}
+                          {groups.length} 部 · {list.length} 条
+                          {failures.length > 0 ? `，${failures.length} 个源失败` : ''}）
+                        </>
+                      ) : (
+                        <>
+                          （{groups.length} 部影片 · {list.length} 条来源结果
+                          {settledList.length > groups.length ? '，同封面已聚合' : ''}
+                          {failures.length > 0 ? `，${failures.length} 个源失败` : ''}）
+                        </>
+                      )}
                     </span>
                   )
                 )}
               </h2>
+              {filtersActive && (
+                <button
+                  type="button"
+                  className="shrink-0 text-xs text-accent hover:underline"
+                  onClick={clearFilters}
+                >
+                  清除筛选
+                </button>
+              )}
             </div>
+
+            {pendingCovers > 0 && (
+              <p className="mb-3 text-xs text-faint" role="status">
+                正在识别封面并按封面聚合（还有 {pendingCovers} 张…）
+              </p>
+            )}
 
             {failures.length > 0 && (
               <div className="mb-3 text-xs bg-chip rounded-lg px-3 py-2 flex flex-wrap gap-x-3 gap-y-1">
@@ -400,35 +504,51 @@ function HomeContent() {
             {selectedSources.length === 0 ? (
               <NoSourceGuide hasSources={customAPIs.length > 0 || envSources.length > 0} />
             ) : list.length > 0 ? (
-              <>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 items-start">
-                  {visibleGroups.map((group) => (
-                    <AggregatedCard
-                      key={group.key}
-                      group={group}
-                      sources={selectedSources}
-                      onOpen={(item) => setDetailItem(item)}
-                      onPlay={playBest}
-                    />
-                  ))}
-                </div>
-                {/* 提示条贴着「加载更多」：翻页的用户就在这个位置，放在列表顶部等于看不见 */}
-                {orderChanged && (
-                  <div className="mt-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 rounded-lg bg-chip px-3 py-2 text-xs">
-                    <span className="text-muted">搜索结果已更新，当前保留的是你翻页时的顺序</span>
-                    <button className="btn-ghost btn-sm" onClick={applyResort}>
-                      按相关性重新排序
-                    </button>
+              filteredGroups.length > 0 ? (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 items-start">
+                    {visibleGroups.map((group) => (
+                      <AggregatedCard
+                        key={group.key}
+                        group={group}
+                        sources={selectedSources}
+                        onOpen={(item) => setDetailItem(item)}
+                        onPlay={playBest}
+                      />
+                    ))}
                   </div>
-                )}
-                {orderedGroups.length > visibleCount && (
-                  <div className="flex justify-center mt-4">
-                    <button className="btn-ghost btn-sm" onClick={loadMore}>
-                      加载更多（还有 {orderedGroups.length - visibleCount} 部）
+                  {/* 提示条贴着「加载更多」：翻页的用户就在这个位置，放在列表顶部等于看不见 */}
+                  {orderChanged && (
+                    <div className="mt-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 rounded-lg bg-chip px-3 py-2 text-xs">
+                      <span className="text-muted">搜索结果已更新，当前保留的是你翻页时的顺序</span>
+                      <button className="btn-ghost btn-sm" onClick={applyResort}>
+                        按相关性重新排序
+                      </button>
+                    </div>
+                  )}
+                  {orderedGroups.length > visibleCount && (
+                    <div className="flex justify-center mt-4">
+                      <button className="btn-ghost btn-sm" onClick={loadMore}>
+                        加载更多（还有 {orderedGroups.length - visibleCount} 部）
+                      </button>
+                    </div>
+                  )}
+                </>
+              ) : pendingCovers > 0 ? (
+                <ResultsSkeleton />
+              ) : (
+                <EmptyState
+                  icon="search"
+                  title="没有符合筛选条件的结果"
+                  description="当前筛选条件下没有影片，清除筛选后可查看全部结果。"
+                  action={
+                    <button className="btn-ghost btn-sm" onClick={clearFilters}>
+                      清除筛选
                     </button>
-                  </div>
-                )}
-              </>
+                  }
+                  className="!py-16"
+                />
+              )
             ) : isSearching ? (
               <ResultsSkeleton />
             ) : (
@@ -495,6 +615,102 @@ function NoSourceGuide({ hasSources = false }: { hasSources?: boolean }) {
           </>
         )}
       </p>
+    </div>
+  );
+}
+
+/**
+ * 搜索结果标签筛选条：搜索框正下方，从当前结果自动生成。
+ * 类型/年份可多选（同类目 OR、跨类目 AND），18 禁是可开关的单选过滤。
+ */
+function SearchFacetBar({
+  facets,
+  filters,
+  onToggleType,
+  onToggleYear,
+  onToggleAdult,
+}: {
+  facets: SearchFacets;
+  filters: SearchFilters;
+  onToggleType: (value: string) => void;
+  onToggleYear: (value: string) => void;
+  onToggleAdult: () => void;
+}) {
+  const showTypes = facets.types.length > 1 || filters.types.length > 0;
+  const showYears = facets.years.length > 1 || filters.years.length > 0;
+  const showAdult = (facets.adult.adult > 0 && facets.adult.normal > 0) || filters.adultOnly;
+  if (!showTypes && !showYears && !showAdult) return null;
+
+  return (
+    <div role="group" aria-label="筛选搜索结果" className="mt-3 w-full max-w-2xl space-y-1.5">
+      {showTypes && (
+        <FacetRow label="类型" options={facets.types} selected={filters.types} onToggle={onToggleType} />
+      )}
+      {showYears && (
+        <FacetRow label="年份" options={facets.years} selected={filters.years} onToggle={onToggleYear} />
+      )}
+      {showAdult && (
+        <div className="flex items-center gap-2">
+          <span className="w-8 shrink-0 text-[11px] text-faint">分级</span>
+          <button
+            type="button"
+            aria-pressed={filters.adultOnly}
+            onClick={onToggleAdult}
+            className={cn(
+              'chip border',
+              filters.adultOnly
+                ? 'border-accent bg-accent text-on-accent'
+                : 'border-transparent bg-chip text-muted hover:bg-hover hover:text-content'
+            )}
+          >
+            18禁
+            <span className={cn('tabular-nums', filters.adultOnly ? 'opacity-80' : 'text-faint')}>
+              {facets.adult.adult}
+            </span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 单行标签组：窄屏横向滚动（不换行挤压结果），sm 以上自动换行 */
+function FacetRow({
+  label,
+  options,
+  selected,
+  onToggle,
+}: {
+  label: string;
+  options: FacetOption[];
+  selected: string[];
+  onToggle: (value: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 sm:items-start">
+      <span className="w-8 shrink-0 text-[11px] text-faint sm:pt-1">{label}</span>
+      <div className="no-scrollbar flex min-w-0 flex-1 gap-1.5 overflow-x-auto pb-0.5 sm:flex-wrap sm:overflow-visible">
+        {options.map((option) => {
+          const active = selected.includes(option.value);
+          return (
+            <button
+              key={option.value}
+              type="button"
+              aria-pressed={active}
+              onClick={() => onToggle(option.value)}
+              className={cn(
+                'chip shrink-0 border',
+                active
+                  ? 'border-accent bg-accent text-on-accent'
+                  : 'border-transparent bg-chip text-muted hover:bg-hover hover:text-content'
+              )}
+            >
+              {option.value}
+              <span className={cn('tabular-nums', active ? 'opacity-80' : 'text-faint')}>{option.count}</span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

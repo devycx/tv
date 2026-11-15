@@ -4,70 +4,13 @@ import { useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent } fro
 import type { SearchResultItem, SourceConfig } from '@/lib/types';
 import { readQuality, useAppStore } from '@/lib/store';
 import { qualityKey } from '@/lib/quality';
-import { compactRemarks, episodeCountOf, inferGroupRemarks } from '@/lib/remarks';
+import { compactRemarks, episodeCountOf } from '@/lib/remarks';
+import type { AggregatedGroup } from '@/lib/search-groups';
 import { cn } from '@/lib/utils';
 import { SmartImage } from './smart-image';
 import { QualityBadge } from './quality-badge';
 import { useQualityProbe } from './use-quality-probe';
 import { useInView } from './use-in-view';
-
-// —— 跨源同名聚合 ——
-
-export interface AggregatedGroup {
-  key: string;
-  name: string;
-  year?: string;
-  typeName?: string;
-  pic?: string;
-  remarks?: string;
-  items: SearchResultItem[];
-}
-
-function buildGroup(name: string, year: string | undefined, items: SearchResultItem[]): AggregatedGroup {
-  return {
-    // key 必须只由「片名 + 年份」决定，不能带 items：
-    // 流式搜索期间逐源追加结果会改变 items 顺序/数量，key 一变 React 就整卡重挂载，
-    // 展开中的来源列表会被收起、画质探测状态清零（线上实测的「闪烁后自动关闭」）。
-    key: `${name}|${year ?? ''}`,
-    name,
-    year,
-    typeName: items.find((i) => i.typeName)?.typeName,
-    pic: items.find((i) => i.pic)?.pic,
-    // 同一部剧各源文案详略不同（「全34集」/「完结」/「更新至34集」），推到统一结论，
-    // 否则同一部剧的来源列表会看起来状态各异
-    remarks: inferGroupRemarks(items.map((i) => i.remarks)),
-    items,
-  };
-}
-
-/**
- * 把扁平的跨源搜索结果按「同名影片」聚合：
- * - 以名称分桶；桶内年份不一致时（同名翻拍）按年份拆分，无年份的条目并入年份桶；
- * - 保持传入顺序（搜索结果已按名称排序）。
- */
-export function aggregateResults(list: SearchResultItem[]): AggregatedGroup[] {
-  const byName = new Map<string, SearchResultItem[]>();
-  for (const item of list) {
-    const k = (item.name || '').trim();
-    if (!k) continue;
-    if (!byName.has(k)) byName.set(k, []);
-    byName.get(k)!.push(item);
-  }
-  const groups: AggregatedGroup[] = [];
-  for (const [name, items] of byName) {
-    const years = [...new Set(items.map((i) => i.year).filter(Boolean))] as string[];
-    if (years.length > 1) {
-      for (const y of years) {
-        groups.push(buildGroup(name, y, items.filter((i) => i.year === y)));
-      }
-      const noYear = items.filter((i) => !i.year);
-      if (noYear.length) groups.push(buildGroup(name, undefined, noYear));
-    } else {
-      groups.push(buildGroup(name, years[0], items));
-    }
-  }
-  return groups;
-}
 
 /**
  * 聚合影片卡片：
