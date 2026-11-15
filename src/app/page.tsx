@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/header';
@@ -212,15 +212,41 @@ function HomeContent() {
   }, [coverUrls, coverHashes]);
   const pendingCovers = coverHashes.pending;
 
+  /**
+   * 封面在浏览器里根本显示不出来的组（图床不可达 / 防盗链 / 混合内容）：
+   * 这类条目算不出可展示的封面，卡片只剩胶片占位图（线上「色戒」的 thzpic 源就是这样），
+   * 卡片自己回报后整卡隐藏。失败状态是会话级的，刷新会重新尝试。
+   */
+  const [brokenCovers, setBrokenCovers] = useState<ReadonlySet<string>>(() => new Set());
+  const markCoverBroken = useCallback((key: string) => {
+    setBrokenCovers((prev) => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+  }, []);
+  useEffect(() => {
+    setBrokenCovers(new Set());
+  }, [urlQuery]);
+
   // 跨源聚合：视觉指纹相同（同一张封面）合并为一张卡片，展开后可选择具体来源
   const groups = useMemo(
-    () => aggregateResults(visibleList, { coverHashes: coverHashMap }),
-    [visibleList, coverHashMap]
+    () =>
+      aggregateResults(visibleList, { coverHashes: coverHashMap }).filter(
+        (group) => !brokenCovers.has(group.key)
+      ),
+    [visibleList, coverHashMap, brokenCovers]
   );
   // 结果标签自动生成筛选项：只收集当前结果里出现过的类型 / 年份 / 18禁
   const facets = useMemo(() => buildFacets(groups, filters), [groups, filters]);
   const filteredGroups = useMemo(() => filterGroups(groups, filters), [groups, filters]);
   const filtersActive = hasActiveFilters(filters);
+  /** 条数从组里统计：封面显示失败被整卡隐藏的来源不该再计入 */
+  const visibleSourceCount = useMemo(
+    () => groups.reduce((sum, group) => sum + group.items.length, 0),
+    [groups]
+  );
   const filteredSourceCount = useMemo(
     () => filteredGroups.reduce((sum, group) => sum + group.items.length, 0),
     [filteredGroups]
@@ -426,7 +452,7 @@ function HomeContent() {
                         ? '（加载中…）'
                         : filtersActive
                           ? `（筛选出 ${filteredGroups.length} 部 · ${filteredSourceCount} 条 / 共 ${groups.length} 部 · ${visibleList.length} 条）`
-                          : `（${groups.length} 部 · ${visibleList.length} 条）`}
+                          : `（${groups.length} 部 · ${visibleSourceCount} 条）`}
                     </span>
                   )
                 )}
@@ -455,6 +481,7 @@ function HomeContent() {
                         sources={selectedSources}
                         onOpen={(item) => setDetailItem(item)}
                         onPlay={playBest}
+                        onCoverBroken={markCoverBroken}
                       />
                     ))}
                   </div>

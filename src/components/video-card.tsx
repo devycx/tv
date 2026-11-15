@@ -25,6 +25,7 @@ export function AggregatedCard({
   onOpen,
   onPlay,
   sources,
+  onCoverBroken,
 }: {
   group: AggregatedGroup;
   onOpen: (item: SearchResultItem) => void;
@@ -32,12 +33,36 @@ export function AggregatedCard({
   onPlay: (item: SearchResultItem) => void;
   /** 完整源配置：探测画质需要 source.url / source.detail，搜索结果里只带 sourceUrl */
   sources?: SourceConfig[];
+  /**
+   * 该组所有候选封面都加载失败（图床不可达/防盗链/混合内容）：
+   * 交由页面整卡隐藏——搜索页只展示能看见封面的影片（用户 2026-11-15 要求）。
+   */
+  onCoverBroken?: (key: string) => void;
 }) {
   const imageProxyMode = useAppStore((s) => s.imageProxyMode);
   const customImageProxy = useAppStore((s) => s.customImageProxy);
-  const [imgFailed, setImgFailed] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const showImg = !!group.pic && !imgFailed;
+  /**
+   * 封面候选链：同一组里各源可能给了不同封面，第一张加载失败时换下一张，
+   * 全失败才回报「整卡无封面」。依赖 group.key 重置下标，避免虚拟列表复用串位。
+   */
+  const coverCandidates = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of group.items) {
+      const pic = item.pic?.trim();
+      if (!pic || seen.has(pic)) continue;
+      seen.add(pic);
+      out.push(pic);
+    }
+    return out;
+  }, [group.items]);
+  const [coverIdx, setCoverIdx] = useState(0);
+  useEffect(() => {
+    setCoverIdx(0);
+  }, [group.key]);
+  const coverUrl = coverCandidates[coverIdx];
+  const showImg = Boolean(coverUrl);
 
   const multi = group.items.length > 1;
   const adult = useMemo(() => group.items.some((i) => i.isAdult), [group.items]);
@@ -143,12 +168,16 @@ export function AggregatedCard({
             }}
           >
             <SmartImage
-              url={group.pic}
+              url={coverUrl}
               mode={imageProxyMode}
               customProxy={customImageProxy}
               alt={group.name}
               className="absolute inset-0 h-full w-full object-cover"
-              onExhausted={() => setImgFailed(true)}
+              onExhausted={() => {
+                // 先换组内下一张封面；全组都加载不出来再回报页面整卡隐藏
+                if (coverIdx + 1 < coverCandidates.length) setCoverIdx(coverIdx + 1);
+                else onCoverBroken?.(group.key);
+              }}
             />
           </div>
         ) : (
