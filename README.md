@@ -1,278 +1,89 @@
-# 夜幕影视
+<p align="center">
+  <img src="public/icons/brand-mark.svg" width="120" alt="夜幕影视">
+</p>
 
-私人影视聚合站，线上地址 <https://tv.ycxdev.com>，部署在 Cloudflare Workers（OpenNext Cloudflare，Worker 名 `tv`，`tv.ycxdev.workers.dev` 与自定义域同源）。
+<h1 align="center">夜幕影视</h1>
 
-基于上游开源项目 [LibreTV](https://github.com/LibreSpark/LibreTV) 的 Next.js 版二次开发（AGPL-3.0-or-later，见 [LICENSE](LICENSE)）。技术栈：Next.js 15（App Router）+ TypeScript + Tailwind CSS，播放内核为 ArtPlayer + hls.js，支持亮暗双主题。
+<p align="center">
+  <a href="https://tv.ycxdev.com">tv.ycxdev.com</a>
+</p>
 
-## 核心特性
+自己用的影视聚合站。输入片名，几十个公开采集站一起搜，同一部片并成一张卡；直播单独一页。线上跑在 Cloudflare Workers 上。
 
-- **聚合搜索**：多采集站服务端并行搜索
-- **跨源同名聚合**：同名影片合并为一张卡片，展开即可比较和选择各来源
-- **HLS 播放**：ArtPlayer + hls.js，广告分片过滤、跳过片段（片头/中段/片尾标记与自动跳过）、自动连播、倍速、快捷键、移动端长按 3 倍速
-- **直播 / IPTV**：M3U 订阅解析，`/live` 页面按分组浏览、搜索频道并站内播放（HLS + HTTP-FLV），支持 XMLTV 节目单（EPG）与频道收藏；直播流由浏览器直连源站，不经过服务器中转
-- **进度同步**：播放进度与观看历史存于本机 IndexedDB，精确到秒的续播
-- **换源测速**：跨源搜索同名资源并测速排序，一键切换保留集数位置
-- **源测试与订阅**：一键探活点播源与直播源（支持批量测活）；搜索时自动记录各源健康度，连续失败的源按阶梯时长自动停用（30 分钟 → 24 小时 → 长期），可一键恢复；订阅远程源列表（一份源列表 JSON 可同时下发点播源与直播源，兼容旧版 LibreTV-SourceList；也可直接填 TVBOX 配置地址，自动导入其中可直接使用的接口），可导出分享
-- **首页推荐**：豆瓣（电影/剧集分类浏览）、Bangumi 新番放送表或影视榜单（豆瓣周榜 + 百度热播，经 60s API），设置中切换；均服务端直连 + 缓存，Bangumi/榜单免 key 免配置（`60S_API_BASE` 可指向自部署 60s 实例）
-- **PWA**：可安装到桌面 / 主屏幕，亮暗双主题无首屏闪烁
+技术栈还是上游那套：Next.js 15 App Router + TypeScript + Tailwind，播放内核 ArtPlayer + hls.js。
 
-## 部署
+上游是 [LibreTV](https://github.com/LibreSpark/LibreTV) 的 Next.js 版，AGPL-3.0-or-later（见 [LICENSE](LICENSE)）。上游自带的功能这里不复述，要查去翻[上游文档](https://libretv.is-an.org/wiki/)；下面是我改的部分。
 
-### Cloudflare Workers（线上）
+## ☁️ 部署：Docker 换成 Cloudflare Workers
 
-线上站点 <https://tv.ycxdev.com> 由 Cloudflare Workers 承载，构建、访问门禁、预置源、缓存层、排错与回滚的完整说明见 [DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md)。
+- OpenNext 打包成 Worker（`tv`），自定义域 `tv.ycxdev.com`
+- push `main` → CI（typecheck / lint / test）→ 自动 `cf:build` + `wrangler deploy`；本地 deploy 只留给预览、热修、回滚
+- 登录检查挪到 middleware：未登录的页面 302 到 `/login`，`/api/*` 直接 401，HTML 不下发
+- 视频和直播流全部浏览器直连源站，Worker 只出页面和 JSON。Cloudflare 不让拿 Workers 分发站外视频，`/api/proxy`、`/api/live/stream` 删掉了
+- 首屏预置 35 个点播源、12 个直播源（上千个频道），构建期写进 `wrangler.jsonc` 和内联 bootstrap，登录即用
+- Worker 入口加了一层缓存（页面 6h、搜索 60s），免费版 CPU 吃紧时不至于每次重新渲染
 
-日常发布只走 GitHub：push 到 `main` → CI（typecheck / lint / test）通过 → `deploy-cloudflare` 自动执行 `npm run cf:build` + `npx wrangler deploy`。**常规发布不要本地 `wrangler deploy`**（本地命令只用于预览、热修复、回滚）。
+部署细节、预置源清单、排错和回滚：[DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md)
 
-### Docker（可选，镜像由上游项目提供）
+## 🔍 搜索
 
-> 下面的 Docker 镜像由上游 LibreTV 项目发布，不是本站构建的；适合本地运行或不使用 Workers 的备用部署。
+- 不再只按名称排：完全相等 > 前缀 > 每个词都中 > 包含 > 近似，同档再比年份
+- 源超过 8 个时，搜索对半拆成两个请求，绕开 Worker 单次 6 连接的排队：同条件 8.1s → 2.0s
+- 卡片进视口就整组探画质，展开后来源按画质 → 集数排，点封面直接用最好的源播
+- 类型 / 年份 / 分级三行标签，同类多选 OR、跨类 AND，计数跟着其它条件实时变
+- 一页 24 条，翻页后顺序冻结，想重排有按钮
 
-```bash
-# 在 .env 中设置 PASSWORD
-echo "PASSWORD=your-password" > .env
+## 🖼️ 封面
 
-# 方式一：拉取上游发布镜像（零构建）
-docker compose pull && docker compose up -d
+- 同一张海报只出一张卡：封面画到 9×8 算 dHash（先裁中心 4:5，再两段缩放），汉明距离 ≤10 归一部片。换域名、换分辨率、两个扫描件都能合上
+- 阈值没放宽，同名同年的不同海报（剧版和影版）各算各的，不硬并
+- 取不到封面就不显示：没 `pic`、算指纹失败、浏览器加载不出来，整张卡隐藏，不留占位图；多源组先换组里下一张
+- 取图先试浏览器 CORS 直连，失败转同源 `/api/cover`（只用来算指纹）；图床 525 降级 http 重试，直连拿到防盗链 HTML 也会换代理
 
-# 方式二：源码构建
-docker compose up -d --build
-```
+## 📺 直播
 
-### Docker Compose
+- 同一频道跨源合并：`CCTV-1 综合` / `CCTV1高清` / `央视一套` 是一行，右边标「N 源」；`CCTV-5` 和 `CCTV-5+` 不合并
+- 点开才探测：单源直接播（0 请求）；多源先读 6 小时缓存，没有就发一次 `/api/live/probe`（≤8 个 URL 一次 invocation 并行）挑第一个能播的。再点正在播的频道 = 换下一个源
+- 以前进页面就全量测活：1477 个频道 ≈ 185 次 invocation，免费版 Worker 的 CPU 直接打爆
+- 那次还带出个 503 误判——Cloudflare 的错误页被客户端当成「没配密码」弹窗，也一起修了。现在只在点频道时才探测
+- 手机端频道列表常驻在播放器下方，选中不收起；入口是顶栏的电视图标，不再藏在汉堡菜单里
+- 装了「跨域助手」（GM_fetch）时，直播 HLS 改走扩展后台，http 流也能播
+- 红点、LIVE 角标、测活工具栏全删了。正在播的那行不标状态——探测有假阴性，给能播的源标红就是误报
 
-```yaml
-services:
-  yemu-yingshi:
-    image: ghcr.io/librespark/libretv:latest   # 上游项目发布
-    container_name: yemu-yingshi
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    environment:
-      - PASSWORD=change-me   # 必填：访问密码，务必修改
-      # - PROXY_SECRET=your-secret          # 会话/代理签名密钥，多实例部署建议设置
-      # - DEFAULT_SOURCES=[{"name":"示例源","url":"https://example.com/api.php/provide/vod"}]
-      # - DEFAULT_LIVE_SOURCES=[{"name":"示例直播源","url":"https://example.com/list.m3u"}]
-      # - DEFAULT_SUBSCRIPTIONS=["https://example.com/sources.json"]  # 预置订阅，自动导入点播源+直播源
-      # - DEFAULT_RECOMMEND_SOURCE=douban  # 首页推荐数据源默认值（douban/bangumi/hot-list），仅对未主动选择过的用户生效
-      # - LIVE_ALLOW_PRIVATE=1              # 自建内网 IPTV 源时开启
-```
+## ▶️ 播放页
 
-> 其余可选变量见下方[环境变量](#环境变量)表；仓库内的 `docker-compose.yml` 含完整注释版本（含 `build: .` 源码构建分支）。
+- 顶部换成全站顶栏；标题挪到播放器上方，下载进控制条，自动连播进播放器齿轮菜单，切换资源放在视频下方
+- `.player-stage` 加 `isolation: isolate`，修掉控制条压住设置 / 跳过标记抽屉的层级问题
+- 详情页简介按纯文本渲染，长的折叠展开，不再漏 HTML 标签
 
-```bash
-docker compose pull && docker compose up -d
-```
+## 🏠 首页
 
-> 💡 **对外提供服务建议套上 HTTPS**：登录密码在 POST body 中以明文传输，公网 HTTP 会被中间人看到，推荐用反向代理（Nginx / Caddy / Traefik）或 Cloudflare 终结 TLS。
-> 登录本身**不依赖 HTTPS**：会话 cookie 的 `Secure` 标记按请求协议（`x-forwarded-proto`）自动推导，`http://服务器IP:端口` 也能正常登录，不会再出现"密码正确却无法登录"。需要强制指定时用 `COOKIE_SECURE`。
+- 推荐区默认收起，点标签才加载、再点收起；空闲时预取热榜、豆瓣标签、Bangumi 日历，只拉 JSON 不拉图
+- 顶栏去掉重复的 logo，留居中大标题
 
-镜像由上游项目发布在 GHCR 与 Docker Hub：`ghcr.io/librespark/libretv` 与 `docker.io/bestzwei/libretv`
-（`latest` / `主.次` / 完整版本号三个 tag，`linux/amd64` 与 `linux/arm64` 双架构，
-两个 registry 的镜像 digest 一致）。需要固定版本时在 `.env` 中设置
-`LIBRETV_IMAGE=ghcr.io/librespark/libretv:<版本>`（与仓库内 `docker-compose.yml` 的变量一致）。
+## 🎨 界面
 
-> 版本号以 `package.json` 为单一来源，部署后可用 `/api/status` 返回的 `version` 字段核对。
+- 主题两态：浅色 ⇄ 深色。去掉「跟随系统」，旧值 `system` 归到深色，首屏不闪
+- 品牌和整套图标重画，清掉 LibreTV 残留
+- 设置面板不写说明文字；缓存只显示已占用多少 MB + 清理
 
-### 手动运行（源码构建）
-
-```bash
-npm install
-PASSWORD=your-password npm run build
-PASSWORD=your-password npm start   # 监听 8080
-```
-
-### 环境变量
-
-| 变量 | 必填 | 说明 |
-| --- | --- | --- |
-| `PASSWORD` | 是 | 访问密码；未设置时站点会提示管理员配置 |
-| `PROXY_SECRET` | 否 | 会话/代理签名密钥；不设置时从 PASSWORD 派生（多实例部署建议显式设置） |
-| `DEFAULT_SOURCES` | 否 | 预置采集站（JSON 数组），用户端自动出现且默认勾选 |
-| `REQUEST_TIMEOUT` | 否 | 代理上游请求超时（毫秒），默认 8000 |
-| `MAX_RETRIES` | 否 | 代理请求重试次数，默认 1 |
-| `SEARCH_MAX_PAGES` | 否 | 每个搜索源最多抓取的页数（1-50，默认 5）。第一页会读取源站 `pagecount`，实际页数 = min(源站总页数，该值)；页间并行请求，单页失败只丢该页 |
-| `SEARCH_SOURCE_TIMEOUT_MS` | 否 | 单个搜索源的总死线（毫秒，3s-60s，默认 10000）：该源所有分页请求须在时限内完成，到点中断并将其标记为「超时」；健康度自动停用也以此为超时判定依据 |
-| `USER_AGENT` | 否 | 代理请求使用的 UA（豆瓣封面防盗链等场景），默认 Chrome UA |
-| `FALLBACK_CORS_PROXY` | 否 | 豆瓣推荐数据直连被拒时降级使用的 CORS 代理地址 |
-| `COOKIE_SECURE` | 否 | 显式覆盖会话 cookie 的 `Secure` 标记（`true` / `false`）；默认按 `x-forwarded-proto` 自动推导。反向代理终结了 TLS 但没传这个头时，cookie 不会带 `Secure`（不影响登录，但少了这层保护），设 `true` 可强制 |
-| `60S_API_BASE` | 否 | 影视榜单推荐源（60s API）实例地址，默认 `https://60s.crystelf.top`；有限流，高频使用可[自部署](https://github.com/vikiboss/60s) |
-| `DEFAULT_LIVE_SOURCES` | 否 | 预置直播源（M3U 订阅），JSON 数组：`[{"name":"源名","url":"https://.../list.m3u","epg":"https://.../epg.xml.gz"}]`，`epg` 为可选的 XMLTV 节目单地址 |
-| `DEFAULT_SUBSCRIPTIONS` | 否 | 预置数据源订阅（源列表 JSON 链接，兼容旧版 LibreTV-SourceList，也接受 TVBOX 配置与接口目录地址），JSON 数组：`["https://.../sources.json", {"url":"https://.../list.json","name":"名称","refreshDays":10}]`。首次访问自动导入点播源与直播源，之后按 `refreshDays`（1-365，缺省 1 天）静默刷新；用户删除后不再自动加回。`refreshDays` 只是初始值，用户在源管理面板改过之后以面板设置为准 |
-| `DEFAULT_RECOMMEND_SOURCE` | 否 | 首页推荐数据源的默认值（`douban` / `bangumi` / `hot-list`，出厂默认 `hot-list`）；仅对未在设置中主动选择过的用户生效，用户的选择始终优先 |
-| `LIVE_ALLOW_PRIVATE` | 否 | 设为 `1` 时允许直播源探活 / 订阅 / 节目单拉取访问内网/保留地址（自建 IPTV 场景），默认关闭以维持 SSRF 防护 |
-
-## 使用说明
-
-1. **添加点播源**：设置 → 源管理 → 点播源 → 添加 API，填入 Apple CMS 采集站地址（如 `https://example.com/api.php/provide/vod`），可选填详情页地址（部分源需要爬详情页提取播放地址）。
-2. **搜索**：勾选点播源后输入片名；搜索通过服务端聚合，个别源失败不影响整体结果。
-3. **播放**：详情弹窗选择剧集进入 `/watch`；支持快捷键（空格/←→/↑↓/F/Alt+←→）、移动端长按 3 倍速、自动连播、换源测速。观看/暂停时后续分片自动缓存到本地（设置可关），播放页可「下载本集」（TS/MP4）离线观看。播放页「跳过标记」可标记片头/中段/片尾区间（快捷键 Shift+I 片头结束、Shift+O 片尾开始、Shift+S·Shift+E 中段区间），之后同剧各集与同名资源自动跳过——片头/中段跳到片段末尾，片尾则直接结束本集（是否连播下一集由自动连播决定），三类片段共用「自动跳过片段」一个开关；跳过时提示条带「撤销」，「跳过标记」侧栏可逐剧关闭、微调边界、试跳起点/终点（记录与试跳都会先暂停），命中区间在进度条上着色。侧栏是非模态的：不遮画面、不挡播放器点击，可以一边看一边标。
-4. **进度与历史**：自动保存在本设备 IndexedDB，仅定位信息入库，播放时自动同步最新剧集。
-5. **配置迁移**：设置 → 数据 → 配置导入导出（导出为 `夜幕影视-Settings`，导入兼容旧版 `LibreTV-Settings`）。
-
-## 直播 / IPTV
-
-1. **添加直播源**：设置 → 源管理 → 直播源 → 填入 M3U/M3U8 地址（可选填 XMLTV 节目单地址），添加后自动探活并显示频道数量；也可在「源管理 → 数据源订阅」中与点播源一起订阅导入；部署者还可用 `DEFAULT_LIVE_SOURCES` 环境变量预置。
-2. **观看**：进入「直播」页，按分组标签筛选或搜索频道，点击即播；支持 HLS（m3u8）与 HTTP-FLV 两种直播流，浏览器直连源站——源站不允许跨域（CORS / 防盗链）时直接提示换频道，不做服务器中转。
-3. **节目单**：频道带 `tvg-id` 且订阅配置了 EPG 地址时，展示当前/接下来节目与播放进度。
-4. **收藏与导出**：频道可收藏；订阅可一键导出为标准 M3U 文件，供 PotPlayer / VLC 等外部播放器使用。
-
-> ⚠️ 项目不内置任何频道源，也不存储、不制作任何直播内容，仅提供第三方公开播放列表的解析与播放能力，内容的合法性由对应数据源负责。内网自建源默认被 SSRF 防护拦截，自部署者可显式设置 `LIVE_ALLOW_PRIVATE=1` 放行。
-
-## 数据源订阅 / 分享
-
-数据源（点播源 + 直播源）可以 **导出为一份 JSON → 托管到公开 URL → 他人在「设置 → 源管理 → 数据源订阅」里填入该 URL 订阅**。
-
-托管地址没有特殊要求，可用 [npoint.io](https://www.npoint.io/) 免费托管 JSON（粘贴内容即可得到一个公开 URL），Gist、对象存储、任意静态托管同样可用。
-
-### 订阅格式（源列表 JSON，兼容旧版 LibreTV-SourceList）
-
-```json
-{
-  "name": "我的源列表",
-  "version": 2,
-  "sources": [
-    {
-      "name": "示例点播源",
-      "url": "https://example.com/api.php/provide/vod",
-      "detail": "https://example.com",
-      "isAdult": false
-    }
-  ],
-  "liveSources": [
-    {
-      "name": "示例直播源",
-      "url": "https://example.com/list.m3u",
-      "epg": "https://example.com/epg.xml.gz"
-    }
-  ]
-}
-```
-
-**字段说明**：
-
-| 字段 | 位置 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- | --- |
-| `name` | 顶层 | string | 否 | 列表名称，订阅后显示在订阅条目上；缺省时显示订阅地址主机名 |
-| `version` | 顶层 | number | 否 | 格式版本，当前为 `2`（新增 `liveSources`）；导入端目前忽略该字段 |
-| `sources` | 顶层 | array | 否 | **点播源**数组（Apple CMS 采集站），最多 100 个，超出部分截断 |
-| `sources[].name` | 项 | string | 否 | 源显示名；缺省时使用 URL 主机名 |
-| `sources[].url` | 项 | string | **是** | Apple CMS 采集接口地址（公网 http/https），结尾 `/` 自动去除 |
-| `sources[].detail` | 项 | string | 否 | 详情页根地址，用于列表接口拿不到播放地址、需要爬详情页提取 m3u8 的源 |
-| `sources[].isAdult` | 项 | boolean | 否 | 成人内容标记，默认 `false`。标记为 `true` 的源名称旁显示 **(18+)** 徽章；设置中的「成人内容过滤」开启（默认开启）时该源不可勾选、不参与搜索，需先关闭过滤才能启用 |
-| `liveSources` | 顶层 | array | 否 | **直播源**数组（M3U 播放列表），最多 50 个，超出部分截断 |
-| `liveSources[].name` | 项 | string | 否 | 源显示名；缺省时使用 URL 主机名 |
-| `liveSources[].url` | 项 | string | **是** | M3U 播放列表地址（http/https） |
-| `liveSources[].epg` | 项 | string | 否 | XMLTV 节目单地址（`xml` / `xml.gz`），用于 `/live` 页展示节目单；地址非法时只丢弃该字段、保留整条源 |
-
-**兼容与限制**：
-
-- 只写 `sources` 的老订阅照常可用（纯点播），只写 `liveSources` 则是纯直播订阅；两者都缺时提示「订阅内容格式不正确」；裸数组 `[{ "name": "...", "url": "..." }]` 视为点播源；
-- 按 `url` 去重（先到先得）；非 http(s) 地址会被过滤；**点播源**另需为公网地址（内网/回环/保留地址会被静默过滤），**直播源**在部署者设置 `LIVE_ALLOW_PRIVATE=1` 时可使用内网自建源地址；
-- 订阅由**服务端**拉取（拉取前经过 SSRF 校验），因此订阅地址**无需配置 CORS**，Gist、对象存储、任意静态托管均可。
-
-### 兼容 TVBOX 配置
-
-订阅地址也可以直接填 **TVBOX 配置**（形如 `{"sites": [...], "lives": [...], "parses": [...]}`）：服务端按内容结构自动识别格式，无需手动选择。
-
-- **点播源**：导入 `sites` 中 `type: 1` 的 JSON 接口（即 Apple CMS 采集站）；部分共享配置省略 `type` 或写成 `0`，但地址命中 `api.php/provide/vod` 时同样导入；站点自身标记 `searchable: 0`（不可搜索）时跳过；
-- **直播源**：导入 `lives` 中 `type: 0`（或省略）的 M3U 播放列表，`epg` 字段一并带上；txt 频道列表与单仓 JSON 不支持；
-- **Spider 类站点会跳过**：`type: 3` 的 Spider（`csp_*` / `.jar` / `.js` / `.py`）需要 TVBOX 自身的 Spider 引擎才能运行，Node 侧无法执行；XML 接口、外链 JSON 同理。被跳过的条目不影响其余导入，导入结果会如实提示，如「已同步 8 个点播源、2 个直播源（TVBOX 配置）；跳过 96 个不可用条目（Spider 引擎 92、XML 接口 4）」；
-- TVBOX 配置常含上百条站点且以 Spider 为主，**只导入个位数到十几个属正常现象**；
-- **格式容错**：配置里的 `//` 注释、尾随逗号、字符串内未转义的换行会自动修正后再解析（共享配置中很常见，TVBOX 客户端用的 fastjson 同样容忍这些写法）；
-- 其他限制：订阅地址需直接返回 JSON（Base64 / 压缩包装的分享链接不支持）；TVBOX「多仓」配置（顶层为 `urls` 数组）不支持，请填单仓配置；地址公网校验、去重与数量上限与上方格式完全一致。
-
-### 兼容接口目录（source-catalog）
-
-订阅地址也可以填一份**接口目录**——裸数组，元素为 `{ "name": "...", "baseUrl": "..." }`：
-
-```json
-[
-  { "name": "示例接口", "baseUrl": "https://example.com/api.php/provide/vod" },
-  { "name": "已停用的接口", "baseUrl": "https://old.example.com/api.php/provide/vod", "enabled": false }
-]
-```
-
-- 只导入 `baseUrl`（点播接口），**不含直播源**；`enabled` 缺省视为启用，写 `false` 的条目跳过并在结果里计数；
-- 顶层数组**全部条目都带 `baseUrl`** 才按接口目录解析；混用 `baseUrl` 与 `url` 两种条目会直接报格式错误，避免其中一批被静默丢弃；
-- 地址归一化、去重与数量上限与源列表 JSON 一致（`baseUrl` 去尾部斜杠与空的 `?` / `#`）。
-
-### 订阅行为
-
-- **订阅**：设置 → 源管理 → 数据源订阅 → 填入订阅地址 → 「订阅」，导入的点播源自动勾选、直播源自动启用，均带「订阅」标识，条目上显示「点播 N · 直播 M」；
-- **同步**：订阅条目上的 **⟳** 手动强制同步，整体替换该订阅名下的点播源与直播源；
-- **自动刷新**：每个订阅可单独设置刷新周期（条目上的周期下拉：关闭 / 1 / 3 / 7 / 14 / 30 天，默认**关闭**即纯手动）。设为 N 天后，打开站点时检查是否到期，到期才在后台静默同步；单次最多刷新 5 个、并发 2 个，页面不可见或离线时跳过，不阻塞首屏。连续失败 3 次自动暂停该订阅（条目显示「已暂停」），手动同步成功或改周期后恢复计数。环境变量 `DEFAULT_SUBSCRIPTIONS` 里的 `refreshDays` 只作为**初始值**，用户在面板里改过之后以面板为准；
-- **管理边界**：订阅源以远端列表为准，单独编辑会在下次同步时被覆盖，单独移除会在重新同步时恢复；如需调整请改远端列表，或直接删除整个订阅。删除订阅时点播源全部移除；直播源为**多归属共享**——同一 M3U 可被多个订阅引用（名称/EPG 以首次导入为准），删除订阅或远端列表中移除该源后再同步，都只摘除本订阅的引用，仅当不再被任何订阅引用时才移除该源，手动添加的源不受同步影响，**收藏的频道始终保留**；
-- **导出分享**：设置 → 源管理 → 数据源订阅 → 「导出数据源」，把当前全部点播源与直播源（预置 + 手动 + 订阅，按 URL 去重）导出为上述源列表 JSON（导出名 `夜幕影视-SourceList`）；也可用「发布为链接」，把当前**已勾选启用**的源一键上传到公开粘贴板（paste.rs，失败自动降级 0x0.st），直接返回可填入订阅框的 URL，无需自备托管。注意：发布的内容**公开可读**，且每次发布生成新链接、不支持覆盖更新，需长期稳定请用导出 + 自行托管。
-
-> 订阅由服务端拉取（经过 SSRF 校验），因此订阅地址无需配置 CORS。
-
-## 开发
+## 🛠️ 本地开发
 
 ```bash
 npm install
 PASSWORD=dev-password npm run dev   # http://localhost:8080
-npm test                            # 核心库单元测试（cms-parser / m3u8 / ssrf）
+npm test                            # vitest，750+ 例
 npm run typecheck
 ```
 
-### UI 截图 / 层级验证
+- 截图 / DOM 断言用 `npm run shot`：开本机 Chrome 的移动视口读真实数值，不碰日常标签页。参数和 UI 不变量见 [docs/ui-verification.md](docs/ui-verification.md)
+- 封面聚合的设计、阈值和取图踩过的坑：[docs/search-cover-aggregation.md](docs/search-cover-aggregation.md)
 
-`scripts/shot.mjs` 用本机 Chrome 的移动视口截图并读取 DOM 数值，不依赖浏览器扩展，也不影响日常标签页：
+## 📌 待办
 
-```bash
-npm run shot -- --url "http://localhost:8080/" --out .tmp/shots/home.png
+- 油猴脚本直连模式：搜索从访客浏览器经 `GM_xmlhttpRequest` 打到采集站，Worker 只留页面和登录。为什么非油猴不可、失败了怎么回退，写在 [docs/userscript-plan.md](docs/userscript-plan.md)
 
-# 播放页：等播放器挂载，打开设置抽屉再截图
-npm run shot -- --url "http://localhost:8080/watch?source=env_4&url=<test.m3u8>&title=测试" \
-  --selector ".art-video-player" --out .tmp/shots/watch-settings.png --open-settings
-```
+## 🙏 上游与免责
 
-要求 Node ≥ 22 与本机 Chrome；登录密码从 `SHOT_PASSWORD` 或 `.dev.vars` 的 `PASSWORD=` 读取。参数、播放页 UI 不变量、artplayer 层级隔离的说明见 [docs/ui-verification.md](docs/ui-verification.md)。
-
-发布流程见 [DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md)。
-
-## 发布新版本
-
-版本号以 `package.json` 为单一来源，部署后可用 `/api/status` 返回的 `version` 字段核对。
-
-改完代码/文档后提交并推送 `main`：CI（typecheck / lint / test）通过后 `deploy-cloudflare` 自动构建并部署到 Cloudflare Workers，线上 tv.ycxdev.com 随每次 `main` 提交更新；本地 `wrangler deploy` 只用于预览、热修复、回滚，详见 [DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md)。
-
-## TODO
-
-### 油猴脚本：浏览器直连模式（未开发，方案已定）
-
-**动机**：聚合搜索现在全部由 Worker 扇出。用户出于隐私/配额考虑，希望像「豆瓣多站找资源」那类脚本一样，让请求从各自浏览器直接打到采集站。
-
-**为什么不能只靠页面 JS**：苹果 CMS 的 `?ac=videolist` 接口基本不返回 `Access-Control-Allow-Origin`（实测电影天堂 / 飘零 / 无尽 / 极速 4 个源全部缺失），https 页面里 `fetch()` 能拿到 200 但读不到 body；另有 `http://` 源的混合内容拦截。油猴的 `GM_xmlhttpRequest` 由扩展后台进程发起，不受 CORS 约束——这才是「无服务器」成立的真正原因。
-
-**计划形态**：在 `tv.ycxdev.com` 注入脚本，hook `window.fetch`，拦截 `/api/search` 与 `/api/quality`：
-
-1. 用 `GM_xmlhttpRequest` 并行请求各源（绕过 CORS 与混合内容限制），按现有 NDJSON 事件格式把 `source` / `done` 事件流回页面，UI 无需改动；
-2. 过滤与排序复用站点同一套纯函数（`filterRelevantResults`、`compareSearchResults`、画质解析），保证油猴模式与 Worker 模式结果一致；
-3. 失败（脚本不可用 / 源站拒绝）时回退到站点原有 `/api/search`，两种模式可共存；
-4. 源配置仍由站点下发，脚本不存任何密钥。
-
-**待办**：脚本壳 + 构建产物（`@grant GM_xmlhttpRequest`）、与服务端引擎的版本对齐检查、Greasy Fork 发布（流程见 `docs/userscript-release-playbook.md`）。上线后 Worker 只保留静态页面与登录，搜索/探测的扇出完全由访客浏览器承担。
-
-## 安全说明
-
-- 密码只保存在服务端环境变量中，前端不持有任何可重放凭证。
-- 登录接口有 IP 速率限制（10 次 / 10 分钟）。
-- 媒体流量（m3u8 / ts / mp4 / flv）与封面图都由浏览器直连源站，不经过本站 Worker：
-  直连失败（CORS / 防盗链 / 混合内容）时提示换源，不再提供服务器中转。
-- 装了油猴「跨域助手」（CORS Helper，Greasy Fork 508769）时，**直播**的 m3u8 与分片改由扩展后台请求
-  （`window.GM_fetch`），可绕开源站的 CORS 与混合内容限制；点播、下载、视频预取仍走原生请求。
-  未安装或脚本未匹配本站时行为不变，仍直连源站。
-- 服务端只代理「豆瓣 / Bangumi 推荐数据」等文本接口，且内置 SSRF 防护（拒绝内网/保留地址）。
-
-## 上游与许可
-
-- 本项目基于上游开源项目 [LibreSpark/LibreTV](https://github.com/LibreSpark/LibreTV) 的 Next.js 版二次开发，遵循 **AGPL-3.0-or-later**（见 [LICENSE](LICENSE)）。
-- 本站的 Cloudflare Workers 改造、预置源与品牌维护在 [devycx/tv](https://github.com/devycx/tv)。
-- 品牌与内部标识兼容策略见 [DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md)。Docker 镜像由上游项目发布（`ghcr.io/librespark/libretv` / `docker.io/bestzwei/libretv`）。
-
-## 免责声明
-
-本站不存储、不制作任何视频内容，仅提供第三方公开接口的聚合与播放能力，内容的合法性由对应数据源负责。
+- 基于 [LibreSpark/LibreTV](https://github.com/LibreSpark/LibreTV) 二次开发，沿用 AGPL-3.0-or-later
+- 采集站、直播源、节目单都是第三方公开资源。本站不存储、不转码、不制作视频，能不能播取决于源站，内容的合法性也由源站负责
