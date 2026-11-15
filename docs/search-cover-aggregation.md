@@ -245,5 +245,10 @@ gh run watch <run-id> -R devycx/tv --exit-status
 | `6044278` | 封面视觉指纹聚合 + 结果标签筛选 |
 | `a9d3998` | 图床 525 降级 HTTP + 浏览器 CORS 直连优先 |
 | `0fecf87` | 直连防盗链 HTML/坏图回退代理 |
+| `1d71f9f` | 指纹改按 4:5 取景计算（同主视觉不同画幅合并）+ 取图失败条目隐藏 |
 
-CI `43660863805` / deploy `43660924771` 均 success，deploy headSha = `0fecf87`。
+CI `43666919274` / deploy `43666986801` 均 success，deploy headSha = `1d71f9f`。
+
+线上验证（2026-11-15，`?s=后会友期`，清 v2 缓存）：**2 部影片 / 26 条来源结果**，
+卡片为 11 源（原 9 源 + 2 源合并）与 15 源；1 个源超时、1 条封面取图失败已隐藏
+（提示「封面取图失败，已隐藏 1 条来源」）。截图 `.tmp/shots/prod-search-houhuiyouqi-after.png`。
