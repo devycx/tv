@@ -11,7 +11,7 @@ import { useAppStore, resolveSource, isInDisabledSubscription, isSourceDisabled 
 import { api } from '@/lib/client-api';
 import type { SearchResultItem, SourceSearchOutcome } from '@/lib/types';
 import { SearchHistoryDropdown, useSearchHistory } from '@/components/search-history';
-import { cn, buildWatchUrl, formatDisableTtl, validateSourceUrl } from '@/lib/utils';
+import { cn, buildWatchUrl, validateSourceUrl } from '@/lib/utils';
 import { addSearchHistory } from '@/lib/db';
 import { compareSearchResults } from '@/lib/relevance';
 import { applyFrozenOrder, orderDiffers } from '@/lib/result-paging';
@@ -32,7 +32,7 @@ import { Icon } from '@/components/icon';
 
 /**
  * 首页：搜索（URL ?s= 驱动，可后退/分享）+ 豆瓣推荐。
- * 搜索状态由 React Query 管理，失败源在结果区顶部以非阻塞方式展示。
+ * 搜索状态由 React Query 管理；失败的源静默跳过（不提示），健康度只在设置里看。
  */
 /**
  * 搜索结果每页条数。
@@ -75,12 +75,6 @@ function HomeContent() {
     if (urlQuery) setInput(urlQuery);
   }, [urlQuery]);
 
-  // 源名回显：失败/停用提示里显示友好名称而非裸 key
-  const sourceName = (key: string) =>
-    customAPIs.find((a) => a.key === key)?.name ??
-    envSources.find((a) => a.key === key)?.name ??
-    key;
-
   const selectedSources = useMemo(() => {
     // selectedKeys 可能含历史残留的重复 key：按 key 去重，避免同源重复搜索
     const seen = new Set<string>();
@@ -96,18 +90,6 @@ function HomeContent() {
       // 所属订阅被整体停用的源同样跳过（无损：各源勾选状态保留，重新启用即恢复）
       .filter((s) => !isInDisabledSubscription({ subscriptions }, s.key));
   }, [customAPIs, envSources, selectedKeys, sourceHealth, subscriptions]);
-  const disabledSources = useMemo(
-    () => selectedKeys.filter((key) => isSourceDisabled({ sourceHealth }, key)),
-    [selectedKeys, sourceHealth]
-  );
-  // 来自已关闭订阅的源：勾选状态还在，但本次搜索用不到，必须明确告知
-  const offSubscriptionSources = useMemo(
-    () =>
-      selectedKeys.filter(
-        (key) => !isSourceDisabled({ sourceHealth }, key) && isInDisabledSubscription({ subscriptions }, key)
-      ),
-    [selectedKeys, sourceHealth, subscriptions]
-  );
 
   const searchQuery = useQuery({
     queryKey: ['search', urlQuery, selectedKeys, yellowFilter],
@@ -117,16 +99,10 @@ function HomeContent() {
       return api.search(urlQuery.slice(0, 100), selectedSources, yellowFilter, {
         signal,
         // 逐源结算即更新：结果边搜边渲染，同时滚动健康度
+        // （停用/超时不再在这里提示：源健康状况只在设置 → 点播源里看）
         onSource: (outcome) => {
           setStreamedOutcomes((prev) => [...prev, outcome]);
-          for (const ev of useAppStore.getState().recordSourceHealth([outcome])) {
-            toast(
-              ev.permanent
-                ? `「${sourceName(ev.key)}」多次失败，已停止参与搜索，可在设置中恢复`
-                : `「${sourceName(ev.key)}」连续超时/失败，已停用 ${formatDisableTtl(ev.ttlMs ?? 0)}`,
-              'warning'
-            );
-          }
+          useAppStore.getState().recordSourceHealth([outcome]);
         },
       });
     },
@@ -213,11 +189,17 @@ function HomeContent() {
     [list, coverHashes]
   );
   /**
-   * 封面取图/解码失败的条目：拿不到视觉指纹，退回 URL/片名只会再拆出一张重复卡
-   * （线上「后会友期」的 ywxohs 源就是这样多出一张 1 源卡）。直接隐藏，不额外提示。
+   * 展示用的条目：指纹算完的、且**确实有封面图**的。
+   *
+   * - 取图/解码失败：拿不到视觉指纹，退回 URL/片名只会再拆出一张重复卡
+   *   （线上「后会友期」的 ywxohs 源就是这样多出一张 1 源卡）；
+   * - 源站根本没给封面（没有 pic）：没有指纹也无法展示封面，卡片只能渲染成占位图
+   *   （线上「色戒」的麻豆源 MAD-039 就是这样），同样直接隐藏。
+   *
+   * 两者都不额外提示：搜索页只展示能看的内容，源站缺图不属于用户需要处理的信息。
    */
   const visibleList = useMemo(
-    () => settledList.filter((item) => !coverHashes.isFailed(item.pic)),
+    () => settledList.filter((item) => Boolean(item.pic?.trim()) && !coverHashes.isFailed(item.pic)),
     [settledList, coverHashes]
   );
   const coverHashMap = useMemo(() => {
@@ -459,18 +441,6 @@ function HomeContent() {
                 </button>
               )}
             </div>
-
-            {disabledSources.length > 0 && (
-              <div className="mb-3 text-xs text-faint bg-chip rounded-lg px-3 py-2">
-                已停用：{disabledSources.map((key) => sourceName(key)).join('、')}
-              </div>
-            )}
-
-            {offSubscriptionSources.length > 0 && (
-              <div className="mb-3 text-xs text-faint bg-chip rounded-lg px-3 py-2">
-                订阅已停用：{offSubscriptionSources.map((key) => sourceName(key)).join('、')}
-              </div>
-            )}
 
             {selectedSources.length === 0 ? (
               <NoSourceGuide hasSources={customAPIs.length > 0 || envSources.length > 0} />
