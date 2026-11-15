@@ -25,15 +25,15 @@ import {
   type LiveSortMode,
 } from '@/lib/live-channel-filter';
 import { bestProbe, type LiveChannelItem, type MergedChannel } from '@/lib/channel-merge';
-import { useLiveProbe, type ProbeResult } from './use-live-probe';
+import { useLiveProbeResults, type ProbeResult } from './use-live-probe';
 import { EmptyState } from './states';
 
 /**
  * 直播频道侧栏：全部/收藏/最近三个视图 + 分组横向标签条 + 关键字搜索 + 排序。
  * - 频道按名称跨源合并（见 lib/channel-merge.ts）：一行 = 一个频道，可能含多个候选源；
- * - 不再进页面自动全量测活：测活改为「选中频道时只探它自己的候选源」，
- *   需要体检整个列表时用工具栏的「测活」按钮（默认不跑）；
- * - 可用性两档筛选（绿点=分片级验证 / 可播=含弱验证）；
+ * - 不用手动测活：点频道时由页面只探它自己的候选源；列表这里不提供「测活本列表」入口，
+ *   也不展示测活进度/计数（用户 2026-11-15 要求去掉，用处不大）；
+ * - 有探测结论时（点选频道写入的结果）才显示状态点，auto 档只隐藏「已确认不可用」的频道；
  * - 虚拟列表（@tanstack/react-virtual）：仅渲染可视区内的频道行，数千频道下 DOM 恒定，
  *   电视盒子 / 低端设备滑动不掉帧；行高动态测量（有无分组名两档）；
  * - 键盘：容器聚焦后 ↑↓ 移动光标、Enter 播放；
@@ -41,16 +41,6 @@ import { EmptyState } from './states';
  */
 
 const SEARCH_DEBOUNCE_MS = 200;
-
-/** 测活进度文案：按已完成均速估算剩余时间（长尾在途期间由每秒 tick 重渲染保持走动） */
-function formatProbeProgress(p: { done: number; total: number; startedAt: number }): string {
-  const base = `${p.done}/${p.total}`;
-  const remaining = p.total - p.done;
-  if (remaining <= 0) return base;
-  if (p.done <= 0) return `${base} · 估算中…`;
-  const remainMin = Math.ceil(((Date.now() - p.startedAt) / p.done) * remaining / 60000);
-  return `${base} · 预计剩余 ${Math.max(1, remainMin)} 分钟`;
-}
 
 export type { LiveChannelItem };
 
@@ -176,22 +166,8 @@ export function LiveChannelList({
   /** 分组标签条的拖拽滚动与边缘渐隐 */
   const chipStrip = useChipStrip(groups.length);
   const listRef = useRef<HTMLDivElement>(null);
-  const {
-    results: probeResults,
-    progress: probeProgress,
-    probe,
-    cancel: cancelProbe,
-    isProbing,
-    hint: probeHint,
-  } = useLiveProbe();
-
-  // 测活 ETA 每秒刷新：探测长尾（在途请求未返回）期间进度不推进，剩余时间也要走动
-  const [, setProbeTick] = useState(0);
-  useEffect(() => {
-    if (!isProbing) return;
-    const timer = setInterval(() => setProbeTick((n) => n + 1), 1000);
-    return () => clearInterval(timer);
-  }, [isProbing]);
+  /** 可用性结论只来自「点选频道时的按需探测」，这里只读视图 */
+  const probeResults = useLiveProbeResults();
 
   const favSet = useMemo(() => new Set(liveFavorites), [liveFavorites]);
   /** 候选 URL → 合并行：收藏/最近/当前播放都按 URL 反查 */
@@ -280,19 +256,6 @@ export function LiveChannelList({
     onFilteredChange?.(filtered);
   }, [filtered, onFilteredChange]);
 
-  // 口径与筛选按钮一致：绿点=分片级验证且吞吐达标（排除限速源），可播=任何验证级别通过
-  const aliveCounts = useMemo(() => {
-    let ok = 0;
-    let green = 0;
-    for (const row of matched) {
-      const p = probeOfRow(row);
-      if (!p?.ok) continue;
-      ok++;
-      if (matchesAlive(p, 'green')) green++;
-    }
-    return { ok, green };
-  }, [matched, probeOfRow]);
-
   /** 当前 auto 档隐藏了多少个「已确认不可用」的频道（含超时；没有可用结果时隐藏不生效） */
   const autoHiddenCount = useMemo(() => {
     if (aliveFilter !== 'auto' || !hasAliveProbe) return 0;
@@ -371,20 +334,6 @@ export function LiveChannelList({
     useAppStore.getState().removeLiveRecent(url);
   }, []);
 
-  /** 手动体检：只检测当前筛选出来的频道（默认不跑，避免整页 1477 个频道的后台探测） */
-  const probeFiltered = useCallback(() => {
-    const seen = new Set<string>();
-    const urls: { url: string }[] = [];
-    for (const row of filtered) {
-      for (const candidate of row.candidates) {
-        if (seen.has(candidate.url)) continue;
-        seen.add(candidate.url);
-        urls.push({ url: candidate.url });
-      }
-    }
-    if (urls.length > 0) void probe(urls, { silent: true });
-  }, [filtered, probe]);
-
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* 视图 tab */}
@@ -442,86 +391,35 @@ export function LiveChannelList({
         />
       </div>
 
-      {/* 测活：默认不自动跑（进页面全量测活既慢又会撞 Worker CPU 限额）。
-          需要体检时点一下「测活本列表」；平时点频道本身只对它的候选源做按需探测。 */}
-      <div className="flex items-center gap-1.5 px-3 pb-2 shrink-0 flex-wrap">
-        {isProbing ? (
-          <>
-            <span className="text-[10px] text-faint whitespace-nowrap">
-              检测中 {probeProgress ? formatProbeProgress(probeProgress) : ''}
-            </span>
+      {/* 可用性只剩一行「已隐藏 / 显示全部」的开关：测活进度、通过/可播计数、提示文案
+          都已按用户要求移除（2026-11-15）。没有探测结论时这一行整块不渲染。 */}
+      {((aliveFilter === 'auto' && autoHiddenCount > 0) || (aliveFilter !== 'auto' && hasProbeForList)) && (
+        <div className="flex items-center gap-1.5 px-3 pb-2 shrink-0 flex-wrap">
+          {aliveFilter === 'auto' && autoHiddenCount > 0 && (
+            <>
+              <span className="text-[10px] text-faint whitespace-nowrap">
+                已隐藏 {autoHiddenCount} 个不可用
+              </span>
+              <button
+                className="text-[10px] text-accent underline-offset-2 hover:underline"
+                onClick={() => setAliveFilter('off')}
+                title="显示全部频道"
+              >
+                显示全部
+              </button>
+            </>
+          )}
+          {aliveFilter !== 'auto' && hasProbeForList && (
             <button
               className="text-[10px] text-faint underline-offset-2 hover:text-content hover:underline"
-              onClick={cancelProbe}
-              title="停止检测"
+              onClick={() => setAliveFilter('auto')}
+              title="恢复自动隐藏"
             >
-              停止
+              恢复自动隐藏
             </button>
-          </>
-        ) : (
-          <button
-            className="shrink-0 px-2 py-0.5 rounded-full text-[10px] whitespace-nowrap transition-colors border bg-chip text-muted border-line hover:text-content hover:bg-hover disabled:opacity-50 disabled:hover:bg-chip"
-            onClick={probeFiltered}
-            disabled={filtered.length === 0}
-            title="检测当前列表的频道"
-          >
-            测活本列表
-          </button>
-        )}
-        {aliveFilter === 'auto' && autoHiddenCount > 0 ? (
-          <>
-            <span className="text-[10px] text-faint whitespace-nowrap">
-              已隐藏 {autoHiddenCount} 个不可用
-            </span>
-            <button
-              className="text-[10px] text-accent underline-offset-2 hover:underline"
-              onClick={() => setAliveFilter('off')}
-              title="显示全部频道"
-            >
-              显示全部
-            </button>
-          </>
-        ) : aliveFilter === 'auto' && hasProbeForList && !hasAliveProbe ? (
-          <span className="text-[10px] text-warning">暂未发现可用频道，已显示全部</span>
-        ) : aliveFilter !== 'auto' && hasProbeForList ? (
-          <button
-            className="text-[10px] text-faint underline-offset-2 hover:text-content hover:underline"
-            onClick={() => setAliveFilter('auto')}
-            title="恢复自动隐藏"
-          >
-            恢复自动隐藏
-          </button>
-        ) : null}
-        {probeHint && <span className="text-[10px] text-faint">{probeHint}</span>}
-        {hasProbeForList && !isProbing && (
-          <>
-            <button
-              className={cn(
-                'shrink-0 px-2 py-0.5 rounded-full text-[10px] whitespace-nowrap transition-colors border',
-                aliveFilter === 'green'
-                  ? 'bg-accent text-on-accent border-accent'
-                  : 'bg-chip text-muted border-line hover:text-content hover:bg-hover'
-              )}
-              onClick={() => setAliveFilter((v) => (v === 'green' ? 'auto' : 'green'))}
-              title="只看已验证的频道"
-            >
-              通过 {aliveCounts.green}
-            </button>
-            <button
-              className={cn(
-                'shrink-0 px-2 py-0.5 rounded-full text-[10px] whitespace-nowrap transition-colors border',
-                aliveFilter === 'ok'
-                  ? 'bg-accent text-on-accent border-accent'
-                  : 'bg-chip text-muted border-line hover:text-content hover:bg-hover'
-              )}
-              onClick={() => setAliveFilter((v) => (v === 'ok' ? 'auto' : 'ok'))}
-              title="看所有验证通过的频道"
-            >
-              可播 {aliveCounts.ok}
-            </button>
-          </>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
       {/* 分组标签条（横向可滑动：滚轮/滚动条之外，鼠标可直接拖动） */}
       {view === 'all' && groups.length > 0 && (
@@ -737,12 +635,9 @@ const ChannelRow = memo(function ChannelRow({
             {picking ? (
               <span className="shrink-0 text-[10px] text-accent whitespace-nowrap">连接中…</span>
             ) : (
-              probe && (
-                <span
-                  className={cn('w-1.5 h-1.5 rounded-full shrink-0', dotClass)}
-                  title={probeTitle}
-                />
-              )
+              // 正在播的这一行不给状态点：探测存在假阴性，播得起来还标红会让用户以为源坏了
+              probe &&
+              !active && <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', dotClass)} title={probeTitle} />
             )}
             <span className={cn('text-xs truncate', active ? 'text-accent font-medium' : 'text-content')}>
               {channel.name}

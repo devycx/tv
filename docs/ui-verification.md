@@ -39,7 +39,12 @@ npm install
 PASSWORD=dev-password npm run dev   # http://localhost:8080
 ```
 
-本机（Windows）的 Node / TEMP 等细节见仓库根 `AGENTS.md`。注意两点：
+本机（Windows）的 Node / TEMP 等细节见仓库根 `AGENTS.md`。注意三点：
+
+0. **本地验证要用真实封面和真实源/频道**（用户 2026-11-15 明确要求）：纯色 SVG / 假频道名做 mock 时，
+   截图看起来和「功能坏了」一样，用户会误判。只 mock 真正会失败的那一个接口，或直接对线上跑 shot。
+   直播页要在本机跑通真实按需探测，dev 启动时加 `LIVE_ALLOW_PRIVATE=1`（放行 Clash fake-IP 的 198.18.x）；
+   搜索页的 `/api/search` 是严格 SSRF 口径、没有放行开关，**搜索页一律对线上验证**。
 
 1. **本地采集站请求通常不可用**：Clash fake-IP 会把源站域名解析到 `198.18.0.0/15`，Node 侧 SSRF 防护会拦。不要用「本地搜索真实源」来验证播放器，改用公开测试 HLS + 直连 `url` 参数：
 
@@ -174,6 +179,31 @@ npm run shot -- --url "http://localhost:8080/live?url=https%3A%2F%2Ftest-streams
 
 预期：`mux` 里出现 master / variant / `.ts` 分片，`t > 0`（播放中）。去掉 `--init-js` 后同一 URL 应同样能播，
 说明没有脚本时的回退路径没回归。**这个 mock 只证明接线正确**；真正的 CORS 绕过必须装脚本在真实设备上验。
+
+## 直播页 / 主题按钮的不变量（2026-11-15）
+
+- **播放中不出现红点**：正在播放的那一行不渲染探测状态点；信息条 `h1` 前没有 `.live-dot`；
+  播放器右上角**没有** `● LIVE` 角标（用户两轮要求都去掉了）。`.live-dot` 只剩「暂无直播源/加载中」空态在用。
+- **列表工具栏没有测活文案**：「测活本列表」「检测中 x/y」「通过 N」「可播 N」「暂未发现可用频道」都不应出现；
+  只有出现探测结论时才可能有「已隐藏 N 个不可用 / 显示全部 / 恢复自动隐藏」。
+- **主题按钮两态**：`light ⇄ dark`，图标只有太阳/月亮，不再有跟随系统的显示器图标。
+  断言：
+
+  ```js
+  (() => {
+    const btn = [...document.querySelectorAll('button')].find((b) =>
+      (b.getAttribute('aria-label') || '').startsWith('切换主题')
+    );
+    return {
+      dark: document.documentElement.classList.contains('dark'),
+      label: btn?.getAttribute('aria-label'),
+      icon: btn?.querySelector('svg path')?.getAttribute('d').slice(0, 12),
+      isMonitor: btn?.querySelector('svg path')?.getAttribute('d').startsWith('M9.75 17'),
+    };
+  })()
+  ```
+
+  初始应为 `dark: true`、`icon: 'M20.354 15.3…'`、`isMonitor: false`。
 
 ## 2026-11-14 改版记录
 

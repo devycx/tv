@@ -365,7 +365,6 @@ function LiveContent() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="live-dot shrink-0" />
                     <h1 className="text-sm font-semibold text-content truncate" title={currentChannel.name}>
                       {currentChannel.name}
                     </h1>

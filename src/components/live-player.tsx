@@ -428,13 +428,6 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
           <span className="text-[11px] sm:text-xs text-faint">正在加载…</span>
         </div>
       )}
-      {/* LIVE 呼吸标识 */}
-      {!error && (
-        <div className="absolute top-3 right-3 z-[130] flex items-center gap-1.5 bg-black/60 px-2 py-1 rounded-full pointer-events-none">
-          <span className="live-dot" />
-          <span className="text-[10px] font-semibold text-white tracking-wider">LIVE</span>
-        </div>
-      )}
       {/* 换台 OSD：频道名（全屏内同样可见） */}
       {osdTitle && !error && (
         <div className="absolute top-3 left-3 z-[130] flex items-center max-w-[70%] bg-black/60 px-3 py-1.5 rounded-full pointer-events-none animate-fade-in">

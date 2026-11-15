@@ -287,7 +287,10 @@ export const api = {
     return `/api/live/playlist?${sp.toString()}`;
   },
 
-  /** 批量测活：分片级探测频道可达性与延迟（单批最多 50 条） */
+  /**
+   * 按需测活：点选频道时只探它自己的候选源（服务端单请求最多 8 个 URL，批内并发 16，
+   * 一次 invocation 内并行探完）。没有全量测活入口，不要再加回来。
+   */
   liveProbe: (urls: string[], signal?: AbortSignal) =>
     request<{ results: LiveProbeResult[] }>(
       '/api/live/probe',
@@ -298,27 +301,6 @@ export const api = {
         signal,
       }
     ),
-
-  /**
-   * 流式测活：服务端以 NDJSON 逐条推送（命中缓存的立即返回），
-   * 结果边测边回调，列表状态点可以边测边亮。
-   */
-  liveProbeStream: async (
-    urls: string[],
-    onResult: (result: LiveProbeResult) => void,
-    signal?: AbortSignal
-  ): Promise<void> => {
-    const res = await fetch('/api/live/probe?stream=1', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ urls }),
-      signal,
-    });
-    throwForAuthStatus(res);
-    if (!res.ok || !res.body) throw new ApiError(`请求失败 (${res.status})`, res.status);
-
-    await consumeNdjson<LiveProbeResult>(res, onResult);
-  },
 };
 
 export interface SearchFailure {
@@ -380,7 +362,7 @@ function mergeSearchResponses(parts: SearchResponse[], wd: string): SearchRespon
   return { list, failures: parts.flatMap((part) => part.failures) };
 }
 
-/** 聚合搜索流式消费：逐源回调 + 最终聚合结果（NDJSON 行协议，同 liveProbeStream） */
+/** 聚合搜索流式消费：逐源回调 + 最终聚合结果（NDJSON 行协议） */
 async function searchStream(
   wd: string,
   sources: SourceConfig[],
