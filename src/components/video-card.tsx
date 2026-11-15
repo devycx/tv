@@ -16,7 +16,9 @@ import { useInView } from './use-in-view';
  * 聚合影片卡片：
  * - 点击封面图 → 立即播放（播放页会挑画质最好的源、剧集默认最新一集）；
  * - 点击文字区 → 打开详情（看简介 / 选集）；
- * - 多源：显示「N 个来源」徽章，展开后可选择具体源。
+ * - 多源：底部显示「N 个来源」，展开后可选择具体源；
+ * - 封面不压暗、不叠「N 源」角标：海报本身就是要看的内容，图上的角标还会挡住
+ *   源站海报自带的片名/阵容；来源数量在底部文字区已经写清楚了。
  */
 export function AggregatedCard({
   group,
@@ -154,12 +156,6 @@ export function AggregatedCard({
               className="absolute inset-0 h-full w-full object-cover"
               onExhausted={() => setImgFailed(true)}
             />
-            <div className="absolute inset-0 bg-gradient-to-r from-black/30 to-transparent" />
-            {multi && (
-              <span className="absolute top-1.5 left-1.5 tag bg-black/70 text-accent font-medium">
-                {group.items.length} 源
-              </span>
-            )}
           </div>
         ) : (
           <div
@@ -178,11 +174,6 @@ export function AggregatedCard({
             <svg className="w-8 h-8 text-faint" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 4v16m10-16v16M3 6a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6zm4 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6zm8 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6zm4 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6z" />
             </svg>
-            {multi && (
-              <span className="absolute top-1.5 left-1.5 tag bg-black/70 text-accent font-medium">
-                {group.items.length} 源
-              </span>
-            )}
           </div>
         )}
 
