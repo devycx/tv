@@ -7,6 +7,8 @@ import { Spinner } from './states';
 import { prefersTouchPointer } from '@/lib/touch-pointer';
 import { ART_DEFAULT_CONTROL_HIDE_MS, TOUCH_CONTROL_HIDE_MS } from '@/lib/control-hide';
 import { attachVolumeBoost, type VolumeBoostHandle } from '@/lib/volume-boost';
+import { GmFetchHlsLoader } from '@/lib/gm-hls-loader';
+import { hasGmFetch } from '@/lib/gm-fetch';
 
 /**
  * 直播播放器：与点播 player-shell 完全独立。
@@ -38,6 +40,13 @@ function engineOf(url: string): Engine {
  * CORS / 防盗链拒绝没有代理兜底，只能明确提示用户换频道。
  */
 const DIRECT_ONLY_FAILURE = '该源不允许跨域直连（CORS / 防盗链）或已失效，请更换频道';
+
+/**
+ * 装了油猴「跨域助手」时的失败文案：请求已由扩展后台发出，CORS 不再是原因，
+ * 失败意味着源站拒绝扩展请求（403/防盗链）或地址真的失效。
+ */
+const GM_DIRECT_FAILURE =
+  '已通过跨域助手（GM_fetch）请求，仍失败说明源站拒绝扩展请求或已失效，请更换频道';
 
 interface LivePlayerProps {
   /** 上游直播流地址（只直连源站） */
@@ -107,6 +116,9 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
     let destroyed = false;
     /** 原生播放注册的 error 监听清理函数（切台/销毁时调用） */
     let nativeCleanup: (() => void) | null = null;
+    // 油猴「跨域助手」：装了就把 hls.js 的请求交给扩展后台（不受 CORS / 混合内容限制）
+    const gmFetchActive = hasGmFetch();
+    const directFailure = gmFetchActive ? GM_DIRECT_FAILURE : DIRECT_ONLY_FAILURE;
 
     const cleanupEngines = () => {
       hlsRef.current?.destroy();
@@ -164,6 +176,10 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
         fragLoadingMaxRetry: 4,
         fragLoadingRetryDelay: 800,
       };
+      // 装了跨域助手时换掉 hls.js 的默认 XhrLoader：源站没有 ACAO 也能拿到 manifest/分片
+      if (gmFetchActive) {
+        hlsConfig.loader = GmFetchHlsLoader as unknown as HlsConfig['loader'];
+      }
       const hls = new Hls(hlsConfig);
       hlsRef.current = hls;
       hls.loadSource(mediaUrl);
@@ -201,7 +217,7 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
           setupNative(
             video,
             url,
-            `直播流加载失败${codeHint}，${DIRECT_ONLY_FAILURE}`
+            `直播流加载失败${codeHint}，${directFailure}`
           );
           return;
         }
@@ -355,7 +371,7 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
     // 15s 内未起播则提示
     const startTimer = setTimeout(() => {
       if (!playbackStarted && !disposed && !destroyed) {
-        setError(`频道加载超时，${DIRECT_ONLY_FAILURE}`);
+        setError(`频道加载超时，${directFailure}`);
       }
     }, 15000);
 

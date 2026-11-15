@@ -160,6 +160,21 @@ npm run shot -- --url "https://tv.ycxdev.com/?s=%E8%89%B2%E6%88%92" --init-js $i
 
 2026-11-15 基线（`0fecf87`）：`?s=色戒` 24 部 / 71 条；点「伦理片」6 部 / 48 条；首屏有 14 源/16 源合并卡。
 
+## 跨域助手（GM_fetch）路径怎么验
+
+不装油猴也能验证「检测到 `GM_fetch` 后**直播播放器**改走扩展请求」的接线：用 `--init-js` 注入一个计数版
+`GM_fetch`（内部仍用原生 fetch，测试流本身有 CORS 即可）。
+
+```powershell
+$init = "window.__gmCalls=[];const nf=window.fetch.bind(window);window.GM_fetch=function(input,init){var u=typeof input==='string'?input:(input&&input.url)||String(input);window.__gmCalls.push(u);return nf(input,init);};"
+npm run shot -- --url "http://localhost:8080/live?url=https%3A%2F%2Ftest-streams.mux.dev%2Fx36xhzz%2Fx36xhzz.m3u8&name=GM%E6%B5%8B%E8%AF%95" `
+  --init-js $init --selector ".art-video-player" --wait 6000 `
+  --log "({ mux: window.__gmCalls.filter(u=>u.includes('mux.dev')), t: document.querySelector('video')?.currentTime })"
+```
+
+预期：`mux` 里出现 master / variant / `.ts` 分片，`t > 0`（播放中）。去掉 `--init-js` 后同一 URL 应同样能播，
+说明没有脚本时的回退路径没回归。**这个 mock 只证明接线正确**；真正的 CORS 绕过必须装脚本在真实设备上验。
+
 ## 2026-11-14 改版记录
 
 - 提交 `ffcbd5a`：顶栏复用、标题上移、下载进控制条、切源与跳过标记并列、自动连播进齿轮菜单、`.player-stage` 隔离。
