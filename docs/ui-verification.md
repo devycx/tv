@@ -180,3 +180,29 @@ npm run shot -- --url "http://localhost:8080/live?url=https%3A%2F%2Ftest-streams
 - 提交 `ffcbd5a`：顶栏复用、标题上移、下载进控制条、切源与跳过标记并列、自动连播进齿轮菜单、`.player-stage` 隔离。
 - CI `43605020218`、部署 `43605085303` 成功；线上用《庆余年》魔都资源第 46 集实测通过。
 - 关键回归点：手机设置抽屉打开时，播放器控制条不得再浮在抽屉正文上；网页全屏仍要能盖住顶栏。
+
+## 详情弹窗简介：服务端洗成纯文本 + 展开（2026-11-15）
+
+CMS 的 `vod_content` 多半是编辑器产出的富文本（公众号排版导出最极端：整段
+`<p><span style="color: rgb(17, 17, 17); font-family: Helvetica, ...">`）。服务端
+`parseDetail` / `parseDetailPageHtml` 统一用 `lib/html-text.ts` 洗成纯文本：去 `script/style/注释`、
+块级标签与 `<br>` 转段落、行内标签不插空格（中文切词插空格会读不通）、解一层实体、压缩空白、
+超 2000 字截断；分集兜底仍用原始 HTML 提取 m3u8，并把 content 里内嵌的直链从简介中摘掉。
+
+- **不要在 UI 层改回 HTML 渲染**：源站内联样式（近黑色文字 + 白底、13px Helvetica）在暗色主题下会变成
+  白底黑字一大块，还得引 sanitizer 防 `<img>/<script>`。
+- 前端 `ExpandableText` 默认 clamp 3 行，只有真溢出（`scrollHeight > clientHeight`）才出现「展开 / 收起」，
+  换片回到收起态。
+- 断言（打开详情弹窗后）：
+
+  ```js
+  (() => {
+    const dialog = document.querySelector('[role="dialog"]');
+    const p = dialog.querySelector('p');
+    const toggle = [...dialog.querySelectorAll('button')].find((b) => /^(展开|收起)/.test(b.textContent.trim()));
+    return { hasTag: p.textContent.includes('<'), toggle: toggle?.textContent.trim(), h: p.clientHeight, sh: p.scrollHeight };
+  })()
+  ```
+
+- 线上基线（`52204aa`，390×844）：`?s=色戒` 里「色戒【影视解说】」是多源卡，先点文字区展开、再点
+  来源行才进详情。简介 3 段；`hasTag: false`，收起 68px / 展开 523px，按钮文案 `展开 ↔ 收起`。
