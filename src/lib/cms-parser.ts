@@ -1,5 +1,6 @@
 import type { SearchResultItem, VideoDetail } from './types';
 import { isCloseMatch } from './text-similarity';
+import { stripHtmlToText } from './html-text';
 
 /**
  * Apple CMS（苹果CMS）资源站响应解析
@@ -7,6 +8,9 @@ import { isCloseMatch } from './text-similarity';
  */
 
 const M3U8_PATTERN = /\$https?:\/\/[^"'\s]+?\.m3u8/g;
+
+/** 简介里内嵌的播放直链：分集兜底提取用得到，但不该出现在「简介」里给用户看 */
+const PLAY_LINK_IN_DESC = /\$?\s*https?:\/\/[^\s"'<>]+?\.m3u8[^\s"'<>]*/gi;
 
 const UA_HEADERS = {
   'User-Agent':
@@ -92,6 +96,7 @@ export function parseDetail(
   const vod = d.list[0];
   let episodes = extractEpisodesFromPlayUrl(String(vod.vod_play_url ?? ''));
   if (episodes.length === 0) {
+    // 注意：兜底提取链接必须用原始 HTML（这里不能先清洗），否则 m3u8 会被一起洗掉
     episodes = extractM3u8FromText(String(vod.vod_content ?? ''));
   }
   return {
@@ -99,7 +104,15 @@ export function parseDetail(
     videoInfo: {
       title: str(vod.vod_name),
       cover: str(vod.vod_pic),
-      desc: str(vod.vod_content),
+      // vod_content 是富文本（公众号排版导出常见），洗成纯文本再给 UI：
+      // 直接把 HTML 当文本渲染会露出 <span style="...">，见 lib/html-text.ts。
+      // 顺手摘掉内嵌的播放直链（只影响展示，分集仍用原始 HTML 提取）
+      desc:
+        stripHtmlToText(str(vod.vod_content))
+          .replace(PLAY_LINK_IN_DESC, ' ')
+          .replace(/[ \t]{2,}/g, ' ')
+          .replace(/\n{3,}/g, '\n\n')
+          .trim() || undefined,
       typeName: str(vod.type_name),
       year: str(vod.vod_year),
       area: str(vod.vod_area),
@@ -146,7 +159,7 @@ export function parseDetailPageHtml(
     episodes,
     videoInfo: {
       title: titleMatch ? titleMatch[1].trim() : undefined,
-      desc: descMatch ? descMatch[1].replace(/<[^>]+>/g, ' ').trim() : undefined,
+      desc: stripHtmlToText(descMatch ? descMatch[1] : undefined) || undefined,
       sourceKey: source.key,
       sourceName: source.name,
       sourceUrl: source.url,

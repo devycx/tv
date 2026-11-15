@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils';
 import { addSearchHistory } from '@/lib/db';
 import { copyToClipboard } from '@/lib/clipboard';
 import { EmptyState, ErrorState, LoadingState } from './states';
+import { ExpandableText } from './expandable-text';
 import { useFocusTrap } from './use-focus-trap';
 import { Icon } from './icon';
 
@@ -195,9 +196,7 @@ export function DetailModal({ item, onClose }: { item: SearchResultItem | null; 
                       ))}
                     </div>
                   )}
-                  {info?.desc && (
-                    <p className="text-sm text-muted leading-relaxed line-clamp-3">{info.desc}</p>
-                  )}
+                  {info?.desc && <ExpandableText text={info.desc} />}
                 </div>
               </div>
 

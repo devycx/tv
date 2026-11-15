@@ -130,6 +130,43 @@ describe('parseDetail', () => {
     expect(detail.episodes).toEqual(['https://cdn/fall.m3u8']);
   });
 
+  it('富文本简介洗成纯文本（线上 无尽资源 的真实结构）', () => {
+    const data = {
+      list: [{
+        vod_name: '色戒【影视解说】',
+        vod_content:
+          '<p><span style="color: rgb(17, 17, 17); font-family: Helvetica, Arial, sans-serif; font-size: 13px;">' +
+          '本是岭南大学学生的王佳芝（汤唯 饰）。</span><br/>' +
+          '<span style="color: rgb(17, 17, 17);">此后王佳芝一直生活在上海。</span></p>',
+        vod_play_url: '正片$https://cdn/1.m3u8',
+      }],
+    };
+    const desc = parseDetail(data, source).videoInfo.desc;
+    expect(desc).toBe('本是岭南大学学生的王佳芝（汤唯 饰）。\n\n此后王佳芝一直生活在上海。');
+    expect(desc).not.toContain('<');
+  });
+
+  it('简介里的 m3u8 直链不显示给用户，但分集兜底仍从原始 HTML 提取', () => {
+    const data = {
+      list: [{ vod_name: 'X', vod_content: '<p>简介</p><span>$https://cdn/fall.m3u8</span>' }],
+    };
+    const detail = parseDetail(data, source);
+    expect(detail.episodes).toEqual(['https://cdn/fall.m3u8']);
+    expect(detail.videoInfo.desc).toBe('简介');
+  });
+
+  it('简介只有播放直链时 desc 为空（这种源的 content 就只是链接）', () => {
+    const data = { list: [{ vod_name: 'X', vod_content: '$https://cdn/1.m3u8' }] };
+    const detail = parseDetail(data, source);
+    expect(detail.episodes).toEqual(['https://cdn/1.m3u8']);
+    expect(detail.videoInfo.desc).toBeUndefined();
+  });
+
+  it('简介只有图片时 desc 为空（UI 不渲染空段落）', () => {
+    const data = { list: [{ vod_name: 'X', vod_content: '<p><img src="https://img/a.jpg"></p>' }] };
+    expect(parseDetail(data, source).videoInfo.desc).toBeUndefined();
+  });
+
   it('空列表抛错', () => {
     expect(() => parseDetail({ list: [] }, source)).toThrow();
   });
@@ -145,7 +182,8 @@ describe('parseDetailPageHtml', () => {
     const detail = parseDetailPageHtml(html, source);
     expect(detail.episodes).toEqual(['https://cdn/ep1.m3u8', 'https://cdn/ep2.m3u8']);
     expect(detail.videoInfo.title).toBe('庆余年');
-    expect(detail.videoInfo.desc).toBe('简介 内容');
+    // 行内标签不插空格：中文被标签切词时插空格反而读不通（原实现是 replace(/<[^>]+>/g, ' ')）
+    expect(detail.videoInfo.desc).toBe('简介内容');
   });
 
   it('非凡影视特征路径兜底', () => {
