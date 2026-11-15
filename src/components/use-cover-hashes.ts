@@ -156,8 +156,16 @@ async function hashCoverUrl(url: string): Promise<string> {
       });
       if (direct.ok) {
         const blob = await direct.blob();
-        hostModes.set(host, 'cors');
-        return hashCoverBlob(blob);
+        // 直连可能拿到防盗链 HTML/占位图（200 但不是图片）：解码失败时仍走代理
+        if (blob.type.startsWith('image/')) {
+          try {
+            const hash = await hashCoverBlob(blob);
+            hostModes.set(host, 'cors');
+            return hash;
+          } catch {
+            // 坏图/无法解码：退回代理
+          }
+        }
       }
     } catch {
       // CORS / 网络失败：走代理
