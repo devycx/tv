@@ -4,22 +4,25 @@
  * 搜索页封面视觉指纹的前端流水线。
  *
  * 浏览器直连图床时 canvas 会被跨域污染，读不到像素；这里通过同源的
- * `/api/cover?url=` 取图（登录后才能用、SSRF 校验在服务端），画到 9×8 canvas 上
- * 算 dHash，再由 aggregateResults 按指纹聚类。
+ * `/api/cover?url=` 取图（登录后才能用、SSRF 校验在服务端），先按统一画幅（4:5）
+ * 中心裁切、画到 9×8 canvas 上算 dHash，再由 aggregateResults 按指纹聚类。
+ * 裁切是必须的：整图拉伸会把同一主视觉的 2:3 海报和 9:16（带台标/赞助条）算成两张。
  *
  * 性能与降级：
  * - 每个 URL 只算一次；结果存 localStorage（600 条上限），刷新/重复搜索不再取图；
  * - 单次搜索最多算 48 张（按结果顺序取前面的），其余走 URL 指纹兜底；
  * - 并发 5；连续 4 张失败后熔断 60 秒，避免图床/代理不可用时几十个请求排队；
- * - 等待中的封面不会先按片名分组再跳变：调用方用 isPending 把条目暂缓渲染。
+ * - 等待中的封面不会先按片名分组再跳变：调用方用 isPending 把条目暂缓渲染；
+ * - 取图/解码失败（isFailed）的条目没有指纹、也不该退回「片名+年份」再拆一张卡，
+ *   由调用方隐藏并提示。
  */
 
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
-import { dHashFromRgba } from '@/lib/cover-visual-hash';
+import { coverCropRect, dHashFromRgba } from '@/lib/cover-visual-hash';
 
 export type CoverHashState = { status: 'pending' } | { status: 'done'; hash: string } | { status: 'failed' };
 
-const CACHE_KEY = 'cover-visual-hashes-v1';
+const CACHE_KEY = 'cover-visual-hashes-v2';
 const MAX_CACHED = 600;
 const MAX_PER_SEARCH = 48;
 const MAX_ACTIVE = 5;
@@ -104,9 +107,11 @@ async function hashCoverBlob(blob: Blob): Promise<string> {
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 
-  const draw = (source: CanvasImageSource): string => {
+  const draw = (source: CanvasImageSource, width: number, height: number): string => {
+    // 先按统一画幅（4:5）中心裁切：整图拉伸会把「2:3 海报 vs 9:16 同主视觉」算成两张图
+    const { sx, sy, sw, sh } = coverCropRect(width, height);
     ctx.clearRect(0, 0, 9, 8);
-    ctx.drawImage(source, 0, 0, 9, 8);
+    ctx.drawImage(source, sx, sy, sw, sh, 0, 0, 9, 8);
     return dHashFromRgba(ctx.getImageData(0, 0, 9, 8).data);
   };
 
@@ -114,7 +119,7 @@ async function hashCoverBlob(blob: Blob): Promise<string> {
     try {
       const bitmap = await createImageBitmap(blob);
       try {
-        return draw(bitmap);
+        return draw(bitmap, bitmap.width, bitmap.height);
       } finally {
         bitmap.close?.();
       }
@@ -128,7 +133,7 @@ async function hashCoverBlob(blob: Blob): Promise<string> {
     const img = new Image();
     img.src = objectUrl;
     await img.decode();
-    return draw(img);
+    return draw(img, img.naturalWidth, img.naturalHeight);
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
@@ -244,6 +249,8 @@ export interface CoverHashes {
   hashOf: (url?: string) => string | undefined;
   /** 该封面是否仍在等待指纹：调用方应暂缓渲染该条目，避免先按片名分组后再跳变 */
   isPending: (url?: string) => boolean;
+  /** 取图/解码失败：封面无法参与聚合，调用方按约定隐藏该条目 */
+  isFailed: (url?: string) => boolean;
 }
 
 /**
@@ -296,6 +303,10 @@ export function useCoverHashes(urls: readonly string[]): CoverHashes {
         const state = states.get(url);
         if (state?.status === 'done' || state?.status === 'failed') return false;
         return !cachedHash(url);
+      },
+      isFailed: (url?: string) => {
+        if (!url) return false;
+        return states.get(url)?.status === 'failed';
       },
     };
     // currentVersion 变化时重算；planned/key 变化时也重算

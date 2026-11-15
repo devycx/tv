@@ -10,6 +10,9 @@
  * - 不同海报/不同影片通常差 30 位以上（实测《色，戒》两种海报差 35 位）。
  * 因此阈值取 10：能合并同图的不同副本，又不会把不同影片并到一起。
  *
+ * 画到 9×8 之前先按 COVER_HASH_ASPECT（4:5）中心裁切：整图拉伸会把「2:3 海报 vs
+ * 9:16 带台标/赞助条的同一主视觉」算成两张图（实测距离 19–21），裁切后为 4。
+ *
  * 浏览器把封面画到 9×8 canvas 后调用 dHashFromRgba；服务端/测试可直接用
  * dHashFromLuma 构造已知亮度的 72 个像素。
  */
@@ -17,7 +20,36 @@
 /** 两个封面指纹允许的最大汉明距离（64 位里不同位的个数） */
 export const COVER_HASH_MAX_DISTANCE = 10;
 
+/**
+ * 指纹取景画幅（宽 / 高 = 4:5）。
+ *
+ * 只把整张图拉伸到 9×8 会把「画幅差异」也算成视觉差异：同一张主视觉，
+ * 采集站常见 2:3 海报和 9:16（带顶部台标条、底部赞助/扫码区）两种裁切，
+ * 实测整图 dHash 距离 19–21，超过阈值 10，于是同一部片被拆成两张卡。
+ *
+ * 先按中心裁成统一画幅再缩放，两边只比较共同的中心区域：
+ * 实测同一主视觉的 2:3 / 9:16 距离降到 4，而不同影片/不同海报仍在 27 以上。
+ */
+export const COVER_HASH_ASPECT = 4 / 5;
+
 const HASH_HEX = /^[0-9a-f]{16}$/;
+
+/**
+ * 中心裁切矩形：把 width×height 的封面裁成 COVER_HASH_ASPECT（宽/高）的画幅。
+ * 返回 dHash 画布 drawImage 需要的 source 矩形；返回浮点值由调用方取整。
+ */
+export function coverCropRect(
+  width: number,
+  height: number
+): { sx: number; sy: number; sw: number; sh: number } {
+  if (!(width > 0) || !(height > 0)) return { sx: 0, sy: 0, sw: width, sh: height };
+  const targetHeight = width / COVER_HASH_ASPECT;
+  if (targetHeight <= height) {
+    return { sx: 0, sy: (height - targetHeight) / 2, sw: width, sh: targetHeight };
+  }
+  const targetWidth = height * COVER_HASH_ASPECT;
+  return { sx: (width - targetWidth) / 2, sy: 0, sw: targetWidth, sh: height };
+}
 
 /** 9×8 灰度亮度 → 64 位 dHash（16 位十六进制字符串） */
 export function dHashFromLuma(luma: readonly number[]): string {

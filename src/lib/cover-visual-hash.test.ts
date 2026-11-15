@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { clusterCoverHashes, dHashFromLuma, dHashFromRgba, hammingDistance } from './cover-visual-hash';
+import {
+  clusterCoverHashes,
+  coverCropRect,
+  dHashFromLuma,
+  dHashFromRgba,
+  hammingDistance,
+} from './cover-visual-hash';
 
 /** 构造 9×8 行优先的亮度数组 */
 function lumaGrid(rows: number[][]): number[] {
@@ -35,6 +41,29 @@ describe('dHashFromRgba', () => {
     }
     // 每 9 个像素一行，偶数下标为黑、奇数为白：比较结果取决于行内位置
     expect(dHashFromRgba(rgba)).toBe(dHashFromLuma(Array.from({ length: 8 }, () => [0, 255, 0, 255, 0, 255, 0, 255, 0]).flat()));
+  });
+});
+
+describe('coverCropRect（指纹取景：中心裁成 4:5）', () => {
+  it('竖图（9:16）裁掉上下，保留中间 4:5', () => {
+    expect(coverCropRect(540, 960)).toEqual({ sx: 0, sy: 142.5, sw: 540, sh: 675 });
+  });
+
+  it('2:3 海报也裁掉一点上下（4:5 比 2:3 更宽）', () => {
+    const rect = coverCropRect(270, 405);
+    expect(rect.sx).toBe(0);
+    expect(rect.sw).toBe(270);
+    expect(rect.sh).toBeCloseTo(337.5);
+    expect(rect.sy).toBeCloseTo(33.75);
+  });
+
+  it('方图/横图裁掉左右，保持高度', () => {
+    expect(coverCropRect(100, 100)).toEqual({ sx: 10, sy: 0, sw: 80, sh: 100 });
+    expect(coverCropRect(1600, 900)).toEqual({ sx: 440, sy: 0, sw: 720, sh: 900 });
+  });
+
+  it('尺寸非法时原样返回，交给 drawImage 报错/兜底', () => {
+    expect(coverCropRect(0, 100)).toEqual({ sx: 0, sy: 0, sw: 0, sh: 100 });
   });
 });
 

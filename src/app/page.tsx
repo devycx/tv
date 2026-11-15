@@ -217,6 +217,15 @@ function HomeContent() {
     () => list.filter((item) => !coverHashes.isPending(item.pic)),
     [list, coverHashes]
   );
+  /**
+   * 封面取图/解码失败的条目：拿不到视觉指纹，退回 URL/片名只会再拆出一张重复卡
+   * （线上「后会友期」的 ywxohs 源就是这样多出一张 1 源卡）。按约定隐藏并提示数量。
+   */
+  const visibleList = useMemo(
+    () => settledList.filter((item) => !coverHashes.isFailed(item.pic)),
+    [settledList, coverHashes]
+  );
+  const hiddenCovers = settledList.length - visibleList.length;
   const coverHashMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const url of coverUrls) {
@@ -229,8 +238,8 @@ function HomeContent() {
 
   // 跨源聚合：视觉指纹相同（同一张封面）合并为一张卡片，展开后可选择具体来源
   const groups = useMemo(
-    () => aggregateResults(settledList, { coverHashes: coverHashMap }),
-    [settledList, coverHashMap]
+    () => aggregateResults(visibleList, { coverHashes: coverHashMap }),
+    [visibleList, coverHashMap]
   );
   // 结果标签自动生成筛选项：只收集当前结果里出现过的类型 / 年份 / 18禁
   const facets = useMemo(() => buildFacets(groups, filters), [groups, filters]);
@@ -439,18 +448,18 @@ function HomeContent() {
                     <span className="text-faint">
                       {pendingCovers > 0 ? (
                         <>
-                          （已聚合 {groups.length} 部影片 · {settledList.length} 条来源结果…）
+                          （已聚合 {groups.length} 部影片 · {visibleList.length} 条来源结果…）
                         </>
                       ) : filtersActive ? (
                         <>
                           （筛选出 {filteredGroups.length} 部影片 · {filteredSourceCount} 条来源结果 / 共{' '}
-                          {groups.length} 部 · {list.length} 条
+                          {groups.length} 部 · {visibleList.length} 条
                           {failures.length > 0 ? `，${failures.length} 个源失败` : ''}）
                         </>
                       ) : (
                         <>
-                          （{groups.length} 部影片 · {list.length} 条来源结果
-                          {settledList.length > groups.length ? '，同封面已聚合' : ''}
+                          （{groups.length} 部影片 · {visibleList.length} 条来源结果
+                          {visibleList.length > groups.length ? '，同封面已聚合' : ''}
                           {failures.length > 0 ? `，${failures.length} 个源失败` : ''}）
                         </>
                       )}
@@ -472,6 +481,12 @@ function HomeContent() {
             {pendingCovers > 0 && (
               <p className="mb-3 text-xs text-faint" role="status">
                 正在识别封面并按封面聚合（还有 {pendingCovers} 张…）
+              </p>
+            )}
+
+            {hiddenCovers > 0 && (
+              <p className="mb-3 text-xs text-faint">
+                封面取图失败，已隐藏 {hiddenCovers} 条来源
               </p>
             )}
 
