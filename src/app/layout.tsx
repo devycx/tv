@@ -49,7 +49,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script
           dangerouslySetInnerHTML={{
             __html:
-              "(function(){try{var t=localStorage.getItem('libretv-theme')||'dark';var d=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.classList.toggle('dark',d);}catch(e){}})()",
+              "(function(){try{var t=localStorage.getItem('libretv-theme');if(t!=='light'&&t!=='dark'){t='dark';localStorage.setItem('libretv-theme',t);}document.documentElement.classList.toggle('dark',t==='dark');}catch(e){}})()",
           }}
         />
       </head>

@@ -3,22 +3,21 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 
 /**
- * 主题上下文：light / dark / system，持久化到 localStorage，默认 dark。
- * html 上的 .dark 类由 layout 中的内联脚本先行设置（避免首屏闪烁），此处负责后续切换。
+ * 主题上下文：只有 light / dark 两态（2026-11-15 用户要求去掉「跟随系统」），
+ * 持久化到 localStorage，默认 dark。html 上的 .dark 类由 layout 中的内联脚本先行设置
+ * （避免首屏闪烁），此处负责后续切换。
  */
 
-export type ThemeChoice = 'light' | 'dark' | 'system';
+export type ThemeChoice = 'light' | 'dark';
 const STORAGE_KEY = 'libretv-theme';
 
 interface ThemeContextValue {
   theme: ThemeChoice;
-  resolved: 'light' | 'dark';
   setTheme: (t: ThemeChoice) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
   theme: 'dark',
-  resolved: 'dark',
   setTheme: () => {},
 });
 
@@ -26,51 +25,41 @@ export function useTheme(): ThemeContextValue {
   return useContext(ThemeContext);
 }
 
-function systemPrefersDark(): boolean {
-  return typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches;
+/** 存量数据里可能有旧的 'system'（三态时代）：统一落回 dark，不再跟随系统 */
+function normalize(value: string | null): ThemeChoice {
+  return value === 'light' ? 'light' : 'dark';
 }
 
-function apply(choice: ThemeChoice): 'light' | 'dark' {
-  const resolved = choice === 'system' ? (systemPrefersDark() ? 'dark' : 'light') : choice;
-  document.documentElement.classList.toggle('dark', resolved === 'dark');
-  return resolved;
+function apply(choice: ThemeChoice): void {
+  document.documentElement.classList.toggle('dark', choice === 'dark');
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<ThemeChoice>('dark');
-  const [resolved, setResolved] = useState<'light' | 'dark'>('dark');
 
   useEffect(() => {
-    const stored = (localStorage.getItem(STORAGE_KEY) as ThemeChoice | null) || 'dark';
+    const stored = normalize(localStorage.getItem(STORAGE_KEY));
     setThemeState(stored);
-    setResolved(apply(stored));
-
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const onChange = () => {
-      const current = (localStorage.getItem(STORAGE_KEY) as ThemeChoice | null) || 'dark';
-      if (current === 'system') {
-        setResolved(apply('system'));
-      }
-    };
-    media.addEventListener('change', onChange);
-    return () => media.removeEventListener('change', onChange);
+    apply(stored);
+    // 旧值（'system' 等）就地规范化：下次首屏内联脚本就不用再处理跟随系统
+    localStorage.setItem(STORAGE_KEY, stored);
   }, []);
 
   const setTheme = useCallback((t: ThemeChoice) => {
     localStorage.setItem(STORAGE_KEY, t);
     setThemeState(t);
-    setResolved(apply(t));
+    apply(t);
   }, []);
 
-  return <ThemeContext.Provider value={{ theme, resolved, setTheme }}>{children}</ThemeContext.Provider>;
+  return <ThemeContext.Provider value={{ theme, setTheme }}>{children}</ThemeContext.Provider>;
 }
 
-/** 亮暗切换按钮：在 light → dark → system 三态间循环 */
+/** 亮暗切换按钮：light ⇄ dark 两态 */
 export function ThemeToggle() {
-  const { theme, resolved, setTheme } = useTheme();
-  const next: ThemeChoice = theme === 'light' ? 'dark' : theme === 'dark' ? 'system' : 'light';
-  const label = theme === 'system' ? '跟随系统（当前深色）' : theme === 'dark' ? '深色' : '浅色';
-  const nextLabel = next === 'light' ? '浅色' : next === 'dark' ? '深色' : '跟随系统';
+  const { theme, setTheme } = useTheme();
+  const next: ThemeChoice = theme === 'dark' ? 'light' : 'dark';
+  const label = theme === 'dark' ? '深色' : '浅色';
+  const nextLabel = next === 'dark' ? '深色' : '浅色';
 
   return (
     <button
@@ -79,11 +68,7 @@ export function ThemeToggle() {
       aria-label={`切换主题，当前 ${label}`}
       onClick={() => setTheme(next)}
     >
-      {theme === 'system' ? (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-        </svg>
-      ) : resolved === 'dark' ? (
+      {theme === 'dark' ? (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
         </svg>
