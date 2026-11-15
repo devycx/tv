@@ -136,6 +136,30 @@ artplayer 内部有大量绝对定位层，z-index 从 40 到 120：
 3. 用同一套工具跑线上：首页/搜索、真实播放页、播放器菜单、设置抽屉各截一张；断言 `isolation`、`elementFromPoint`、按钮文案。
 4. 线上真实播放页的拿法：打开 `https://tv.ycxdev.com/?s=庆余年`，等待 15–20s（35 个源并行），点第一个 `[role="button"][aria-label^="直接播放"]` 的封面，落到带 `source/id/url` 的 `/watch`。
 
+## 搜索页：封面指纹与筛选（2026-11-15）
+
+设计与线上坑见 [search-cover-aggregation.md](./search-cover-aggregation.md)。这里只记「怎么验」。
+
+**本地注意**：`/api/cover` 在本地 dev 会因 Clash fake-IP + SSRF 被拦，封面指纹会全部走 URL/片名兜底；**不要据此判断聚合回归**。本地验证请用 mock 封面，或直接验线上。
+
+**线上验证**（等待真实搜索 + 取图完成，约 20s）：
+
+```powershell
+$init = "localStorage.setItem('libretv-theme','light');localStorage.setItem('libretv-settings',JSON.stringify({state:{yellowFilter:false},version:8}));localStorage.removeItem('cover-visual-hashes-v1')"
+npm run shot -- --url "https://tv.ycxdev.com/?s=%E8%89%B2%E6%88%92" --init-js $init `
+  --selector 'section[aria-label="搜索结果"] .card' --wait 20000 `
+  --out .tmp/shots/prod-search-cover-facets.png
+```
+
+断言：
+
+- 结果头：`N 部影片 · M 条来源结果，同封面已聚合`（`pending` 提示最终消失）；
+- 筛选条存在类型/年份/18禁 chip；
+- 点「伦理片」后：`筛选出 X 部影片 · Y 条来源结果 / 共 N 部 · M 条`，chip `aria-pressed=true`，出现「清除筛选」；
+- 同一张封面（换域名/分辨率）应合成一张卡；同名不同海报允许分开。
+
+2026-11-15 基线（`0fecf87`）：`?s=色戒` 24 部 / 71 条；点「伦理片」6 部 / 48 条；首屏有 14 源/16 源合并卡。
+
 ## 2026-11-14 改版记录
 
 - 提交 `ffcbd5a`：顶栏复用、标题上移、下载进控制条、切源与跳过标记并列、自动连播进齿轮菜单、`.player-stage` 隔离。
