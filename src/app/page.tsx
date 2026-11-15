@@ -214,13 +214,12 @@ function HomeContent() {
   );
   /**
    * 封面取图/解码失败的条目：拿不到视觉指纹，退回 URL/片名只会再拆出一张重复卡
-   * （线上「后会友期」的 ywxohs 源就是这样多出一张 1 源卡）。按约定隐藏并提示数量。
+   * （线上「后会友期」的 ywxohs 源就是这样多出一张 1 源卡）。直接隐藏，不额外提示。
    */
   const visibleList = useMemo(
     () => settledList.filter((item) => !coverHashes.isFailed(item.pic)),
     [settledList, coverHashes]
   );
-  const hiddenCovers = settledList.length - visibleList.length;
   const coverHashMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const url of coverUrls) {
@@ -442,7 +441,7 @@ function HomeContent() {
                   searchQuery.data && (
                     <span className="text-faint">
                       {pendingCovers > 0
-                        ? '（识别封面中…）'
+                        ? '（加载中…）'
                         : filtersActive
                           ? `（筛选出 ${filteredGroups.length} 部 · ${filteredSourceCount} 条 / 共 ${groups.length} 部 · ${visibleList.length} 条）`
                           : `（${groups.length} 部 · ${visibleList.length} 条）`}
@@ -460,10 +459,6 @@ function HomeContent() {
                 </button>
               )}
             </div>
-
-            {hiddenCovers > 0 && (
-              <p className="mb-3 text-xs text-faint">已隐藏 {hiddenCovers} 条（封面取图失败）</p>
-            )}
 
             {disabledSources.length > 0 && (
               <div className="mb-3 text-xs text-faint bg-chip rounded-lg px-3 py-2">
@@ -496,7 +491,7 @@ function HomeContent() {
                   {/* 提示条贴着「加载更多」：翻页的用户就在这个位置，放在列表顶部等于看不见 */}
                   {orderChanged && (
                     <div className="mt-4 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 rounded-lg bg-chip px-3 py-2 text-xs">
-                      <span className="text-muted">结果已更新（保留翻页顺序）</span>
+                      <span className="text-muted">结果已更新</span>
                       <button className="btn-ghost btn-sm" onClick={applyResort}>
                         按相关性排序
                       </button>

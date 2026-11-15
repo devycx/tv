@@ -144,7 +144,6 @@ export function LiveSourceManager() {
         <EmptyState
           icon="link"
           title="还没有添加任何直播源"
-          description="添加 M3U 地址即可在「直播」页观看；也可通过数据源订阅导入。"
           action={
             <button className="btn-primary btn-sm" onClick={() => setAdding(true)}>
               添加第一个直播源

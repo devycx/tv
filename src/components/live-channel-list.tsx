@@ -453,7 +453,7 @@ export function LiveChannelList({
             <button
               className="text-[10px] text-faint underline-offset-2 hover:text-content hover:underline"
               onClick={cancelProbe}
-              title="中止本次检测，已完成的结果会保留"
+              title="停止检测"
             >
               停止
             </button>
@@ -476,7 +476,7 @@ export function LiveChannelList({
             <button
               className="text-[10px] text-accent underline-offset-2 hover:underline"
               onClick={() => setAliveFilter('off')}
-              title="显示全部频道（包括已确认不可用的）"
+              title="显示全部频道"
             >
               显示全部
             </button>
@@ -487,7 +487,7 @@ export function LiveChannelList({
           <button
             className="text-[10px] text-faint underline-offset-2 hover:text-content hover:underline"
             onClick={() => setAliveFilter('auto')}
-            title="恢复自动隐藏不可用频道"
+            title="恢复自动隐藏"
           >
             恢复自动隐藏
           </button>
@@ -758,7 +758,7 @@ const ChannelRow = memo(function ChannelRow({
             {isHevc && (
               <span
                 className="shrink-0 rounded-full bg-warning/15 px-1.5 text-[10px] font-medium text-warning"
-                title="H.265 编码：测活通过但 Chromium 内核通常无法解码，建议用 Edge/Safari"
+                title="H.265 编码，Chromium 可能无法解码，建议用 Edge/Safari"
               >
                 H.265
               </span>

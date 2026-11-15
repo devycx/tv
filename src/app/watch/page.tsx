@@ -420,7 +420,7 @@ function WatchContent() {
                 title={
                   markedCount > 0
                     ? `本剧已标记 ${markedCount} 段${skipMark?.enabled === false ? '（本剧跳过已关闭）' : ''}`
-                    : '标记片头 / 中段 / 片尾，供本剧各集自动跳过'
+                    : '片头 / 中段 / 片尾标记'
                 }
               >
                 跳过标记{markedCount > 0 ? ` (${markedCount})` : ''}

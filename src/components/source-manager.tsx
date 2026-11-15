@@ -21,11 +21,8 @@ import {
   loadCacheSettings,
   saveCacheSettings,
   getCacheSummary,
-  getStorageEstimate,
   clearVideoCache,
-  isConstrainedCacheProfile,
   type CacheSummary,
-  type StorageEstimateInfo,
 } from '@/lib/video-cache';
 import { EmptyState, Spinner } from './states';
 import { useSourceProbe } from './use-source-probe';
@@ -325,7 +322,6 @@ function VodSourcesPanel() {
         <EmptyState
           icon="link"
           title="还没有添加任何点播源"
-          description="添加 Apple CMS 采集站 API；也可用「数据源订阅」一次导入"
           action={
             <button className="btn-primary btn-sm" onClick={() => setEditing('__new__')}>
               添加第一个点播源
@@ -586,7 +582,6 @@ function PlaybackPanel() {
       <div className="space-y-3">
         <ToggleRow
           label="广告切片过滤"
-          description="按分片特征剔除广告片段"
           checked={store.adFilter}
           onChange={(v) => store.updateSettings({ adFilter: v })}
         />
@@ -597,19 +592,16 @@ function PlaybackPanel() {
         />
         <ToggleRow
           label="自动跳过片段"
-          description="命中片段自动跳过；关闭后只显示跳过按钮"
           checked={store.autoSkipSegments}
           onChange={(v) => store.updateSettings({ autoSkipSegments: v })}
         />
         <ToggleRow
           label="音量增强"
-          description="适合音量偏小的片源（约 +1.8 倍）"
           checked={store.volumeBoost}
           onChange={(v) => store.updateSettings({ volumeBoost: v })}
         />
         <ToggleRow
           label="底部细进度条"
-          description="控制栏收起时，画面底边常驻一条进度线"
           checked={store.miniProgressBar}
           onChange={(v) => store.updateSettings({ miniProgressBar: v })}
         />
@@ -650,32 +642,24 @@ function PlaybackPanel() {
 function VideoCachePanel() {
   const [enabled, setEnabled] = useState(() => loadCacheSettings().enabled);
   const [summary, setSummary] = useState<CacheSummary>({ segments: 0, bytes: 0, episodes: 0 });
-  const [estimate, setEstimate] = useState<StorageEstimateInfo>({ usage: 0, quota: 0, persisted: false });
-  const [cap, setCap] = useState(() => loadCacheSettings().maxTotalBytes);
   const [prefetchNext, setPrefetchNext] = useState(() => loadCacheSettings().prefetchNextEpisode);
   const [clearing, setClearing] = useState(false);
 
   const refresh = useCallback(() => {
     void getCacheSummary().then(setSummary);
-    void getStorageEstimate().then(setEstimate);
-    setCap(loadCacheSettings().maxTotalBytes);
   }, []);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
 
-  const formatBytes = (bytes: number): string => {
-    if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-    if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MB`;
-    return `${(bytes / 1024).toFixed(0)} KB`;
-  };
+  /** 只展示占用体量：多少分片 / 多少集 / 配额上限都属于实现细节 */
+  const usedMb = summary.bytes / 1024 ** 2;
 
   return (
     <div className="space-y-3 pt-3 mt-3 border-t border-line">
       <ToggleRow
         label="片段本地缓存"
-        description="把播放过的分片缓存在本机"
         checked={enabled}
         onChange={(v) => {
           const next = saveCacheSettings({ enabled: v });
@@ -684,7 +668,6 @@ function VideoCachePanel() {
       />
       <ToggleRow
         label="预取下一集"
-        description="提前缓存下一集前 7 分钟；手机/省流不预取"
         checked={prefetchNext}
         onChange={(v) => {
           const next = saveCacheSettings({ prefetchNextEpisode: v });
@@ -692,13 +675,11 @@ function VideoCachePanel() {
         }}
       />
       <div className="flex items-center justify-between text-xs text-faint">
-        <span>
-          已缓存 {summary.segments} 个分片 · {formatBytes(summary.bytes)} · {summary.episodes} 集
-        </span>
+        <span className="tabular-nums">已占用 {usedMb.toFixed(1)} MB</span>
         <button
           type="button"
           className="px-2 py-1 rounded bg-chip text-content hover:bg-hover transition-colors disabled:opacity-50"
-          disabled={clearing || summary.segments === 0}
+          disabled={clearing || summary.bytes === 0}
           onClick={async () => {
             setClearing(true);
             await clearVideoCache();
@@ -706,17 +687,9 @@ function VideoCachePanel() {
             setClearing(false);
           }}
         >
-          清理缓存
+          清理
         </button>
       </div>
-      {/* 手机浏览器会把 Cache Storage / IndexedDB 一起显示成「Cookie 及站点数据」，
-          这里直接给出浏览器视角的真实占用，避免用户误以为站点在偷偷存 cookie */}
-      <p className="text-[11px] text-faint leading-relaxed">
-        本站数据 {formatBytes(estimate.usage)}
-        {estimate.quota > 0 && <> / 配额 {formatBytes(estimate.quota)}</>}
-        {estimate.persisted ? ' · 已持久化' : ''} · 上限 {formatBytes(cap)}
-        {isConstrainedCacheProfile() ? '（手机/省流收紧）' : ''}
-      </p>
     </div>
   );
 }
@@ -725,10 +698,6 @@ function ImagePanel() {
   const store = useAppStore();
   // 旧版「内置图片代理」已移除：持久化里的 'proxy' 一律按直连展示与处理
   const mode = store.imageProxyMode === 'custom' ? 'custom' : 'direct';
-  const description: Record<'direct' | 'custom', string> = {
-    direct: '浏览器直连；豆瓣封面走公共镜像',
-    custom: '用你的模板转发封面图',
-  };
   return (
     <section>
       <SectionTitle title="封面图加载" />
@@ -736,11 +705,10 @@ function ImagePanel() {
         <SelectRow
           label="加载方式"
           value={mode}
-          description={description[mode]}
           onChange={(v) => store.updateSettings({ imageProxyMode: v as 'direct' | 'custom' })}
           options={[
-            { value: 'direct', label: '直连（推荐）', hint: '封面不经本站' },
-            { value: 'custom', label: '自定义', hint: '自建转发模板' },
+            { value: 'direct', label: '直连（推荐）' },
+            { value: 'custom', label: '自定义' },
           ]}
         />
         {mode === 'custom' && <CustomProxyInput />}
@@ -786,7 +754,6 @@ function HomePanel() {
       <div className="space-y-3">
         <ToggleRow
           label="成人内容过滤"
-          description="过滤伦理片等分类"
           checked={store.yellowFilter}
           onChange={(v) => store.updateSettings({ yellowFilter: v })}
         />
@@ -800,9 +767,9 @@ function HomePanel() {
           value={store.recommendSource}
           onChange={(v) => store.updateSettings({ recommendSource: v as 'douban' | 'bangumi' | 'hot-list' })}
           options={[
-            { value: 'douban', label: '豆瓣', hint: '热门电影与剧集' },
-            { value: 'bangumi', label: 'Bangumi', hint: '每日新番放送（免 key）' },
-            { value: 'hot-list', label: '影视榜单', hint: '豆瓣周榜 / 百度热播' },
+            { value: 'douban', label: '豆瓣' },
+            { value: 'bangumi', label: 'Bangumi' },
+            { value: 'hot-list', label: '影视榜单' },
           ]}
         />
       </div>
@@ -817,8 +784,8 @@ function HomePanel() {
  * `off` = 纯手动，保持这个功能对存量用户的默认无感。
  */
 const REFRESH_OPTIONS: DropdownOption[] = [
-  { value: 'off', label: '手动', hint: '只在点 ⟳ 时同步' },
-  { value: '1', label: '每天', hint: '打开站点时检查' },
+  { value: 'off', label: '手动' },
+  { value: '1', label: '每天' },
   { value: '3', label: '每 3 天' },
   { value: '7', label: '每 7 天' },
   { value: '14', label: '每 14 天' },
@@ -995,7 +962,7 @@ function SourceSubscriptions() {
               className="btn-ghost btn-sm"
               onClick={() => void publish()}
               disabled={publishing}
-              title="把当前已勾选启用的源上传到公开粘贴板，生成可直接订阅的链接"
+              title="发布为可订阅链接"
             >
               {publishing ? '发布中…' : '发布为链接'}
             </button>
@@ -1028,8 +995,7 @@ function SourceSubscriptions() {
             </button>
           </div>
           <p className="mt-1.5 text-[11px] text-faint leading-relaxed">
-            已发布到 {published.provider}（{published.sources} 点播 / {published.liveSources} 直播）。
-            链接公开可读，粘贴板随时可能清理。
+            已发布到 {published.provider}（{published.sources} 点播 / {published.liveSources} 直播）
           </p>
         </div>
       )}
@@ -1117,9 +1083,7 @@ function SourceSubscriptions() {
                         className="[&>button]:!py-0.5 [&>button]:!pl-2 [&>button]:!pr-1.5 [&>button]:text-[11px]"
                       />
                       {paused ? (
-                        <span className="text-warning">
-                          已暂停：连续失败 {sub.failStreak} 次，手动同步成功即恢复
-                        </span>
+                        <span className="text-warning">已暂停（连续失败 {sub.failStreak} 次）</span>
                       ) : remainingMs > 0 ? (
                         <span>约 {Math.max(1, Math.ceil(remainingMs / 86_400_000))} 天后刷新</span>
                       ) : sub.refreshDays ? (
@@ -1243,7 +1207,7 @@ function ConfigIoPanel() {
 
   return (
     <section>
-      <SectionTitle title="配置导入导出" hint="含数据源、订阅与偏好设置" />
+      <SectionTitle title="配置导入导出" />
       <div className="flex gap-2">
         <button className="btn-ghost flex-1 text-xs" onClick={doExport}>
           导出配置

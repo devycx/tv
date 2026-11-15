@@ -61,13 +61,10 @@ export function SectionTitle({ title, hint, extra }: { title: string; hint?: str
 
 export function ToggleRow({
   label,
-  description,
   checked,
   onChange,
 }: {
   label: string;
-  /** 可选：只在标签本身说不清取舍时才写一句 */
-  description?: string;
   checked: boolean;
   onChange: (v: boolean) => void;
 }) {
@@ -75,7 +72,6 @@ export function ToggleRow({
     <div className="flex items-center justify-between gap-4 py-0.5">
       <div className="min-w-0">
         <div className="text-sm text-content">{label}</div>
-        {description && <div className="text-xs text-faint">{description}</div>}
       </div>
       <Switch checked={checked} onChange={onChange} label={label} />
     </div>
@@ -119,28 +115,23 @@ export function Switch({
 
 /**
  * 设置行下拉：自定义样式的下拉组件（见 Dropdown），替代原生 <select>——
- * 原生展开面板由操作系统渲染，与站点风格割裂且暗色模式下突兀；
- * 选中的详细说明由调用方经 description 随选项动态展示（对齐 ToggleRow 的布局）。
+ * 原生展开面板由操作系统渲染，与站点风格割裂且暗色模式下突兀。
  */
 export function SelectRow({
   label,
   value,
   onChange,
   options,
-  description,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   options: DropdownOption[];
-  /** 当前选中项的说明文案，随选中项变化 */
-  description?: string;
 }) {
   return (
     <div className="flex items-center justify-between gap-4 py-0.5">
       <div className="min-w-0">
         <div className="text-sm text-content">{label}</div>
-        {description && <div className="text-xs text-faint">{description}</div>}
       </div>
       <Dropdown
         value={value}

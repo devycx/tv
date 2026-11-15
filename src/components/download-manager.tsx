@@ -12,7 +12,7 @@ import {
   supportsChunkCache,
   type DownloadProgress,
 } from '@/lib/m3u8-downloader';
-import { detectSavingCapability, pickSaveTarget, type SaveTarget, UserCancelledError } from '@/lib/download-saver';
+import { pickSaveTarget, type SaveTarget, UserCancelledError } from '@/lib/download-saver';
 
 /**
  * 全局下载管理器（UI 采用本站 Drawer 模式）：
@@ -50,8 +50,6 @@ function isUserCancelled(err: unknown): boolean {
 export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const { toast } = useToast();
   const [tasks, setTasks] = useState<DownloadTaskEntry[]>([]);
-  const [capability, setCapability] = useState<'fs-access' | 'memory'>('memory');
-  const [chunkCache, setChunkCache] = useState(true);
   const running = useRef(new Map<string, RunningHandle>());
   /** 已选好、但尚未被 startTask 消费的保存句柄（按任务 id 隔离，避免连续入队互相覆盖） */
   const pendingTargets = useRef(new Map<string, SaveTarget>());
@@ -249,11 +247,9 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
     };
   }, [discardPendingTarget, refresh, scheduleNext, toast]);
 
-  // 抽屉打开时：刷新保存能力与任务列表，并启动排队中的任务
+  // 抽屉打开时：刷新任务列表，并启动排队中的任务
   useEffect(() => {
     if (!isOpen) return;
-    setCapability(detectSavingCapability());
-    setChunkCache(supportsChunkCache());
     refresh();
     // 刷新页面/重开抽屉后，上次被中断的任务在库里仍是「下载中」但没有运行句柄。
     // 统一改回「已暂停」：用户能看到真实状态，也能点「继续」接着下（分片缓存还在），
@@ -338,11 +334,6 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
   return (
     <Drawer open={isOpen} onClose={onClose} title="下载管理" width="max-w-lg">
       <div className="space-y-3">
-        <p className="text-xs text-faint">
-          {capability === 'fs-access' ? '磁盘直写' : '内存聚合'}
-          {chunkCache ? ' · 支持断点续传' : ' · 无断点缓存（需 HTTPS）'} ·
-          同时进行 {Math.min(running.current.size, MAX_CONCURRENT_DOWNLOADS)}/{MAX_CONCURRENT_DOWNLOADS}
-        </p>
         {tasks.length === 0 && (
           <div className="py-10 text-center text-sm text-faint">暂无下载任务</div>
         )}
@@ -353,7 +344,7 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
                 <p className="text-sm text-content truncate">{t.title}</p>
                 <p className="text-xs text-faint">
                   {t.format.toUpperCase()} · {statusLabel[t.status]}
-                  {t.status === 'downloading' && t.total > 0 ? ` · ${t.finished}/${t.total} 分片` : ''}
+                  {t.status === 'downloading' && t.total > 0 ? ` · ${t.finished}/${t.total}` : ''}
                 </p>
               </div>
               <div className="flex items-center gap-1 shrink-0">

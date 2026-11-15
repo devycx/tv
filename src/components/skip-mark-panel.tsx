@@ -291,7 +291,6 @@ export function SkipMarkPanel({
             'flex shrink-0 items-center gap-1.5 text-xs',
             mark ? 'cursor-pointer text-muted hover:text-content' : 'cursor-not-allowed text-faint'
           )}
-          title={mark ? '关闭后保留标记但完全不生效' : '还没有可开关的标记'}
         >
           <input
             type="checkbox"
@@ -370,7 +369,7 @@ export function SkipMarkPanel({
                 <button
                   type="button"
                   className="absolute right-0.5 top-0.5 rounded-md p-1.5 text-muted transition-colors hover:bg-hover hover:text-danger"
-                  title="删除（可在提示中撤销）"
+                  title="删除"
                   aria-label={`删除${label}片段`}
                   onClick={() => remove(i)}
                 >
@@ -390,9 +389,6 @@ export function SkipMarkPanel({
             {autoSkipSegments ? '已开启' : '已关闭'}
           </span>
         </div>
-        <p className="mt-1 text-[11px] leading-relaxed text-muted">
-          {autoSkipSegments ? '命中片头/中段自动跳，片尾结束本集（连播看「自动连播」）' : '命中片段只显示按钮'}
-        </p>
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted">

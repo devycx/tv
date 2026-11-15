@@ -231,7 +231,7 @@ function HistoryItem({ item }: { item: HistoryEntry }) {
           'opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity'
         )}
         aria-label="删除记录"
-        title="删除记录（可在提示中撤销）"
+        title="删除记录"
         onClick={remove}
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

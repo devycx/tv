@@ -167,7 +167,7 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
             <p role="status">加载中…</p>
           ) : query.isFetchNextPageError ? (
             <div role="status">
-              <p>加载更多失败，已加载内容仍可浏览</p>
+              <p>加载更多失败</p>
               <button className="btn-ghost btn-sm mt-2" onClick={() => void query.fetchNextPage({ cancelRefetch: false })}>重试</button>
             </div>
           ) : query.hasNextPage ? (
