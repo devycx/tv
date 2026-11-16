@@ -119,6 +119,7 @@ export function LivePlayer({
 
   // —— 系统媒体会话：通知栏/锁屏上的频道名、分组、台标与播放控制 ——
   // 直播没有进度：不注册 seek、不写 setPositionState（直播 duration 是 Infinity，会抛）。
+  // 台标**不裁方**：方台标裁了也是原样，而宽版字标（如「CCTV-1」）居中裁方会把字切掉。
   const mediaInfo = useMemo(
     () => buildMediaInfo({ title, subtitle, artwork }),
     [title, subtitle, artwork]

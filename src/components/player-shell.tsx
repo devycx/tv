@@ -7,6 +7,7 @@ import Hls, { type HlsConfig } from 'hls.js';
 
 import { buildMediaInfo, type MediaArtwork } from '@/lib/media-session';
 import { useMediaSession } from '@/components/use-media-session';
+import { useSquareArtwork } from '@/components/use-square-artwork';
 import { PlaybackRecovery, describeHlsError } from '@/lib/playback-recovery';
 import { createHlsLoader } from '@/lib/hls-loader';
 import {
@@ -232,9 +233,11 @@ export function PlayerShell({
 
   // —— 系统媒体会话：通知栏/锁屏上的片名、集数、封面与播放控制 ——
   // 元数据随 props 走（换集即更新）；播放状态与进度在下方事件 effect 里喂。
+  // 封面先裁成 1:1：安卓媒体通知按原始比例展示，竖版海报会出矩形（见 use-square-artwork）。
+  const sessionArtwork = useSquareArtwork(artwork);
   const mediaInfo = useMemo(
-    () => buildMediaInfo({ title, subtitle: episodeLabel, artwork }),
-    [title, episodeLabel, artwork]
+    () => buildMediaInfo({ title, subtitle: episodeLabel, artwork: sessionArtwork }),
+    [title, episodeLabel, sessionArtwork]
   );
 
   /** 通知栏拖动进度条 / 快进快退：夹到 [0, duration] */
