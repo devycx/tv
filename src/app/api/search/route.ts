@@ -4,6 +4,7 @@ import { cmsRequestHeaders, filterAdultResults, filterRelevantResults, parseSear
 import { compareSearchResults } from '@/lib/relevance';
 import { fetchUpstream, getCache, setCache } from '@/lib/fetch-utils';
 import { checkUpstreamAllowed } from '@/lib/ssrf';
+import { resolveSourceTimeoutMs } from '@/lib/search-timeout';
 import type { SearchResponse, SearchStreamEvent, SourceConfig, SourceSearchOutcome } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -35,15 +36,8 @@ const SEARCH_MAX_PAGES = (() => {
 })();
 
 /**
- * 单源总死线（毫秒）：该源所有分页请求必须在时限内完成，到点中断在途请求并标记超时。
- * 默认 3s，SEARCH_SOURCE_TIMEOUT_MS 可配（1s–60s）。
+ * 单源总死线由 lib/search-timeout.ts 提供（路由文件不允许导出额外符号，见该文件注释）。
  */
-export function resolveSourceTimeoutMs(raw: string | undefined): number {
-  const n = parseInt(raw || '3000', 10);
-  if (!Number.isFinite(n)) return 3000;
-  return Math.min(60000, Math.max(1000, n));
-}
-
 const SEARCH_SOURCE_TIMEOUT_MS = resolveSourceTimeoutMs(process.env.SEARCH_SOURCE_TIMEOUT_MS);
 
 /** AbortSignal.timeout / 源级死线中断均以 TimeoutError 语义呈现（直接抛出或挂在 cause 上） */

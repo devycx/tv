@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { POST, resolveSourceTimeoutMs } from './route';
+import { POST } from './route';
+import { resolveSourceTimeoutMs } from '@/lib/search-timeout';
 import { SESSION_COOKIE, signSession } from '@/lib/auth';
 import type { SearchResponse, SearchStreamEvent, SourceConfig } from '@/lib/types';
 
