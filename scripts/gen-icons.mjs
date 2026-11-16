@@ -11,6 +11,11 @@
  * Chrome/手机浏览器标签页会显示成一个黑方块（YouTube 那种透明红徽标才是预期效果）。
  * 透明徽标按 contain 放进正方形画布，24:17 的徽标会水平铺满、上下留透明边。
  *
+ * 标签页图标还会被**内联**进 layout.tsx（src/lib/favicon.generated.json 的 data URI）：
+ * 手机浏览器首访时 favicon 要走一次网络请求，请求回来之前标签页先画一个深色占位方块
+ * （「首次访问黑底、刷新后透明」）。内联后图标在解析 HTML 时就可用，不再发请求。
+ * 改完 logo 一定要重跑本脚本，否则内联的 data URI 会和 PNG/ICO 不一致（有单测守着）。
+ *
  * 依赖 sharp（Next 的传递依赖，已随 node_modules 安装）。
  */
 import { readFile, writeFile } from 'node:fs/promises';
@@ -28,6 +33,11 @@ const APPLE_SIZE = 180;
 const FAVICON_SIZES = [16, 32, 48];
 /** 透明 favicon PNG 尺寸（标签页用；96/192 给高分屏） */
 const FAVICON_PNG_SIZES = [16, 32, 48, 96, 192];
+/** 内联进 HTML 的 data URI 用哪一档（48 = 16px 标签页 @3x，base64 约 1KB） */
+const INLINE_FAVICON_SIZE = 48;
+
+/** 生成到 src/lib/favicon.generated.json，供 layout.tsx 内联 */
+const GENERATED_MODULE = path.join(root, 'src', 'lib', 'favicon.generated.json');
 
 const appSvg = await readFile(path.join(iconDir, 'icon-source.svg'));
 const markSvg = await readFile(path.join(iconDir, 'brand-mark.svg'));
@@ -59,20 +69,45 @@ await writeFile(
  * - 同时输出 favicon-16/32/48/96/192.png，页面里按尺寸声明，16px 下也不糊。
  */
 const faviconPngs = [];
+/** @type {Map<number, Buffer>} */
+const faviconPngBySize = new Map();
 for (const size of FAVICON_PNG_SIZES) {
   const data = await sharp(markSvg)
     .resize(size, size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
     .png({ compressionLevel: 9 })
     .toBuffer();
   await writeFile(path.join(iconDir, `favicon-${size}.png`), data);
+  faviconPngBySize.set(size, data);
   if (FAVICON_SIZES.includes(size)) faviconPngs.push({ size, data });
 }
 
 await writeFile(path.join(root, 'public', 'favicon.ico'), buildIco(faviconPngs));
 
+/**
+ * 内联版 favicon（data URI）：写进 src/lib/favicon.generated.json，layout.tsx 直接引用。
+ * 用 data URI 而不是 /icons/favicon-*.png，是为了让标签页图标在 HTML 解析时就绪——
+ * 手机浏览器首访错过这个时机就会先画深色占位方块（黑底），等请求回来才变透明。
+ */
+const inlinePng = faviconPngBySize.get(INLINE_FAVICON_SIZE);
+if (!inlinePng) throw new Error(`missing inline favicon ${INLINE_FAVICON_SIZE}px`);
+await writeFile(
+  GENERATED_MODULE,
+  `${JSON.stringify(
+    {
+      size: INLINE_FAVICON_SIZE,
+      type: 'image/png',
+      bytes: inlinePng.length,
+      dataUri: `data:image/png;base64,${inlinePng.toString('base64')}`,
+    },
+    null,
+    2
+  )}\n`
+);
+
 console.log(
   `icons: ${APP_SIZES.map((s) => `${s}px`).join(', ')}, apple ${APPLE_SIZE}px, ` +
-    `favicon ${FAVICON_SIZES.join('/')} + transparent ${FAVICON_PNG_SIZES.join('/')}`
+    `favicon ${FAVICON_SIZES.join('/')} + transparent ${FAVICON_PNG_SIZES.join('/')}, ` +
+    `inline ${INLINE_FAVICON_SIZE}px (${inlinePng.length}B)`
 );
 
 /**

@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { Providers } from '@/components/providers';
 import generatedBootstrap from '@/lib/bootstrap.generated.json';
+import generatedFavicon from '@/lib/favicon.generated.json';
 import type { BootstrapConfig } from '@/lib/bootstrap';
 import { THEME_COLORS, themeBootstrapScript } from '@/lib/theme-color';
 import { DEFAULT_DOCUMENT_TITLE, TITLE_TEMPLATE } from '@/lib/site';
@@ -23,15 +24,23 @@ export const metadata: Metadata = {
   description:
     '夜幕影视 是一个私人影视聚合平台：汇聚多个公开点播源与直播源，提供搜索、播放、收藏与观看记录，仅供个人学习使用。',
   manifest: '/manifest.webmanifest',
-  // 页面/标签页图标用**透明背景**的徽标（YouTube 风格）：深色底的 icon-*.png 只留给
-  // manifest 里的 PWA 安装图标。此前把深色底 PNG 声明为页面 icon，浏览器的标签页/书签
-  // 会显示成一个黑底方块；透明徽标 contain 到正方形后会水平铺满、上下留透明边。
+  // 标签页图标是**透明徽标**（YouTube 风格）：深色底的 icon-*.png 只留给 manifest 里的
+  // PWA 安装图标。此前把深色底 PNG 声明为页面 icon，标签页/书签会显示成一个黑底方块。
+  //
+  // 这里只声明**一条内联 data URI**（48px，由 `npm run icons` 生成到
+  // lib/favicon.generated.json），故意不再挂 /favicon.ico、favicon-*.png 的 link：
+  // - 手机浏览器首访要先请求 favicon，请求回来之前标签页会先画一个深色占位方块，
+  //   表现为「首次访问黑底、刷新后透明」（刷新时图标已在缓存里）。data URI 随 HTML
+  //   一起到达，解析时就有图标，Chrome 实测不再发任何图标请求。
+  // - 一旦再挂网络图标 link，浏览器会按尺寸挑更大的那张去下载，首访黑方块就又回来了。
+  // 不认 data URI 的老浏览器仍会隐式请求根目录 /favicon.ico（同一份透明徽标）兜底。
   icons: {
     icon: [
-      { url: '/favicon.ico', sizes: 'any' },
-      { url: '/icons/favicon-32.png', sizes: '32x32', type: 'image/png' },
-      { url: '/icons/favicon-96.png', sizes: '96x96', type: 'image/png' },
-      { url: '/icons/favicon-192.png', sizes: '192x192', type: 'image/png' },
+      {
+        url: generatedFavicon.dataUri,
+        sizes: `${generatedFavicon.size}x${generatedFavicon.size}`,
+        type: generatedFavicon.type,
+      },
     ],
     apple: [{ url: '/icons/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
   },
