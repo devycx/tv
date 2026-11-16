@@ -88,6 +88,10 @@ export async function cropToSquareBlob(
     canvas.height = crop.output;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
+    // 一律输出 JPEG：源站封面常是「照片存成 .png」（实测某剧 512×512 的 PNG 有 572KB），
+    // 通知栏缩略图用无损没有意义。白底只是为了透明 PNG 不留黑洞（海报本身不透明，观感不变）。
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, crop.output, crop.output);
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(
       img,
@@ -101,10 +105,9 @@ export async function cropToSquareBlob(
       crop.output
     );
 
-    // PNG/WebP 可能带透明，保持无损；照片类封面用 JPEG 压到 ~几十 KB
-    const type = /\.(png|webp)(?:$|[?#])/i.test(src) ? 'image/png' : 'image/jpeg';
+    const type = 'image/jpeg';
     const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, type, 0.9)
+      canvas.toBlob(resolve, type, 0.88)
     );
     if (!blob) return null;
     return { url: URL.createObjectURL(blob), size: crop.output, type };
