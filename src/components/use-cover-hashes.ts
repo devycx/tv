@@ -9,27 +9,31 @@
  * 裁切是必须的：整图拉伸会把同一主视觉的 2:3 海报和 9:16（带台标/赞助条）算成两张；
  * 两段缩放也是必须的：一步缩到 9×8 会随压缩噪声产生锯齿，同一张海报的扫描件差 15 位。
  *
- * 性能与降级：
- * - 每个 URL 只算一次；结果存 localStorage（600 条上限），刷新/重复搜索不再取图；
- * - 单次搜索最多算 48 张（按结果顺序取前面的），其余走 URL 指纹兜底；
- * - 并发 5；连续 4 张失败后熔断 60 秒，避免图床/代理不可用时几十个请求排队；
+ * 性能与降级（2026-11-16 按「庆余年」179 条结果 / 123 张封面的实测调整）：
+ * - 每个 URL 只算一次；结果存 localStorage（LRU：3000 条 + 1.2MB 双预算，
+ *   见 lib/cover-hash-cache.ts），刷新/重复搜索不再取图；
+ * - 单次搜索最多算 120 张，且**只把预算花在没缓存的封面**上：否则同一关键词反复
+ *   搜索永远只算同一批前 48 张，尾部封面永远拿不到指纹（实测 60% 的结果因此被拆卡）；
+ * - 并发 8；
+ * - 连续 4 张失败后**暂停** 15 秒（不把队列判死），到点自动续跑：图床抖动/代理 5xx
+ *   大多是暂时的，一次连败不该让剩下几十条结果没有指纹；
  * - 等待中的封面不会先按片名分组再跳变：调用方用 isPending 把条目暂缓渲染；
- * - 取图/解码失败（isFailed）的条目没有指纹、也不该退回「片名+年份」再拆一张卡，
- *   由调用方直接隐藏（不额外提示）。
+ * - 取图/解码失败（isFailed）的条目没有指纹，但**照常展示**（URL/片名兜底）：
+ *   代理取不到图不代表浏览器显示不出来（很多图床直连正常、Worker 出网 525）。
  */
 
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { coverCropRect, dHashFromRgba } from '@/lib/cover-visual-hash';
+import { trimHashCache } from '@/lib/cover-hash-cache';
 
 export type CoverHashState = { status: 'pending' } | { status: 'done'; hash: string } | { status: 'failed' };
 
 const CACHE_KEY = 'cover-visual-hashes-v3';
-const MAX_CACHED = 600;
-const MAX_PER_SEARCH = 48;
-const MAX_ACTIVE = 5;
+const MAX_PER_SEARCH = 120;
+const MAX_ACTIVE = 8;
 const REQUEST_TIMEOUT_MS = 6000;
 const BREAKER_FAILURES = 4;
-const BREAKER_COOLDOWN_MS = 60_000;
+const BREAKER_COOLDOWN_MS = 15_000;
 const HASH_HEX = /^[0-9a-f]{16}$/;
 
 const states = new Map<string, CoverHashState>();
@@ -43,6 +47,7 @@ let version = 0;
 let consecutiveFailures = 0;
 let breakerUntil = 0;
 let persistTimer: ReturnType<typeof setTimeout> | undefined;
+let resumeTimer: ReturnType<typeof setTimeout> | undefined;
 
 function loadCache(): Map<string, string> {
   const map = new Map<string, string>();
@@ -65,12 +70,11 @@ function schedulePersist(): void {
   persistTimer = setTimeout(() => {
     persistTimer = undefined;
     try {
-      while (cache.size > MAX_CACHED) {
-        const oldest = cache.keys().next().value;
-        if (typeof oldest !== 'string') break;
-        cache.delete(oldest);
-      }
-      window.localStorage.setItem(CACHE_KEY, JSON.stringify(Object.fromEntries(cache)));
+      // 条数 + 字节双预算的 LRU 淘汰（最旧的前面），再写回 localStorage
+      const kept = trimHashCache(cache.entries());
+      cache.clear();
+      for (const [url, hash] of kept) cache.set(url, hash);
+      window.localStorage.setItem(CACHE_KEY, JSON.stringify(Object.fromEntries(kept)));
     } catch {
       // 写不进去就只保留内存缓存
     }
@@ -206,19 +210,28 @@ async function hashCoverUrl(url: string): Promise<string> {
   return hashCoverBlob(await res.blob());
 }
 
-function drainQueue(): void {
-  while (queue.length > 0) {
-    const url = queue.shift();
-    if (!url) break;
-    states.set(url, { status: 'failed' });
-  }
+/**
+ * 熔断到期后自动续跑队列。
+ *
+ * 不能像以前那样把队列里剩下的封面一次性标成 failed：那会让一次图床连败直接
+ * 让几十张封面没有指纹（页面还会按失败隐藏条目）。这里只暂停、不判死。
+ */
+function scheduleResume(): void {
+  if (typeof window === 'undefined' || resumeTimer) return;
+  resumeTimer = setTimeout(() => {
+    resumeTimer = undefined;
+    if (Date.now() < breakerUntil) {
+      scheduleResume();
+      return;
+    }
+    pump();
+  }, BREAKER_COOLDOWN_MS + 20);
 }
 
 function pump(): void {
   while (active < MAX_ACTIVE && queue.length > 0) {
     if (Date.now() < breakerUntil) {
-      drainQueue();
-      notify();
+      scheduleResume();
       return;
     }
     const url = queue.shift();
@@ -238,7 +251,7 @@ function pump(): void {
         consecutiveFailures += 1;
         if (consecutiveFailures >= BREAKER_FAILURES) {
           breakerUntil = Date.now() + BREAKER_COOLDOWN_MS;
-          drainQueue();
+          scheduleResume();
         }
         notify();
       })
@@ -250,7 +263,13 @@ function pump(): void {
 }
 
 function ensure(url: string): void {
-  if (states.has(url)) return;
+  const state = states.get(url);
+  if (state) {
+    // 失败不在整个会话里钉死：图床抖动、代理 5xx 大多是暂时的，下一次搜索
+    // （isPending 之外的新一轮 plan）会重新排队。
+    if (state.status !== 'failed') return;
+    states.delete(url);
+  }
   const cached = cachedHash(url);
   if (cached) {
     states.set(url, { status: 'done', hash: cached });
@@ -269,12 +288,16 @@ export interface CoverHashes {
   hashOf: (url?: string) => string | undefined;
   /** 该封面是否仍在等待指纹：调用方应暂缓渲染该条目，避免先按片名分组后再跳变 */
   isPending: (url?: string) => boolean;
-  /** 取图/解码失败：封面无法参与聚合，调用方按约定隐藏该条目 */
+  /**
+   * 取图/解码失败：拿不到指纹，但**条目仍应展示**，按 URL/片名兜底分组。
+   * 代理取不到图 ≠ 浏览器显示不出来（很多图床直连正常、Worker 出网 525），
+   * 是否真的显示不了由卡片自己的 onCoverBroken 判断。
+   */
   isFailed: (url?: string) => boolean;
 }
 
 /**
- * 为 urls 里的封面算视觉指纹（最多 MAX_PER_SEARCH 张）。
+ * 为 urls 里的封面算视觉指纹（最多 MAX_PER_SEARCH 张**未缓存**的）。
  * 返回值随指纹完成而更新；调用方把 isPending 的条目从聚合输入里剔除。
  */
 export function useCoverHashes(urls: readonly string[]): CoverHashes {
@@ -288,6 +311,9 @@ export function useCoverHashes(urls: readonly string[]): CoverHashes {
     for (const url of urls) {
       if (!url || seen.has(url)) continue;
       seen.add(url);
+      // 已缓存的封面不占预算：否则预算永远花在同一批前 N 张上，尾部的封面
+      // 每次搜索都被跳过、永远拿不到指纹（庆余年 60% 结果被拆卡就是这么来的）。
+      if (cachedHash(url)) continue;
       out.push(url);
       if (out.length >= MAX_PER_SEARCH) break;
     }

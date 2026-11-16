@@ -193,17 +193,13 @@ function HomeContent() {
   /**
    * 展示用的条目：指纹算完的、且**确实有封面图**的。
    *
-   * - 取图/解码失败：拿不到视觉指纹，退回 URL/片名只会再拆出一张重复卡
-   *   （线上「后会友期」的 ywxohs 源就是这样多出一张 1 源卡）；
-   * - 源站根本没给封面（没有 pic）：没有指纹也无法展示封面，卡片只能渲染成占位图
-   *   （线上「色戒」的麻豆源 MAD-039 就是这样），同样直接隐藏。
-   *
-   * 两者都不额外提示：搜索页只展示能看的内容，源站缺图不属于用户需要处理的信息。
+   * - 取图/解码失败的条目**不再隐藏**：代理拿不到图不代表浏览器显示不出来
+   *   （很多图床直连正常、Worker 出网 525），隐藏等于吞掉真实来源；现在按
+   *   URL/片名兜底正常展示，真显示不出来由卡片的 onCoverBroken 整卡处理。
+   * - 源站根本没给封面（没有 pic）的条目仍然隐藏：没有指纹也渲染不出封面，
+   *   只会多一张胶片占位卡。
    */
-  const visibleList = useMemo(
-    () => settledList.filter((item) => Boolean(item.pic?.trim()) && !coverHashes.isFailed(item.pic)),
-    [settledList, coverHashes]
-  );
+  const visibleList = useMemo(() => settledList.filter((item) => Boolean(item.pic?.trim())), [settledList]);
   const coverHashMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const url of coverUrls) {
