@@ -3,6 +3,8 @@ import './globals.css';
 import { Providers } from '@/components/providers';
 import generatedBootstrap from '@/lib/bootstrap.generated.json';
 import type { BootstrapConfig } from '@/lib/bootstrap';
+import { THEME_COLORS, themeBootstrapScript } from '@/lib/theme-color';
+import { DEFAULT_DOCUMENT_TITLE, TITLE_TEMPLATE } from '@/lib/site';
 
 /**
  * 首屏 bootstrap 在**构建期**由 scripts/gen-wrangler.mjs 从同一份源列表生成并写进
@@ -15,8 +17,8 @@ const bootstrap = generatedBootstrap as BootstrapConfig;
 
 export const metadata: Metadata = {
   title: {
-    default: '夜幕影视 - 私人影视聚合',
-    template: '%s - 夜幕影视',
+    default: DEFAULT_DOCUMENT_TITLE,
+    template: TITLE_TEMPLATE,
   },
   description:
     '夜幕影视 是一个私人影视聚合平台：汇聚多个公开点播源与直播源，提供搜索、播放、收藏与观看记录，仅供个人学习使用。',
@@ -35,8 +37,12 @@ export const metadata: Metadata = {
   },
 };
 
+/**
+ * 主题色**不放在这里**：viewport 的 themeColor 是构建期死值，切主题时没人改它，
+ * 浅色主题下手机地址栏/状态栏会一直是深色。改由 head 里手写一条 meta，
+ * 首屏内联脚本与 ThemeProvider 负责改 content（见 lib/theme-color.ts）。
+ */
 export const viewport: Viewport = {
-  themeColor: '#0b101a',
   width: 'device-width',
   initialScale: 1,
 };
@@ -45,13 +51,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="zh-CN" suppressHydrationWarning>
       <head>
-        {/* 首屏前同步主题，避免亮暗闪烁 */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html:
-              "(function(){try{var t=localStorage.getItem('libretv-theme');if(t!=='light'&&t!=='dark'){t='dark';localStorage.setItem('libretv-theme',t);}document.documentElement.classList.toggle('dark',t==='dark');}catch(e){}})()",
-          }}
-        />
+        {/* 主题色：手写一条（不用 viewport 的 themeColor，见上面注释），内容由脚本改写 */}
+        <meta name="theme-color" content={THEME_COLORS.dark} />
+        {/* 首屏前同步主题，避免亮暗闪烁，顺带把 theme-color 校准 */}
+        <script dangerouslySetInnerHTML={{ __html: themeBootstrapScript() }} />
       </head>
       <body>
         <Providers bootstrap={bootstrap}>{children}</Providers>

@@ -1,15 +1,23 @@
 'use client';
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import {
+  applyThemeColor,
+  THEME_STORAGE_KEY,
+  type ThemeChoice,
+} from '@/lib/theme-color';
 
 /**
  * 主题上下文：只有 light / dark 两态（2026-11-15 用户要求去掉「跟随系统」），
  * 持久化到 localStorage，默认 dark。html 上的 .dark 类由 layout 中的内联脚本先行设置
  * （避免首屏闪烁），此处负责后续切换。
+ *
+ * 另：浏览器标题栏 / 状态栏取色（theme-color meta）也在这里跟着主题走，
+ * 见 lib/theme-color.ts。
  */
 
-export type ThemeChoice = 'light' | 'dark';
-const STORAGE_KEY = 'libretv-theme';
+export type { ThemeChoice };
+const STORAGE_KEY = THEME_STORAGE_KEY;
 
 interface ThemeContextValue {
   theme: ThemeChoice;
@@ -32,6 +40,8 @@ function normalize(value: string | null): ThemeChoice {
 
 function apply(choice: ThemeChoice): void {
   document.documentElement.classList.toggle('dark', choice === 'dark');
+  // 浏览器标题栏/状态栏取色跟着主题走（桌面普通标签页无效果，移动端与 PWA 生效）
+  applyThemeColor(choice);
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {

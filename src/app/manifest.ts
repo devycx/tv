@@ -1,13 +1,14 @@
 import type { MetadataRoute } from 'next';
+import { DEFAULT_DOCUMENT_TITLE, SITE_NAME } from '@/lib/site';
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: '夜幕影视 - 私人影视聚合',
-    short_name: '夜幕影视',
+    name: DEFAULT_DOCUMENT_TITLE,
+    short_name: SITE_NAME,
     description: '私人影视聚合平台，汇聚公开点播源与直播源',
     start_url: '/',
     display: 'standalone',
-    background_color: '#111111',
+    background_color: '#0b101a',
     theme_color: '#0b101a',
     icons: [
       {
