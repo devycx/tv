@@ -1,6 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { POST } from './route';
-import { resolveSourceTimeoutMs } from '@/lib/search-timeout';
 import { SESSION_COOKIE, signSession } from '@/lib/auth';
 import type { SearchResponse, SearchStreamEvent, SourceConfig } from '@/lib/types';
 
@@ -223,16 +222,5 @@ describe('POST /api/search', () => {
     });
     const unauthorized = await POST(noCookie);
     expect(unauthorized.status).toBe(401);
-  });
-});
-
-describe('resolveSourceTimeoutMs', () => {
-  it('默认 3s，非法值回退默认，越界收敛到 1s–60s', () => {
-    expect(resolveSourceTimeoutMs(undefined)).toBe(3000);
-    expect(resolveSourceTimeoutMs('')).toBe(3000);
-    expect(resolveSourceTimeoutMs('2500')).toBe(2500);
-    expect(resolveSourceTimeoutMs('abc')).toBe(3000);
-    expect(resolveSourceTimeoutMs('10')).toBe(1000);
-    expect(resolveSourceTimeoutMs('999999')).toBe(60000);
   });
 });

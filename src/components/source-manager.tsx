@@ -772,6 +772,17 @@ function HomePanel() {
             { value: 'hot-list', label: '影视榜单' },
           ]}
         />
+        <SelectRow
+          label="单源等待上限"
+          value={String(store.searchTimeoutMs)}
+          onChange={(v) => store.updateSettings({ searchTimeoutMs: Number(v) })}
+          options={[
+            { value: '2000', label: '2 秒' },
+            { value: '3000', label: '3 秒' },
+            { value: '5000', label: '5 秒' },
+            { value: '10000', label: '10 秒' },
+          ]}
+        />
       </div>
     </section>
   );

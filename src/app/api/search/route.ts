@@ -4,7 +4,7 @@ import { cmsRequestHeaders, filterAdultResults, filterRelevantResults, parseSear
 import { compareSearchResults } from '@/lib/relevance';
 import { fetchUpstream, getCache, setCache } from '@/lib/fetch-utils';
 import { checkUpstreamAllowed } from '@/lib/ssrf';
-import { resolveSourceTimeoutMs } from '@/lib/search-timeout';
+import { normalizeSourceTimeoutMs, resolveSourceTimeoutMs } from '@/lib/search-timeout';
 import type { SearchResponse, SearchStreamEvent, SourceConfig, SourceSearchOutcome } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -13,15 +13,22 @@ interface SearchBody {
   wd: string;
   sources: SourceConfig[];
   filterAdult?: boolean;
+  /** 用户设置的单源等待上限（毫秒），缺省用部署默认值 */
+  timeoutMs?: number;
 }
 
 /** 搜索结果短缓存：同一关键词 + 同一组源在 TTL 内直接返回（播放页返回搜索页等场景） */
 const SEARCH_CACHE_TTL = 60 * 1000;
 
-/** 缓存键：wd + 成人过滤 + 排序后的源地址集合（直接用完整字符串，避免哈希碰撞串缓存） */
-function searchCacheKey(wd: string, sources: SourceConfig[], filterAdult: boolean): string {
+/** 缓存键：wd + 成人过滤 + 单源死线 + 排序后的源地址集合（死线不同结果集也不同，不能共用） */
+function searchCacheKey(
+  wd: string,
+  sources: SourceConfig[],
+  filterAdult: boolean,
+  timeoutMs: number
+): string {
   const urls = sources.map((s) => s.url.replace(/\/+$/, '')).sort().join('|');
-  return `search:${wd}\n${filterAdult ? 1 : 0}\n${urls}`;
+  return `search:${wd}\n${filterAdult ? 1 : 0}\n${timeoutMs}\n${urls}`;
 }
 
 /**
@@ -37,6 +44,7 @@ const SEARCH_MAX_PAGES = (() => {
 
 /**
  * 单源总死线由 lib/search-timeout.ts 提供（路由文件不允许导出额外符号，见该文件注释）。
+ * 默认取部署配置，请求体里的 timeoutMs（用户设置）优先。
  */
 const SEARCH_SOURCE_TIMEOUT_MS = resolveSourceTimeoutMs(process.env.SEARCH_SOURCE_TIMEOUT_MS);
 
@@ -52,7 +60,7 @@ function isTimeoutError(err: unknown): boolean {
  * 整源受 SEARCH_SOURCE_TIMEOUT_MS 总死线约束。
  * 旧版在浏览器里打满 N 个请求（暴露用户 IP、无法缓存、超时失控），现全部上移。
  */
-async function searchSource(source: SourceConfig, wd: string): Promise<SourceSearchOutcome> {
+async function searchSource(source: SourceConfig, wd: string, timeoutMs: number): Promise<SourceSearchOutcome> {
   const start = Date.now();
   const finish = (outcome: Omit<SourceSearchOutcome, 'ms'>): SourceSearchOutcome => ({
     ...outcome,
@@ -79,11 +87,11 @@ async function searchSource(source: SourceConfig, wd: string): Promise<SourceSea
           sourceKey: source.key,
           ok: false,
           list: [],
-          error: `请求超时（>${Math.round(SEARCH_SOURCE_TIMEOUT_MS / 1000)}s）`,
+          error: `请求超时（>${Math.round(timeoutMs / 1000)}s）`,
           timedOut: true,
         })
       );
-    }, SEARCH_SOURCE_TIMEOUT_MS);
+    }, timeoutMs);
   });
 
   const base = source.url.replace(/\/+$/, '');
@@ -197,8 +205,10 @@ export async function POST(req: Request) {
   }
   const sources = body.sources.slice(0, 50);
   const filterAdult = body.filterAdult !== false;
+  // 用户设置优先，其次是部署配置；两者都收敛在 1s–60s
+  const timeoutMs = normalizeSourceTimeoutMs(body.timeoutMs) ?? SEARCH_SOURCE_TIMEOUT_MS;
 
-  const cacheKey = searchCacheKey(wd, sources, filterAdult);
+  const cacheKey = searchCacheKey(wd, sources, filterAdult, timeoutMs);
   const cached = getCache<SearchResponse>(cacheKey);
   if (cached) {
     // 流式模式下缓存命中也要走 done 事件，客户端解析逻辑保持单一
@@ -213,7 +223,7 @@ export async function POST(req: Request) {
 
   const isStream = new URL(req.url).searchParams.get('stream') === '1';
   if (!isStream) {
-    const outcomes = await Promise.all(sources.map((source) => searchSource(source, wd)));
+    const outcomes = await Promise.all(sources.map((source) => searchSource(source, wd, timeoutMs)));
     const payload = aggregateOutcomes(outcomes, wd, filterAdult);
     setCache(cacheKey, payload, SEARCH_CACHE_TTL);
     return NextResponse.json(payload);
@@ -236,7 +246,7 @@ export async function POST(req: Request) {
       const outcomes: SourceSearchOutcome[] = new Array(sources.length);
       await Promise.all(
         sources.map(async (source, i) => {
-          const outcome = await searchSource(source, wd);
+          const outcome = await searchSource(source, wd, timeoutMs);
           outcomes[i] = outcome;
           // 中间结果与最终结果共用去重和过滤规则，避免无关/成人条目短暂出现在页面上。
           const { list } = aggregateOutcomes([outcome], wd, filterAdult);

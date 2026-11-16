@@ -60,6 +60,7 @@ function HomeContent() {
   const envSources = useAppStore((s) => s.envSources);
   const selectedKeys = useAppStore((s) => s.selectedKeys);
   const yellowFilter = useAppStore((s) => s.yellowFilter);
+  const searchTimeoutMs = useAppStore((s) => s.searchTimeoutMs);
   const sourceHealth = useAppStore((s) => s.sourceHealth);
   const subscriptions = useAppStore((s) => s.subscriptions);
   const [input, setInput] = useState(urlQuery);
@@ -92,12 +93,13 @@ function HomeContent() {
   }, [customAPIs, envSources, selectedKeys, sourceHealth, subscriptions]);
 
   const searchQuery = useQuery({
-    queryKey: ['search', urlQuery, selectedKeys, yellowFilter],
+    queryKey: ['search', urlQuery, selectedKeys, yellowFilter, searchTimeoutMs],
     // 与 runSearch 的截断规则保持一致：顶栏搜索 / 手动构造长链接不会绕过上限
     queryFn: ({ signal }) => {
       setStreamedOutcomes([]);
       return api.search(urlQuery.slice(0, 100), selectedSources, yellowFilter, {
         signal,
+        timeoutMs: searchTimeoutMs,
         // 逐源结算即更新：结果边搜边渲染，同时滚动健康度
         // （停用/超时不再在这里提示：源健康状况只在设置 → 点播源里看）
         onSource: (outcome) => {

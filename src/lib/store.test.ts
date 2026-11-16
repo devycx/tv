@@ -571,3 +571,22 @@ describe('底部细进度条设置项', () => {
     store().updateSettings({ miniProgressBar: true });
   });
 });
+
+describe('搜索单源等待上限设置项', () => {
+  it('出厂默认 3s（与部署默认值一致）', () => {
+    expect(store().searchTimeoutMs).toBe(3000);
+  });
+
+  it('可通过 updateSettings 调整，并写进 partialize：设置页与搜索请求共用同一份状态', () => {
+    store().updateSettings({ searchTimeoutMs: 5000 });
+    expect(store().searchTimeoutMs).toBe(5000);
+
+    const options = useAppStore.persist.getOptions() as unknown as {
+      partialize: (s: unknown) => Record<string, unknown>;
+    };
+    expect(options.partialize(store()).searchTimeoutMs).toBe(5000);
+
+    store().updateSettings({ searchTimeoutMs: 3000 });
+    expect(store().searchTimeoutMs).toBe(3000);
+  });
+});

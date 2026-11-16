@@ -128,19 +128,20 @@ export const api = {
     wd: string,
     sources: SourceConfig[],
     filterAdult: boolean,
-    opts?: { signal?: AbortSignal; onSource?: (outcome: SourceSearchOutcome) => void }
+    opts?: { signal?: AbortSignal; onSource?: (outcome: SourceSearchOutcome) => void; timeoutMs?: number }
   ): Promise<SearchResponse> => {
     const signal = opts?.signal;
     const onSource = opts?.onSource;
+    const timeoutMs = opts?.timeoutMs;
     const chunks = splitSearchSources(sources);
     // 源少时保持单请求：拆批只会多一次 invocation，排队本来就不存在
     if (chunks.length === 1) {
-      return searchOnce(wd, chunks[0], filterAdult, onSource, signal);
+      return searchOnce(wd, chunks[0], filterAdult, onSource, signal, timeoutMs);
     }
     // 两个独立 invocation 各自拥有 6 个「等待响应头」的连接槽，35 源的整体墙钟
     // 从 ~8s 降到 ~2s（线上实测 8147ms → 2016ms，结果数一致）。
     const parts = await Promise.all(
-      chunks.map((subset) => searchOnce(wd, subset, filterAdult, onSource, signal))
+      chunks.map((subset) => searchOnce(wd, subset, filterAdult, onSource, signal, timeoutMs))
     );
     return mergeSearchResponses(parts, wd);
   },
@@ -332,13 +333,14 @@ function searchOnce(
   sources: SourceConfig[],
   filterAdult: boolean,
   onSource?: (outcome: SourceSearchOutcome) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  timeoutMs?: number
 ): Promise<SearchResponse> {
-  if (onSource) return searchStream(wd, sources, filterAdult, onSource, signal);
+  if (onSource) return searchStream(wd, sources, filterAdult, onSource, signal, timeoutMs);
   return request<SearchResponse>('/api/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ wd, sources, filterAdult }),
+    body: JSON.stringify({ wd, sources, filterAdult, timeoutMs }),
     signal,
   });
 }
@@ -368,12 +370,13 @@ async function searchStream(
   sources: SourceConfig[],
   filterAdult: boolean,
   onSource: (outcome: SourceSearchOutcome) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  timeoutMs?: number
 ): Promise<SearchResponse> {
   const res = await fetch('/api/search?stream=1', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ wd, sources, filterAdult }),
+    body: JSON.stringify({ wd, sources, filterAdult, timeoutMs }),
     signal,
   });
     throwForAuthStatus(res);

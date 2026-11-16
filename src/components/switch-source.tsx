@@ -108,7 +108,10 @@ export function SwitchSourceModal({
       // 1) 并行搜索所有选中源
       setPhase('searching');
       try {
-        const { list } = await api.search(currentTitle, sources, store.yellowFilter, { signal: controller.signal });
+        const { list } = await api.search(currentTitle, sources, store.yellowFilter, {
+          signal: controller.signal,
+          timeoutMs: store.searchTimeoutMs,
+        });
         if (cancelled) return;
 
         // 匹配口径：优先完全同名，其次名称以标题开头（兼容「小偷 HD」「小偷[电影解说]」这类修饰名）。

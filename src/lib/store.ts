@@ -7,6 +7,7 @@ import { migrateSkipMarks, type SkipMark, type SkipSegment } from './skip-marks'
 import { isQualityEntryFresh, mergeQualityEntries, qualityKey } from './quality';
 import { clearLiveProbeResultsDb, loadLiveProbeResults, saveLiveProbeResults } from './db';
 import { PERSIST_KEY, createThrottledStorage, subscribePersistChanges } from './persist-storage';
+import { DEFAULT_SOURCE_TIMEOUT_MS } from './search-timeout';
 
 /**
  * 全局设置（zustand + localStorage 持久化）。
@@ -18,6 +19,8 @@ export interface AppSettings {
   selectedKeys: string[];
   yellowFilter: boolean;
   adFilter: boolean;
+  /** 单源搜索等待上限（毫秒）：到点丢弃该源本次结果，默认 3s，可在设置里改 */
+  searchTimeoutMs: number;
   doubanEnabled: boolean;
   /** 首页推荐数据源：豆瓣热门 / Bangumi 每日放送（免 key）/ 影视热榜（60s API） */
   recommendSource: 'douban' | 'bangumi' | 'hot-list';
@@ -345,6 +348,7 @@ export const useAppStore = create<AppState>()(
       selectedKeys: [],
       yellowFilter: true,
       adFilter: true,
+      searchTimeoutMs: DEFAULT_SOURCE_TIMEOUT_MS,
       doubanEnabled: true,
       recommendSource: 'hot-list',
       recommendSourceTouched: false,
@@ -965,6 +969,7 @@ export const useAppStore = create<AppState>()(
         envSubsSeen: s.envSubsSeen,
         yellowFilter: s.yellowFilter,
         adFilter: s.adFilter,
+        searchTimeoutMs: s.searchTimeoutMs,
         doubanEnabled: s.doubanEnabled,
         recommendSource: s.recommendSource,
         recommendSourceTouched: s.recommendSourceTouched,
