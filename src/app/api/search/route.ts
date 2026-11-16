@@ -98,7 +98,8 @@ async function searchSource(source: SourceConfig, wd: string, timeoutMs: number)
   const fetchPage = async (page: number) => {
     const api = `${base}?ac=videolist&wd=${encodeURIComponent(wd)}&pg=${page}`;
     const res = await fetchUpstream(api, {
-      timeoutMs: 8000,
+      // 单页不再另设更短的死线：整源由上面的 timeoutMs 统一兜住，否则 10s 设置会先在 8s 断
+      timeoutMs,
       headers: cmsRequestHeaders(),
       signal: controller.signal,
     });
