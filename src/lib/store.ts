@@ -749,7 +749,8 @@ export const useAppStore = create<AppState>()(
             disableCount,
             timestamp: now,
           };
-          if (!o.ok && failStreak >= SOURCE_DISABLE_THRESHOLD) {
+          // 超时是本地的等待上限，不代表源坏了：只影响本次结果，不触发自动停用
+          if (!o.ok && !o.timedOut && failStreak >= SOURCE_DISABLE_THRESHOLD) {
             const alreadyDisabled = prev?.permanent === true || (prev?.disabledUntil ?? 0) > now;
             if (alreadyDisabled) {
               // 已在停用期内（正常不会参与搜索，此处仅作防御）：保持原等级与截止时间

@@ -113,6 +113,7 @@ const config = {
     // 35 个源 × 多页 + 重试会超限（实测报 "Too many subrequests"）。
     // 每个源只抓第一页、关闭重试，把最坏情况压到「源数量 + 少量重定向」。
     SEARCH_MAX_PAGES: '1',
+    SEARCH_SOURCE_TIMEOUT_MS: '3000',
     MAX_RETRIES: '0',
     // 部署矩阵开关（见 src/app/api/auth/route.ts）：Workers 前面只有 Cloudflare 边缘，
     // cf-connecting-ip 由边缘覆写、客户端伪造无效，登录限流必须按它计数。

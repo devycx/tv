@@ -341,6 +341,20 @@ describe('点播源自动停用阶梯', () => {
     expect(events[0]).toMatchObject({ level: 2, permanent: false });
   });
 
+  it('连续超时不触发自动停用，真实失败仍走阶梯', () => {
+    const timeout = (key: string) => ({ sourceKey: key, ok: false, timedOut: true, error: '请求超时（>3s）', list: [] });
+
+    for (let i = 0; i < 5; i++) expect(store().recordSourceHealth([timeout('b')])).toEqual([]);
+    expect(isSourceDisabled(store(), 'b')).toBe(false);
+    expect(store().sourceHealth['b']).toMatchObject({ ok: false, timedOut: true, failStreak: 5 });
+
+    store().recordSourceHealth([okOutcome('b')]);
+    expect(store().sourceHealth['b'].failStreak).toBe(0);
+    expect(store().recordSourceHealth([fail('b')])).toEqual([]);
+    const events = store().recordSourceHealth([fail('b')]);
+    expect(events[0]).toMatchObject({ key: 'b', level: 1 });
+  });
+
   it('成功后立即清除停用标记与失败连击', () => {
     failTwice('a');
     expect(isSourceDisabled(store(), 'a')).toBe(true);
