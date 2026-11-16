@@ -27,15 +27,19 @@ export const metadata: Metadata = {
   // 标签页图标是**透明徽标**（YouTube 风格）：深色底的 icon-*.png 只留给 manifest 里的
   // PWA 安装图标。此前把深色底 PNG 声明为页面 icon，标签页/书签会显示成一个黑底方块。
   //
-  // 这里只声明**一条内联 data URI**（48px，由 `npm run icons` 生成到
-  // lib/favicon.generated.json），故意不再挂 /favicon.ico、favicon-*.png 的 link：
-  // - 手机浏览器首访要先请求 favicon，请求回来之前标签页会先画一个深色占位方块，
-  //   表现为「首次访问黑底、刷新后透明」（刷新时图标已在缓存里）。data URI 随 HTML
-  //   一起到达，解析时就有图标，Chrome 实测不再发任何图标请求。
-  // - 一旦再挂网络图标 link，浏览器会按尺寸挑更大的那张去下载，首访黑方块就又回来了。
-  // 不认 data URI 的老浏览器仍会隐式请求根目录 /favicon.ico（同一份透明徽标）兜底。
+  // 两条来源，缺一不可（2026-11-16 两次线上回归换来的结论）：
+  // - **网络图标（主路径）**：`?v=` 用图标内容的短哈希（`npm run icons` 生成到
+  //   lib/favicon.generated.json）。手机端 Chromium 变种里有的不认 data URI，只认网络图标；
+  //   而且浏览器图标库对同一 URL 的图标缓存很久，换 logo 不换 URL 就会一直显示旧图
+  //   （典型症状：手机标签页一直是深色底方块，刷新也不变）。URL 带版本号后必被重拉。
+  // - **内联 data URI（兜底）**：支持它的实现能做到「解析 HTML 即可有图标」。但实测
+  //   Chromium 只要看到网络图标就会优先用网络图标，所以别把它当主路径——只声明 data URI
+  //   时，不认它的浏览器会退回图标库里缓存的旧图（这就是 11-16 上午那次回归）。
   icons: {
     icon: [
+      { url: `/favicon.ico?v=${generatedFavicon.version}`, sizes: '16x16 32x32 48x48' },
+      { url: `/icons/favicon-32.png?v=${generatedFavicon.version}`, sizes: '32x32', type: 'image/png' },
+      { url: `/icons/favicon-96.png?v=${generatedFavicon.version}`, sizes: '96x96', type: 'image/png' },
       {
         url: generatedFavicon.dataUri,
         sizes: `${generatedFavicon.size}x${generatedFavicon.size}`,

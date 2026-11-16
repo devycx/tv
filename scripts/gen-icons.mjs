@@ -11,13 +11,17 @@
  * Chrome/手机浏览器标签页会显示成一个黑方块（YouTube 那种透明红徽标才是预期效果）。
  * 透明徽标按 contain 放进正方形画布，24:17 的徽标会水平铺满、上下留透明边。
  *
- * 标签页图标还会被**内联**进 layout.tsx（src/lib/favicon.generated.json 的 data URI）：
- * 手机浏览器首访时 favicon 要走一次网络请求，请求回来之前标签页先画一个深色占位方块
- * （「首次访问黑底、刷新后透明」）。内联后图标在解析 HTML 时就可用，不再发请求。
- * 改完 logo 一定要重跑本脚本，否则内联的 data URI 会和 PNG/ICO 不一致（有单测守着）。
+ * 标签页图标在 layout.tsx 里声明两条来源：
+ * - 网络图标 `/favicon.ico?v=<版本>` + `favicon-32/96.png?v=<版本>`：**主路径**。部分手机端
+ *   Chromium 变种不认 data URI，只认网络图标；而且浏览器图标库会长期缓存旧图，所以 URL
+ *   带上内容哈希（`?v=`）——换 logo 后 URL 必变，旧的黑底条目才会被换掉。
+ * - 内联 data URI：兜底，支持它的实现可以做到「解析 HTML 即可用」。实测 Chromium 在有
+ *   网络图标时会优先选网络图标，别指望 data URI 能压过它。
+ * 改完 logo 一定要重跑本脚本，否则 data URI / 版本号会和 PNG/ICO 不一致（有单测守着）。
  *
  * 依赖 sharp（Next 的传递依赖，已随 node_modules 安装）。
  */
+import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -84,9 +88,21 @@ for (const size of FAVICON_PNG_SIZES) {
 await writeFile(path.join(root, 'public', 'favicon.ico'), buildIco(faviconPngs));
 
 /**
- * 内联版 favicon（data URI）：写进 src/lib/favicon.generated.json，layout.tsx 直接引用。
- * 用 data URI 而不是 /icons/favicon-*.png，是为了让标签页图标在 HTML 解析时就绪——
- * 手机浏览器首访错过这个时机就会先画深色占位方块（黑底），等请求回来才变透明。
+ * 图标版本号：对全部标签页图标字节取短哈希，写进 src/lib/favicon.generated.json。
+ * layout.tsx 用它拼 `?v=`，换 logo 后图标 URL 跟着变——浏览器（尤其手机端）的图标库
+ * 会长期缓存旧图，只有换 URL 才会重新拉取。2026-11-16 的「手机标签页一直是黑底」就是
+ * 旧图标库条目没被换掉导致的。
+ */
+const icoBytes = await readFile(path.join(root, 'public', 'favicon.ico'));
+const iconVersion = createHash('sha256')
+  .update(Buffer.concat([...faviconPngBySize.values(), icoBytes]))
+  .digest('hex')
+  .slice(0, 8);
+
+/**
+ * 同时输出内联版 favicon（data URI）：支持它的实现可以做到「解析 HTML 即可用」。
+ * 注意 Chromium 实测会**优先选网络图标**（哪怕 data URI 的尺寸更合适），所以 data URI
+ * 只是兜底，不能当成主路径——只声明 data URI 时，不认它的浏览器会退回图标库里的旧图。
  */
 const inlinePng = faviconPngBySize.get(INLINE_FAVICON_SIZE);
 if (!inlinePng) throw new Error(`missing inline favicon ${INLINE_FAVICON_SIZE}px`);
@@ -94,6 +110,7 @@ await writeFile(
   GENERATED_MODULE,
   `${JSON.stringify(
     {
+      version: iconVersion,
       size: INLINE_FAVICON_SIZE,
       type: 'image/png',
       bytes: inlinePng.length,

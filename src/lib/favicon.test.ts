@@ -16,6 +16,7 @@
  * sharp 是 Next 的传递依赖（`npm run icons` 也用它）：拿不到就只做结构断言（PNG 头 /
  * ICO 目录 / 与文件一致），像素级断言跳过，避免本地缺依赖时误报。
  */
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -154,5 +155,26 @@ describe('public/favicon.ico（隐式兜底）', () => {
     for (const entry of parseIco(readPublic('favicon.ico'))) {
       await expectTransparentBackground(entry.payload);
     }
+  });
+});
+
+/**
+ * `?v=` 版本号 = 全部标签页图标字节的短哈希。它必须跟着图标内容走，否则换了 logo
+ * 而 URL 不变，浏览器（尤其手机端图标库）会一直显示旧图——2026-11-16 的黑底回归
+ * 就是这么来的。这里重算一遍，防止只改 SVG 不跑 `npm run icons`。
+ */
+describe('图标版本号（?v= 缓存击穿）', () => {
+  it('等于 favicon PNG + ICO 字节的 sha256 前 8 位', () => {
+    expect(generated.version).toMatch(/^[0-9a-f]{8}$/);
+    const hash = createHash('sha256')
+      .update(
+        Buffer.concat([
+          ...[16, 32, 48, 96, 192].map((size) => readPublic(`favicon-${size}.png`)),
+          readPublic('favicon.ico'),
+        ])
+      )
+      .digest('hex')
+      .slice(0, 8);
+    expect(generated.version).toBe(hash);
   });
 });
