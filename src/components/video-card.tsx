@@ -284,10 +284,8 @@ export function AggregatedCard({
                   aria-label={`使用 ${item.sourceName} 播放${label ? `，${label}` : ''}`}
                 >
                   <span className="font-medium text-content truncate flex-1 min-w-0">{item.sourceName}</span>
-                  {/* 最高画质来源给明确文字标记：边框高亮在窄屏上不够显眼 */}
-                  {isBest && (
-                    <span className="tag bg-accent/15 text-accent shrink-0 font-medium">最高</span>
-                  )}
+                  {/* 最高画质只用边框高亮：排序已把它放在首行，首行徽章就是分辨率（4K/1080P），
+                      再挂一个「最高」文字标签是同一件事说两遍，还占掉源名的宽度 */}
                   <QualityBadge
                     entry={qualities[itemKey]}
                     // 定宽 + 等宽数字：三行的 360P / 540P / 1080P 左缘对齐，不随字符数抖动
