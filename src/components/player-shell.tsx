@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Artplayer from 'artplayer';
 import type { SettingOption } from 'artplayer';
 import Hls, { type HlsConfig } from 'hls.js';
 
+import { buildMediaInfo, type MediaArtwork } from '@/lib/media-session';
+import { useMediaSession } from '@/components/use-media-session';
 import { PlaybackRecovery, describeHlsError } from '@/lib/playback-recovery';
 import { createHlsLoader } from '@/lib/hls-loader';
 import {
@@ -66,6 +68,13 @@ export interface PlayerSkipApi {
 interface PlayerShellProps {
   url: string;
   title: string;
+  /**
+   * 系统媒体会话（安卓通知栏/锁屏、Windows 媒体浮层）的封面：
+   * 由播放页按当前图片模式解析好（含无封面时的站标兜底），这里只负责登记。
+   */
+  artwork?: MediaArtwork;
+  /** 媒体会话副标题行：多集时为「第 3 集」；单集/电影留空 */
+  episodeLabel?: string;
   adFilter: boolean;
   autoplayNext: boolean;
   /** 当前剧的跳过片段标记（父级按归一化剧名查好后传入，换集/换源不变） */
@@ -125,6 +134,8 @@ interface PlayerShellProps {
 export function PlayerShell({
   url,
   title,
+  artwork,
+  episodeLabel,
   adFilter,
   autoplayNext,
   skipMark,
@@ -218,6 +229,60 @@ export function PlayerShell({
     if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
     hintTimerRef.current = setTimeout(() => setHint(''), 2500);
   };
+
+  // —— 系统媒体会话：通知栏/锁屏上的片名、集数、封面与播放控制 ——
+  // 元数据随 props 走（换集即更新）；播放状态与进度在下方事件 effect 里喂。
+  const mediaInfo = useMemo(
+    () => buildMediaInfo({ title, subtitle: episodeLabel, artwork }),
+    [title, episodeLabel, artwork]
+  );
+
+  /** 通知栏拖动进度条 / 快进快退：夹到 [0, duration] */
+  const seekToSeconds = (seconds: number) => {
+    const art = artRef.current;
+    if (!art || !Number.isFinite(seconds)) return;
+    try {
+      const duration = Number(art.duration);
+      const target =
+        Number.isFinite(duration) && duration > 0
+          ? Math.min(Math.max(seconds, 0), duration)
+          : Math.max(seconds, 0);
+      art.currentTime = target;
+    } catch {
+      /* 忽略 */
+    }
+  };
+
+  const mediaSession = useMediaSession({
+    info: mediaInfo,
+    canSeek: true,
+    canPrev: Boolean(hasPrevEpisode && onPrevEpisode),
+    canNext: Boolean(hasNextEpisode && onNextEpisode),
+    actions: {
+      play: () => {
+        // ArtPlayer 的 play() 返回 Promise：锁屏点播放被浏览器拒绝时不能冒泡成未处理拒绝
+        Promise.resolve(artRef.current?.play()).catch(() => {});
+      },
+      pause: () => {
+        try {
+          artRef.current?.pause();
+        } catch {
+          /* 忽略 */
+        }
+      },
+      seekTo: seekToSeconds,
+      seekBy: (delta) => {
+        const current = Number(artRef.current?.currentTime);
+        seekToSeconds((Number.isFinite(current) ? current : 0) + delta);
+      },
+      prev: () => {
+        if (propsRef.current.hasPrevEpisode) propsRef.current.onPrevEpisode?.();
+      },
+      next: () => {
+        if (propsRef.current.hasNextEpisode) propsRef.current.onNextEpisode?.();
+      },
+    },
+  });
 
   // 片段缓存开启时调大 hls.js 自身缓冲，缓冲之外的空窗由预取器补齐
   const buildHlsConfig = (): Partial<HlsConfig> => {
@@ -1028,6 +1093,38 @@ export function PlayerShell({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // —— 媒体会话的播放状态与进度 ——
+  // 绑 ArtPlayer 的事件而不是 video 元素：video:error 自愈会重建 <video>，
+  // 直接绑元素会在重建后失联（媒体会话本身是 document 级的，不受影响）。
+  useEffect(() => {
+    const art = artRef.current;
+    if (!art) return;
+    const rate = () => (typeof art.video?.playbackRate === 'number' ? art.video.playbackRate : 1);
+    // 暂停/拖动/变速后系统进度条要立刻跟上；节流在 hook 内部（1s）并会被播放状态重置
+    const syncPosition = () => mediaSession.updatePosition(art.currentTime, art.duration, rate());
+    const onPlaying = () => {
+      mediaSession.setPlaybackState('playing');
+      syncPosition();
+    };
+    const onPause = () => {
+      mediaSession.setPlaybackState('paused');
+      syncPosition();
+    };
+
+    art.on('video:playing', onPlaying);
+    art.on('video:pause', onPause);
+    art.on('video:seeked', syncPosition);
+    art.on('video:timeupdate', syncPosition);
+    art.on('video:ratechange', syncPosition);
+    return () => {
+      art.off('video:playing', onPlaying);
+      art.off('video:pause', onPause);
+      art.off('video:seeked', syncPosition);
+      art.off('video:timeupdate', syncPosition);
+      art.off('video:ratechange', syncPosition);
+    };
+  }, [mediaSession]);
 
   // —— 自动连播：设置菜单里的 switch 跟随全局设置 ——
   // 菜单项在播放器创建时按当次 props 初始化；如果用户从设置抽屉（偏好设置）改了开关，

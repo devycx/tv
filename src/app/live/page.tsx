@@ -25,6 +25,9 @@ import { allLiveSources, useAppStore, type LiveProbeEntry } from '@/lib/store';
 import { collectGroups } from '@/lib/m3u-parser';
 import { cn } from '@/lib/utils';
 import { SmartImage } from '@/components/smart-image';
+import { useDocumentTitle } from '@/components/use-document-title';
+import { resolveArtwork } from '@/lib/media-session';
+import { brandTitle } from '@/lib/site';
 
 /**
  * 直播页：左侧播放器 + 频道信息 + 节目单；右侧频道侧栏。
@@ -301,6 +304,15 @@ function LiveContent() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [switchChannelByOffset, backToPrevChannel]);
 
+  // —— 系统媒体会话（安卓通知栏/锁屏）与窗口标题 ——
+  // 频道名做标题、分组做副标题：直播没有集数，也不显示来源。
+  const channelLogo = currentChannel?.logo;
+  const mediaArtwork = useMemo(
+    () => resolveArtwork(channelLogo, imageProxyMode, customImageProxy),
+    [channelLogo, imageProxyMode, customImageProxy]
+  );
+  useDocumentTitle(currentChannel ? brandTitle(currentChannel.name) : undefined);
+
   if (!verified) {
     return (
       <div className="min-h-screen flex flex-col">
@@ -312,7 +324,7 @@ function LiveContent() {
     );
   }
 
-  const logo = currentChannel?.logo;
+  const logo = channelLogo;
   const isFavorite = currentChannel ? liveFavorites.includes(currentChannel.url) : false;
   /** 没有 EPG 配置的频道直接不渲染节目单卡片（空态文案占一整张卡，信息量为零） */
   const hasEpg = Boolean(currentChannel?.epg && currentChannel.tvgId);
@@ -330,6 +342,8 @@ function LiveContent() {
                 <LivePlayer
                   url={currentUrl}
                   title={currentChannel?.name || '直播'}
+                  subtitle={currentChannel?.group || '直播'}
+                  artwork={mediaArtwork}
                   onPrevChannel={goPrevChannel}
                   onNextChannel={goNextChannel}
                   volumeBoost={volumeBoost}

@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Artplayer from 'artplayer';
 import Hls, { type HlsConfig } from 'hls.js';
 import { Spinner } from './states';
+import { useMediaSession } from '@/components/use-media-session';
+import { buildMediaInfo, type MediaArtwork } from '@/lib/media-session';
 import { prefersTouchPointer } from '@/lib/touch-pointer';
 import { ART_DEFAULT_CONTROL_HIDE_MS, TOUCH_CONTROL_HIDE_MS } from '@/lib/control-hide';
 import { attachVolumeBoost, type VolumeBoostHandle } from '@/lib/volume-boost';
@@ -52,6 +54,13 @@ interface LivePlayerProps {
   /** 上游直播流地址（只直连源站） */
   url: string;
   title: string;
+  /**
+   * 系统媒体会话（安卓通知栏/锁屏）副标题行：频道分组（如「央视」）或「直播」。
+   * 直播没有进度/集数，只登记台标、频道名与播放控制。
+   */
+  subtitle?: string;
+  /** 媒体会话封面：频道台标，无台标时由页面给站标兜底 */
+  artwork?: MediaArtwork;
   /** 上一台/下一台：传入时注册为播放器控制条按钮（全屏内也可操作） */
   onPrevChannel?: () => void;
   onNextChannel?: () => void;
@@ -59,7 +68,15 @@ interface LivePlayerProps {
   volumeBoost: boolean;
 }
 
-export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoost }: LivePlayerProps) {
+export function LivePlayer({
+  url,
+  title,
+  subtitle,
+  artwork,
+  onPrevChannel,
+  onNextChannel,
+  volumeBoost,
+}: LivePlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const artRef = useRef<any>(null);
@@ -99,6 +116,33 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
     if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
     hintTimerRef.current = setTimeout(() => setHint(''), 2500);
   };
+
+  // —— 系统媒体会话：通知栏/锁屏上的频道名、分组、台标与播放控制 ——
+  // 直播没有进度：不注册 seek、不写 setPositionState（直播 duration 是 Infinity，会抛）。
+  const mediaInfo = useMemo(
+    () => buildMediaInfo({ title, subtitle, artwork }),
+    [title, subtitle, artwork]
+  );
+  const mediaSession = useMediaSession({
+    info: mediaInfo,
+    canSeek: false,
+    canPrev: Boolean(onPrevChannel),
+    canNext: Boolean(onNextChannel),
+    actions: {
+      play: () => {
+        Promise.resolve(artRef.current?.play()).catch(() => {});
+      },
+      pause: () => {
+        try {
+          artRef.current?.pause();
+        } catch {
+          /* 忽略 */
+        }
+      },
+      prev: () => onPrevChannel?.(),
+      next: () => onNextChannel?.(),
+    },
+  });
 
   useEffect(() => {
     if (!containerRef.current || !url) return;
@@ -362,6 +406,11 @@ export function LivePlayer({ url, title, onPrevChannel, onNextChannel, volumeBoo
       if (volumeBoostSettingRef.current && !volumeBoostRef.current) {
         volumeBoostRef.current = attachVolumeBoost(art.video);
       }
+      // 系统媒体会话：锁屏/通知栏的播放按钮状态。观众切后台继续听时，这一行是唯一的「正在播」信号
+      mediaSession.setPlaybackState('playing');
+    });
+    art.on('video:pause', () => {
+      mediaSession.setPlaybackState('paused');
     });
     art.on('video:error', () => {
       // mpegts 走自身 ERROR 事件；这里兜底其它未知错误

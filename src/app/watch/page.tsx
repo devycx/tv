@@ -18,6 +18,9 @@ const PlayerShell = dynamic(() => import('@/components/player-shell').then((m) =
 import { EmptyState, LoadingState, Spinner } from '@/components/states';
 import { SwitchSourceModal } from '@/components/switch-source';
 import { SkipMarkPanel } from '@/components/skip-mark-panel';
+import { useDocumentTitle } from '@/components/use-document-title';
+import { resolveArtwork } from '@/lib/media-session';
+import { brandTitle } from '@/lib/site';
 import { skipMarkKey, validateSegment, type SkipSegment } from '@/lib/skip-marks';
 import type { PlayerSkipApi } from '@/components/player-shell';
 import { useToast } from '@/components/toast';
@@ -44,6 +47,8 @@ import { cn } from '@/lib/utils';
  * 状态全部由 URL 驱动：/watch?source=xx&id=..&index=..&title=..
  * 集数列表由服务端详情接口获取；进度与历史走 IndexedDB。
  */
+const UNKNOWN_TITLE = '未知视频';
+
 export default function WatchPage() {
   return (
     <Suspense>
@@ -119,7 +124,7 @@ function WatchContent() {
   });
 
   const episodes = useMemo(() => detailQuery.data?.episodes ?? [], [detailQuery.data]);
-  const videoTitle = titleParam || detailQuery.data?.videoInfo?.title || '未知视频';
+  const videoTitle = titleParam || detailQuery.data?.videoInfo?.title || UNKNOWN_TITLE;
 
   // 当前播放地址：优先取剧集列表中的当前集，其次直连 URL 参数
   const currentUrl = useMemo(() => {
@@ -225,6 +230,21 @@ function WatchContent() {
     if (!verified || !sourceKey || !historyVodId || (!cover && totalEpisodes === 0)) return;
     patchHistoryMeta(sourceKey, historyVodId, { pic: cover, totalEpisodes }).catch(() => {});
   }, [verified, sourceKey, historyVodId, cover, totalEpisodes]);
+
+  // —— 系统媒体会话（安卓通知栏/锁屏）与窗口标题 ——
+  // 只看「多集」：单集影片（含电影）不写集数，避免出现「第 1 集」这种噪音。
+  const episodeLabel = totalEpisodes > 1 ? `第 ${currentIndex + 1} 集` : undefined;
+  // 封面与卡片/详情页共用候选链：豆瓣图先走公共镜像（原站对空 Referer 回 418），并升到 /m/
+  const mediaArtwork = useMemo(
+    () => resolveArtwork(cover, store.imageProxyMode, store.customImageProxy),
+    [cover, store.imageProxyMode, store.customImageProxy]
+  );
+  // 详情回来之前 title 还是「未知视频」：别把占位文案先写进标签页/通知栏
+  useDocumentTitle(
+    videoTitle === UNKNOWN_TITLE
+      ? undefined
+      : brandTitle(episodeLabel ? `${videoTitle} ${episodeLabel}` : videoTitle)
+  );
 
   // 播放中与暂停时的进度落盘逻辑一致，共用同一回调
   const handleProgress = useCallback(
@@ -352,6 +372,8 @@ function WatchContent() {
                 <PlayerShell
                   url={currentUrl}
                   title={videoTitle}
+                  artwork={mediaArtwork}
+                  episodeLabel={episodeLabel}
                   adFilter={store.adFilter}
                   autoplayNext={store.autoplayNext}
                   skipMark={skipMark}
