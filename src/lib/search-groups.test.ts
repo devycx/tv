@@ -19,16 +19,49 @@ const COVER_A_MIRROR = 'https://b.com/upload/78288c7898fdad99aee06e3b42213c7b.we
 const COVER_B = 'https://a.com/cover/bb36e395b063bec9205952807471e86a.jpg';
 
 describe('aggregateResults（按封面聚合）', () => {
-  it('同名同年但封面不同：拆成不同卡片，不再混成一个「N 源」', () => {
+  it('同名同年、封面不同：并成一张卡（2026-11-16 用户改口径：同片不同海报也要并）', () => {
     const groups = aggregateResults([
       item({ name: '色戒', year: '2007', pic: COVER_A, typeName: '剧情片' }),
       item({ name: '色戒', year: '2007', pic: COVER_B, typeName: '伦理片' }),
     ]);
 
+    expect(groups).toHaveLength(1);
+    expect(groups[0].items).toHaveLength(2);
+  });
+
+  it('同名不同年：不并（《色戒》2002 Samsara 与 2007 是两部片）', () => {
+    const groups = aggregateResults([
+      item({ name: '色戒', year: '2002', pic: COVER_A }),
+      item({ name: '色戒', year: '2007', pic: COVER_B }),
+    ]);
+
     expect(groups).toHaveLength(2);
-    expect(groups.map((g) => g.items)).toHaveLength(2);
-    expect(groups[0].items).toHaveLength(1);
-    expect(groups[1].items).toHaveLength(1);
+  });
+
+  it('不同片名、不同封面：不并（不靠 URL 指纹跨站乱并）', () => {
+    const groups = aggregateResults([
+      item({ name: '色戒', year: '2007', pic: COVER_A }),
+      item({ name: '大开色戒', year: '2007', pic: COVER_B }),
+    ]);
+
+    expect(groups).toHaveLength(2);
+  });
+
+  it('剧版/影版同名同年、封面指纹距离 28：并组（用户接受剧影同卡）', () => {
+    const coverHashes = new Map([
+      ['https://a.com/tv.jpg', 'b68ecece8ea7cbc9'],
+      ['https://b.com/movie.jpg', '234663494d1b1911'],
+    ]);
+    const groups = aggregateResults(
+      [
+        item({ name: '三生三世十里桃花', year: '2017', pic: 'https://a.com/tv.jpg', typeName: '国产剧' }),
+        item({ name: '三生三世十里桃花', year: '2017', pic: 'https://b.com/movie.jpg', typeName: '爱情片' }),
+      ],
+      { coverHashes }
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].items).toHaveLength(2);
   });
 
   it('同一张封面跨片名、跨年份合并；标题取更短的写法，年份取多数', () => {
@@ -80,13 +113,14 @@ describe('aggregateResults（按封面聚合）', () => {
     expect(crossYear).toHaveLength(2);
   });
 
-  it('有封面与无封面的同名同年条目不强行合并（封面身份未知）', () => {
+  it('有封面与无封面的同名同年条目：并组（片名+年份 兜底）', () => {
     const groups = aggregateResults([
       item({ name: '色戒', year: '2007', pic: COVER_A }),
       item({ name: '色戒', year: '2007' }),
     ]);
 
-    expect(groups).toHaveLength(2);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].items).toHaveLength(2);
   });
 
   it('封面视觉指纹相近：不同 URL/片名的同一张海报合并', () => {
@@ -114,7 +148,7 @@ describe('aggregateResults（按封面聚合）', () => {
     expect(groups.find((g) => g.items.length === 1)?.items[0].year).toBe('2007');
   });
 
-  it('视觉指纹明显不同：同名同年也拆开（指纹优先于片名）', () => {
+  it('视觉指纹明显不同：同名同年仍并组（片名+年份 层兜底）', () => {
     const coverHashes = new Map([
       ['https://a.com/lust-a.jpg', '0000000000000000'],
       ['https://b.com/lust-b.jpg', 'ffffffffffffffff'],
@@ -128,10 +162,11 @@ describe('aggregateResults（按封面聚合）', () => {
       { coverHashes }
     );
 
-    expect(groups).toHaveLength(2);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].items).toHaveLength(2);
   });
 
-  it('没有视觉指纹时退回 URL 指纹，不跨站乱并', () => {
+  it('没有视觉指纹时按 URL 指纹分组，但同名同年仍并组', () => {
     const groups = aggregateResults(
       [
         item({ name: '色戒', year: '2007', pic: COVER_A }),
@@ -140,8 +175,9 @@ describe('aggregateResults（按封面聚合）', () => {
       { coverHashes: new Map([[COVER_A, '0000000000000000']]) }
     );
 
-    // A 走视觉指纹，B 走 URL 指纹，两者不可能同组
-    expect(groups).toHaveLength(2);
+    // A 走视觉指纹、B 走 URL 指纹，靠「片名 + 年份」这一层并到一起
+    expect(groups).toHaveLength(1);
+    expect(groups[0].items).toHaveLength(2);
   });
 
   it('组内备注推到统一结论', () => {

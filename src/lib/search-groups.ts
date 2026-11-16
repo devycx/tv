@@ -1,19 +1,22 @@
 /**
  * 搜索结果聚合（纯函数，便于单测）：把扁平的多源结果聚成「一张封面 = 一张卡片」。
  *
- * 旧版只按「片名 + 年份」分桶。搜「色戒」时，若多个采集站都把不同影片标成
- * 「色戒 / 2007」，它们会被并成一张「6 源」的卡：封面只显示其中一部，点开却可能
- * 播到另一部；反过来，同一部片被源站写成不同片名/年份时又会拆成好几张重复卡。
+ * 身份判定分两层（2026-11-16 用户改口径）：
+ * 1. **封面视觉指纹**（浏览器算的 dHash）：同一张图换域名/文件名/分辨率/压缩率 →
+ *    同一组，片名/年份不参与拆分；
+ * 2. **片名 + 年份**再兜一层：同名同年即使封面不同（剧版/影版海报、不同扫描件、
+ *    源站配错图）也并进同一组——用户明确要求「同一部片就并到一起，剧版和电影版
+ *    并到一张卡也不影响」。
  *
- * 现在以**封面视觉指纹**为第一身份（指纹由浏览器对封面图做 dHash 得到）：
- * - 指纹相同/汉明距离很近（同一张图换域名、换文件名、换分辨率/压缩率）→ 同一组，
- *   片名/年份不再参与拆分；
- * - 指纹明显不同 → 不同组，即使片名和年份完全一样（不同影片/不同海报不硬并）；
- * - 封面还没算出来/取图失败/没有封面 → 退回 URL 指纹，再退回「片名 + 年份」，
- *   且不跨组猜测。
+ * 为什么不再「指纹不同就一律拆开」：实测 21 张真实海报两两 dHash 距离中位数 **32**、
+ * 最小 24（见 docs/search-cover-aggregation.md §9），「同一部片的两张不同海报」
+ * 和「两部不相干的片」完全落在同一区间——把全局阈值从 10 提到 28+ 会随机并掉不相干
+ * 的影片，提不到 28 又并不到剧/影。所以阈值留在 10（同图 0–4 vs 不同图 24+，余量最大），
+ * 「同片不同海报」交给片名 + 年份这一层。
  *
- * 「电影解说 / 影视解说」这类二创单独成组：它们常直接复用影片海报，若按封面合并，
- * 正片的来源列表里会混进解说的源，封面直达播放也可能播到解说视频。
+ * 「电影解说 / 影视解说」这类二创仍然单独成组：它们常直接复用影片海报，若并进正片，
+ * 正片的来源列表会混进解说源，封面直达播放也可能播到解说视频。判定放在变体前缀
+ * （`f:` 正片 / `c:` 解释）上，两层身份都带这个前缀。
  */
 
 import { normalizeTitle } from './cms-parser';
@@ -117,6 +120,20 @@ function groupKeyOf(
 
   const cover = coverFingerprint(pic);
   if (cover) return `${variant}:cover:${cover}`;
+  return titleKeyOf(item) ?? '';
+}
+
+/**
+ * 「片名 + 年份」键：视觉指纹之外的第二次并组。
+ *
+ * 同名同年一律并到一起（用户 2026-11-16 明确要求，剧版/影版并一张卡也接受）；
+ * 跨年不并（《色戒》2002 与 2007 是两部片）。解说（`c:`）与正片（`f:`）不并。
+ * 拿不到片名时返回 undefined，不参与并组。
+ */
+function titleKeyOf(item: SearchResultItem): string | undefined {
+  const name = (item.name || '').trim();
+  if (!name) return undefined;
+  const variant = COMMENTARY_NAME.test(name) ? 'c' : 'f';
   return `${variant}:title:${normalizeTitle(name)}|${(item.year ?? '').trim()}`;
 }
 
@@ -136,7 +153,7 @@ function buildGroup(key: string, items: SearchResultItem[]): AggregatedGroup {
 }
 
 /**
- * 按「封面视觉指纹优先、URL/片名为辅」聚合搜索结果。
+ * 按「封面视觉指纹」+「片名 + 年份」两层身份聚合搜索结果。
  * 返回顺序沿用传入顺序（搜索结果已按相关性排序），组的位置取组内第一条出现的位置。
  */
 export function aggregateResults(
@@ -149,11 +166,61 @@ export function aggregateResults(
       ? clusterCoverHashes(coverHashes.values(), maxHashDistance)
       : new Map<string, string>();
 
+  const named = list.filter((item) => (item.name || '').trim());
+  if (named.length === 0) return [];
+
+  /**
+   * 并查集：每个条目先有 primary 键（视觉/URL/片名指纹），再把 primary 和
+   * 「片名 + 年份」键连起来——同名同年的不同封面因此进同一组。
+   *
+   * 根取**先出现**的键：流式搜索是按源追加结果的，取最早出现的键能保证已有分组
+   * 的 key 不因后续条目而改变（key 变了 React 会整卡重挂载）。
+   */
+  const parent = new Map<string, string>();
+  const seenAt = new Map<string, number>();
+  let seq = 0;
+
+  const add = (key: string): void => {
+    if (!parent.has(key)) {
+      parent.set(key, key);
+      seenAt.set(key, seq++);
+    }
+  };
+
+  const find = (key: string): string => {
+    let root = key;
+    while (parent.get(root) !== root) root = parent.get(root) as string;
+    let cur = key;
+    while (cur !== root) {
+      const next = parent.get(cur) as string;
+      parent.set(cur, root);
+      cur = next;
+    }
+    return root;
+  };
+
+  const union = (a: string, b: string): void => {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA === rootB) return;
+    const [keep, drop] = (seenAt.get(rootA) ?? 0) <= (seenAt.get(rootB) ?? 0) ? [rootA, rootB] : [rootB, rootA];
+    parent.set(drop, keep);
+  };
+
+  const primaryOf = (item: SearchResultItem): string => groupKeyOf(item, coverHashes, clusters);
+
+  for (const item of named) {
+    const primary = primaryOf(item);
+    add(primary);
+    const titleKey = titleKeyOf(item);
+    if (!titleKey) continue;
+    add(titleKey);
+    union(primary, titleKey);
+  }
+
   const buckets = new Map<string, SearchResultItem[]>();
-  for (const item of list) {
-    const name = (item.name || '').trim();
-    if (!name) continue;
-    const key = groupKeyOf(item, coverHashes, clusters);
+  for (const item of named) {
+    const key = find(primaryOf(item));
     const bucket = buckets.get(key);
     if (bucket) bucket.push(item);
     else buckets.set(key, [item]);
