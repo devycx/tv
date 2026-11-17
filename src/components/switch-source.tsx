@@ -41,12 +41,15 @@ export function SwitchSourceModal({
   currentSourceKey,
   currentVodId,
   currentIndex,
+  getCurrentPosition,
   onClose,
 }: {
   currentTitle: string;
   currentSourceKey: string;
   currentVodId: string;
   currentIndex: number;
+  /** 读取当前播放秒数：切到同集时带上进度，避免「换源就从头播」 */
+  getCurrentPosition?: () => number;
   onClose: () => void;
 }) {
   const store = useAppStore();
@@ -249,12 +252,15 @@ export function SwitchSourceModal({
       return;
     }
     const targetIndex = currentIndex < c.episodes ? currentIndex : 0;
+    // 同集切换才续播；目标源集数不够、退回第 1 集时不能把上一集的秒数带过去
+    const currentPos = targetIndex === currentIndex ? getCurrentPosition?.() : undefined;
     onClose(); // 先关闭面板，避免路由参数变化后弹窗残留旧数据
     router.push(
       buildWatchUrl({
         sourceKey: c.source.key,
         vodId: c.result.vodId,
         index: targetIndex,
+        position: currentPos,
         title: c.result.name || currentTitle,
         sourceUrl: c.source.url,
         detail: c.source.detail,

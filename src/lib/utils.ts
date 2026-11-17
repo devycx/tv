@@ -108,7 +108,7 @@ export function hostnameOf(url: string): string {
   }
 }
 
-/** 为分享链接等场景构造观看页 URL */
+/** 为分享链接、热切源等场景构造观看页 URL */
 export function buildWatchUrl(params: {
   sourceKey: string;
   vodId?: string;
@@ -117,6 +117,8 @@ export function buildWatchUrl(params: {
    * 供「点封面直达播放」使用——搜索页拿不到剧集列表，不该为此先拉一次详情。
    */
   index?: number | 'last';
+  /** 切源续播秒数：大于 3 秒时写入 URL 查询参数，由播放页优先恢复 */
+  position?: number;
   title?: string;
   episodeUrl?: string;
   sourceUrl?: string;
@@ -126,6 +128,10 @@ export function buildWatchUrl(params: {
   sp.set('source', params.sourceKey);
   if (params.vodId) sp.set('id', params.vodId);
   if (params.index !== undefined) sp.set('index', String(params.index));
+  // 太小的进度不值得带（片头几秒），避免把 0/1s 写进分享链接
+  if (typeof params.position === 'number' && Number.isFinite(params.position) && params.position > 3) {
+    sp.set('position', String(Math.floor(params.position)));
+  }
   if (params.title) sp.set('title', params.title);
   if (params.episodeUrl) sp.set('url', params.episodeUrl);
   if (params.sourceUrl) sp.set('sourceUrl', params.sourceUrl);

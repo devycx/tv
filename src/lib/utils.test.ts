@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildImageCandidates, buildImageUrl } from './utils';
+import { buildImageCandidates, buildImageUrl, buildWatchUrl } from './utils';
 
 describe('buildImageUrl', () => {
   it('旧 proxy 模式已移除：一律返回原站直连地址', () => {
@@ -54,5 +54,21 @@ describe('buildImageCandidates', () => {
   it('custom 模式为单一候选（模板错误显式暴露，不静默回退）', () => {
     expect(buildImageCandidates(DOUBAN, 'custom', 'https://p.example.com/?u=')).toHaveLength(1);
     expect(buildImageCandidates(undefined, 'direct', '')).toEqual([]);
+  });
+});
+
+describe('buildWatchUrl', () => {
+  it('切源续播：大于 3 秒才写入 position（取整）', () => {
+    const url = buildWatchUrl({ sourceKey: 's1', vodId: 'v1', index: 2, position: 125.7 });
+    const sp = new URLSearchParams(url.split('?')[1]);
+    expect(sp.get('position')).toBe('125');
+    expect(sp.get('index')).toBe('2');
+  });
+
+  it('片头几秒的进度不写入分享链接', () => {
+    const url = buildWatchUrl({ sourceKey: 's1', vodId: 'v1', position: 2 });
+    expect(url).not.toContain('position=');
+    const nan = buildWatchUrl({ sourceKey: 's1', vodId: 'v1', position: Number.NaN });
+    expect(nan).not.toContain('position=');
   });
 });

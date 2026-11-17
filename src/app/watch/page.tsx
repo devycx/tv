@@ -404,6 +404,8 @@ function WatchContent() {
                       [qualityKey(sourceKey, vodId)]: { height, from: 'play', timestamp: Date.now() },
                     });
                   }}
+                  // 播放中源故障（重试耗尽/直连硬失败）：自动弹出换源面板，别只留一条 hint
+                  onRequestSwitchSource={() => setSwitchOpen(true)}
                 />
               ) : (
                 <div className="w-full h-full flex items-center justify-center">
@@ -525,6 +527,7 @@ function WatchContent() {
           currentSourceKey={sourceKey}
           currentVodId={vodId}
           currentIndex={currentIndex}
+          getCurrentPosition={() => playerApiRef.current?.getCurrentTime() ?? 0}
           onClose={() => setSwitchOpen(false)}
         />
       )}
