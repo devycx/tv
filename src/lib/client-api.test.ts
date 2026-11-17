@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, UNAUTHORIZED_EVENT, api } from './client-api';
+import { ApiError, UNAUTHORIZED_EVENT, api, partitionSourcesByHealth } from './client-api';
 import { isPasswordSetupResponse } from './api-failure';
+import type { SourceHealthEntry } from './store';
 import type { SearchResultItem, SourceConfig } from './types';
 
 /**
@@ -195,5 +196,49 @@ describe('搜索拆批', () => {
     await expect(api.search('测试', sources, false, { onSource: () => {} })).rejects.toMatchObject({
       status: 500,
     });
+  });
+
+  it('35 源按固定 8 源分块：5 批并发，逐源回调不重复', async () => {
+    const sources = Array.from({ length: 35 }, (_, i) => makeSource(i));
+    fetchMock.mockImplementation(streamForChunks());
+
+    const onSource = vi.fn();
+    const res = await api.search('测试', sources, false, { onSource });
+
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(onSource).toHaveBeenCalledTimes(35);
+    expect(res.list).toHaveLength(35);
+  });
+});
+
+describe('partitionSourcesByHealth（快慢源两级调度）', () => {
+  const health = (patch: Partial<SourceHealthEntry>): SourceHealthEntry => ({
+    ok: true,
+    failStreak: 0,
+    timestamp: 0,
+    ...patch,
+  });
+
+  it('快源按历史耗时升序排在前面，慢源（超时/连续失败）单独一档', () => {
+    const sources = [makeSource(0), makeSource(1), makeSource(2), makeSource(3)];
+    const { fastChunks, slowChunks } = partitionSourcesByHealth(sources, {
+      s0: health({ ms: 300 }),
+      s1: health({ ms: 4000, timedOut: true, failStreak: 1, ok: false }),
+      s2: health({ ms: 100 }),
+      s3: health({ ms: 900, failStreak: 2, ok: false }),
+    });
+
+    // 未测过的新源按默认 1200ms 排；这里都测过，按耗时升序
+    expect(fastChunks.map((chunk) => chunk.map((s) => s.key))).toEqual([['s2', 's0']]);
+    // 慢源先按 failStreak 升序，再按耗时
+    expect(slowChunks.map((chunk) => chunk.map((s) => s.key))).toEqual([['s1', 's3']]);
+  });
+
+  it('每批最多 8 个源；没有健康度记录的新源都算快源', () => {
+    const sources = Array.from({ length: 20 }, (_, i) => makeSource(i));
+    const { fastChunks, slowChunks } = partitionSourcesByHealth(sources);
+
+    expect(fastChunks.map((chunk) => chunk.length)).toEqual([8, 8, 4]);
+    expect(slowChunks).toEqual([]);
   });
 });

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { guardRequest } from '@/lib/api-guard';
 import { cmsRequestHeaders, filterAdultResults, filterRelevantResults, parseSearchList } from '@/lib/cms-parser';
@@ -20,13 +21,78 @@ interface SearchBody {
 /** 搜索结果短缓存：同一关键词 + 同一组源在 TTL 内直接返回（播放页返回搜索页等场景） */
 const SEARCH_CACHE_TTL = 60 * 1000;
 
+/** 单源搜索成功结果的边缘缓存 TTL（秒）：单源数据变化慢且与慢源解耦，可安全缓存 180 秒 */
+const SOURCE_EDGE_CACHE_TTL_SEC = 180;
+
+/**
+ * Cloudflare Workers 免费版单次调用的外部 subrequests 硬上限为 50。
+ * 预留 8 个子请求裕量（DNS 解析或底层重试），单次调用最多发起 42 个上游页面请求。
+ */
+const SAFE_SUBREQUEST_BUDGET = 42;
+
+type WorkersCacheStorage = CacheStorage & { default?: Cache };
+
+/** 取 Cloudflare Cache API 的默认命名空间；浏览器/Node 环境没有 `default` 时返回 null */
+function getEdgeCache(): Cache | null {
+  try {
+    const storage = typeof caches !== 'undefined' ? (caches as WorkersCacheStorage) : undefined;
+    return storage?.default ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 单源边缘缓存键：站点自己的域名 + 内容摘要。
+ * 缓存的是「某个源对某个关键词的原始条目列表」（未过滤/未排序），
+ * 所以与流式/非流式、其他慢源是否超时都无关，命中即可先推给前端。
+ */
+function buildSourceEdgeCacheKey(baseUrl: string, wd: string): Request {
+  const digest = createHash('sha256').update(`${baseUrl}\n${wd}`).digest('hex');
+  return new Request(`https://tv.ycxdev.com/__tv-source-search__/v1/${digest}`, { method: 'GET' });
+}
+
+/** 先查进程内缓存，再查边缘缓存；命中后回填内存缓存，后续同 isolate 请求免边缘往返 */
+async function readSourceEdgeCache(memKey: string, edgeKey: Request): Promise<SourceSearchOutcome | null> {
+  const memHit = getCache<SourceSearchOutcome>(memKey);
+  if (memHit) return { ...memHit, ms: 1 };
+
+  const cache = getEdgeCache();
+  if (!cache) return null;
+  try {
+    const hit = await cache.match(edgeKey);
+    if (!hit || !hit.ok) return null;
+    const data = (await hit.json()) as SourceSearchOutcome;
+    if (!data || !data.ok || !Array.isArray(data.list)) return null;
+    setCache(memKey, data, SEARCH_CACHE_TTL);
+    return { ...data, ms: 1 };
+  } catch {
+    return null;
+  }
+}
+
+/** 只缓存成功结果：失败多是一次抖动，缓存它会让用户 60s 内看不到本可恢复的条目 */
+function writeSourceEdgeCache(memKey: string, edgeKey: Request, outcome: SourceSearchOutcome): void {
+  if (!outcome.ok) return;
+  setCache(memKey, outcome, SEARCH_CACHE_TTL);
+  const cache = getEdgeCache();
+  if (!cache) return;
+  try {
+    const res = new Response(JSON.stringify(outcome), {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Cache-Control': `public, max-age=${SOURCE_EDGE_CACHE_TTL_SEC}`,
+      },
+    });
+    void cache.put(edgeKey, res).catch(() => {});
+  } catch {
+    /* 忽略边缘缓存写入异常 */
+  }
+}
+
 /** 缓存键：wd + 成人过滤 + 单源死线 + 排序后的源地址集合（死线不同结果集也不同，不能共用） */
-function searchCacheKey(
-  wd: string,
-  sources: SourceConfig[],
-  filterAdult: boolean,
-  timeoutMs: number
-): string {
+function searchCacheKey(wd: string, sources: SourceConfig[], filterAdult: boolean, timeoutMs: number): string {
   const urls = sources.map((s) => s.url.replace(/\/+$/, '')).sort().join('|');
   return `search:${wd}\n${filterAdult ? 1 : 0}\n${timeoutMs}\n${urls}`;
 }
@@ -43,6 +109,17 @@ const SEARCH_MAX_PAGES = (() => {
 })();
 
 /**
+ * 根据本次请求的源数量动态收窄单源最大翻页数：
+ * 保证 `sourceCount * maxPages <= SAFE_SUBREQUEST_BUDGET`（42），
+ * 防止在 Cloudflare Workers 免费版下触发 `Too many subrequests` 硬截断。
+ */
+function resolveMaxPages(sourceCount: number): number {
+  const safeCount = Math.max(1, sourceCount);
+  const budgetPerSource = Math.max(1, Math.floor(SAFE_SUBREQUEST_BUDGET / safeCount));
+  return Math.min(SEARCH_MAX_PAGES, budgetPerSource);
+}
+
+/**
  * 单源总死线由 lib/search-timeout.ts 提供（路由文件不允许导出额外符号，见该文件注释）。
  * 默认取部署配置，请求体里的 timeoutMs（用户设置）优先。
  */
@@ -56,11 +133,16 @@ function isTimeoutError(err: unknown): boolean {
 
 /**
  * 服务端聚合搜索：并行请求所有选中源，任一源失败不影响整体。
- * 每个源先取第一页并读取 pagecount，再并行抓取后续页（上限 SEARCH_MAX_PAGES），
+ * 每个源先取第一页并读取 pagecount，再并行抓取后续页（上限 maxPages），
  * 整源受 SEARCH_SOURCE_TIMEOUT_MS 总死线约束。
- * 旧版在浏览器里打满 N 个请求（暴露用户 IP、无法缓存、超时失控），现全部上移。
+ * 单源结果按「源 + 关键词 + 页数预算」写入内存/边缘缓存，慢源超时不会拖累快源命中。
  */
-async function searchSource(source: SourceConfig, wd: string, timeoutMs: number): Promise<SourceSearchOutcome> {
+async function searchSource(
+  source: SourceConfig,
+  wd: string,
+  timeoutMs: number,
+  maxPages: number
+): Promise<SourceSearchOutcome> {
   const start = Date.now();
   const finish = (outcome: Omit<SourceSearchOutcome, 'ms'>): SourceSearchOutcome => ({
     ...outcome,
@@ -74,6 +156,25 @@ async function searchSource(source: SourceConfig, wd: string, timeoutMs: number)
   const verdict = await checkUpstreamAllowed(source.url);
   if (!verdict.ok) {
     return finish({ sourceKey: source.key, ok: false, list: [], error: verdict.reason });
+  }
+
+  const base = source.url.replace(/\/+$/, '');
+  // 页数预算参与缓存键：预算变化会得到不同条目集，不能混用
+  const memKey = `src-search:${base}\n${wd}\n${maxPages}`;
+  const edgeKey = buildSourceEdgeCacheKey(`${base}\n${maxPages}`, wd);
+
+  const cachedOutcome = await readSourceEdgeCache(memKey, edgeKey);
+  if (cachedOutcome) {
+    // 复用缓存时重绑当前请求的 sourceKey 与 source.name，防止同 URL 不同 key 配置串名
+    return {
+      ...cachedOutcome,
+      sourceKey: source.key,
+      list: cachedOutcome.list.map((item) => ({
+        ...item,
+        sourceKey: source.key,
+        sourceName: source.name,
+      })),
+    };
   }
 
   // 死线到点中断该源所有在途分页请求，避免后台继续空耗
@@ -94,7 +195,6 @@ async function searchSource(source: SourceConfig, wd: string, timeoutMs: number)
     }, timeoutMs);
   });
 
-  const base = source.url.replace(/\/+$/, '');
   const fetchPage = async (page: number) => {
     const api = `${base}?ac=videolist&wd=${encodeURIComponent(wd)}&pg=${page}`;
     const res = await fetchUpstream(api, {
@@ -112,7 +212,7 @@ async function searchSource(source: SourceConfig, wd: string, timeoutMs: number)
     const list = parseSearchList(first, source);
     // 源站真实总页数与配置上限取较小者；pagecount 缺失或非法时视为 1 页
     const rawPageCount = parseInt(String((first as { pagecount?: unknown }).pagecount ?? '1'), 10);
-    const pageCount = Math.min(Number.isFinite(rawPageCount) ? Math.max(1, rawPageCount) : 1, SEARCH_MAX_PAGES);
+    const pageCount = Math.min(Number.isFinite(rawPageCount) ? Math.max(1, rawPageCount) : 1, maxPages);
     if (pageCount > 1) {
       const extraPages = await Promise.all(
         Array.from({ length: pageCount - 1 }, (_, i) => i + 2).map(async (page) => {
@@ -131,7 +231,11 @@ async function searchSource(source: SourceConfig, wd: string, timeoutMs: number)
   try {
     // 死线先到时 run 仍会在后台被 abort 并 reject，必须先挂 catch 防未处理 rejection
     const runPromise = run()
-      .then(finish)
+      .then((res) => {
+        const done = finish(res);
+        writeSourceEdgeCache(memKey, edgeKey, done);
+        return done;
+      })
       .catch((err: unknown): SourceSearchOutcome =>
         finish({
           sourceKey: source.key,
@@ -205,6 +309,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: '请至少选择一个点播源' }, { status: 400 });
   }
   const sources = body.sources.slice(0, 50);
+  // 源越多，单源翻页预算越小，保证总上游请求数不超过 Workers 免费版子请求上限
+  const maxPages = resolveMaxPages(sources.length);
   const filterAdult = body.filterAdult !== false;
   // 用户设置优先，其次是部署配置；两者都收敛在 1s–60s
   const timeoutMs = normalizeSourceTimeoutMs(body.timeoutMs) ?? SEARCH_SOURCE_TIMEOUT_MS;
@@ -224,7 +330,7 @@ export async function POST(req: Request) {
 
   const isStream = new URL(req.url).searchParams.get('stream') === '1';
   if (!isStream) {
-    const outcomes = await Promise.all(sources.map((source) => searchSource(source, wd, timeoutMs)));
+    const outcomes = await Promise.all(sources.map((source) => searchSource(source, wd, timeoutMs, maxPages)));
     const payload = aggregateOutcomes(outcomes, wd, filterAdult);
     setCache(cacheKey, payload, SEARCH_CACHE_TTL);
     return NextResponse.json(payload);
@@ -247,7 +353,7 @@ export async function POST(req: Request) {
       const outcomes: SourceSearchOutcome[] = new Array(sources.length);
       await Promise.all(
         sources.map(async (source, i) => {
-          const outcome = await searchSource(source, wd, timeoutMs);
+          const outcome = await searchSource(source, wd, timeoutMs, maxPages);
           outcomes[i] = outcome;
           // 中间结果与最终结果共用去重和过滤规则，避免无关/成人条目短暂出现在页面上。
           const { list } = aggregateOutcomes([outcome], wd, filterAdult);

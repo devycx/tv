@@ -205,6 +205,51 @@ describe('POST /api/search', () => {
     expect(await fresh.json()).toEqual({ list: [], failures: [] });
   });
 
+  it('源数超过 8 时动态收窄单源翻页预算：10 源 × 4 页 = 40 个上游请求，低于 50 硬上限', async () => {
+    const sources = Array.from({ length: 10 }, (_, i) => ({
+      key: `budget${i}`,
+      name: `预算源${i}`,
+      url: `https://budget-${i}.example.com/api.php/provide/vod`,
+    }));
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(cmsList([{ vod_id: 1, vod_name: '测试剧', type_name: '国产剧' }], 5), {
+          headers: { 'content-type': 'application/json' },
+        })
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const res = await POST(makeRequest({ wd: '测试剧', sources, filterAdult: false }));
+    expect(res.status).toBe(200);
+    // floor(42 / 10) = 4 页/源；每页一次上游请求，无重定向
+    expect(fetchSpy).toHaveBeenCalledTimes(40);
+  });
+
+  it('单源结果按「源 + 关键词」缓存：整体缓存键变化（如改成人过滤）也不重新请求上游', async () => {
+    const sources = [
+      {
+        key: 'edgecache',
+        name: '缓存源',
+        url: 'https://edge-cache.example.com/api.php/provide/vod',
+      },
+    ];
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(cmsList([{ vod_id: 1, vod_name: '缓存测试剧', type_name: '国产剧' }]), {
+          headers: { 'content-type': 'application/json' },
+        })
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const first = (await (await POST(makeRequest({ wd: '缓存测试剧', sources, filterAdult: true }))).json()) as SearchResponse;
+    expect(first.list).toHaveLength(1);
+
+    // 整体缓存键含 filterAdult，会落到 searchSource；单源缓存应直接命中，不再打上游
+    const second = (await (await POST(makeRequest({ wd: '缓存测试剧', sources, filterAdult: false }))).json()) as SearchResponse;
+    expect(second.list).toHaveLength(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it('未登录返回 401，未配置密码返回 503', async () => {
     vi.stubGlobal('fetch', vi.fn());
     const saved = process.env.PASSWORD;

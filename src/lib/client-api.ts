@@ -5,6 +5,7 @@ import { fetchLivePlaylistDirect, livePlaylistApiUrl } from './live-playlist';
 import { UNAUTHORIZED_EVENT } from './unauthorized-event';
 import { isPasswordSetupResponse } from './api-failure';
 import { compareSearchResults } from './relevance';
+import { useAppStore, type SourceHealthEntry } from './store';
 
 /** 401/503 全局事件名；对外导出保持兼容（事件常量已抽到 unauthorized-event，避免循环依赖） */
 export { UNAUTHORIZED_EVENT };
@@ -133,16 +134,31 @@ export const api = {
     const signal = opts?.signal;
     const onSource = opts?.onSource;
     const timeoutMs = opts?.timeoutMs;
-    const chunks = splitSearchSources(sources);
+    // 只读一次快照，不订阅：源健康度变化不该让调用方重渲染
+    const healthMap = typeof window !== 'undefined' ? useAppStore.getState().sourceHealth : {};
+    const { fastChunks, slowChunks } = partitionSourcesByHealth(sources, healthMap);
+    const allChunks = [...fastChunks, ...slowChunks];
+
+    if (allChunks.length === 0) return { list: [], failures: [] };
     // 源少时保持单请求：拆批只会多一次 invocation，排队本来就不存在
-    if (chunks.length === 1) {
-      return searchOnce(wd, chunks[0], filterAdult, onSource, signal, timeoutMs);
+    if (allChunks.length === 1) {
+      return searchOnce(wd, allChunks[0], filterAdult, onSource, signal, timeoutMs);
     }
-    // 两个独立 invocation 各自拥有 6 个「等待响应头」的连接槽，35 源的整体墙钟
-    // 从 ~8s 降到 ~2s（线上实测 8147ms → 2016ms，结果数一致）。
-    const parts = await Promise.all(
-      chunks.map((subset) => searchOnce(wd, subset, filterAdult, onSource, signal, timeoutMs))
+
+    // 每个独立 invocation 各自拥有「等待响应头」的连接槽，快源先发、慢源延后 250ms，
+    // 避免历史超时的源在首屏争抢并发连接。
+    const fastPromises = fastChunks.map((subset) =>
+      searchOnce(wd, subset, filterAdult, onSource, signal, timeoutMs)
     );
+    const slowPromises = slowChunks.map(async (subset) => {
+      if (fastChunks.length > 0) {
+        await delayWithSignal(SLOW_TIER_DELAY_MS, signal);
+        if (signal?.aborted) return { list: [], failures: [] };
+      }
+      return searchOnce(wd, subset, filterAdult, onSource, signal, timeoutMs);
+    });
+
+    const parts = await Promise.all([...fastPromises, ...slowPromises]);
     return mergeSearchResponses(parts, wd);
   },
 
@@ -311,20 +327,77 @@ export interface SearchFailure {
 }
 
 /**
- * 单次搜索请求承载的源数上限。
- *
- * Cloudflare Workers 每次 invocation 最多只有 6 个连接同时「等待响应头」，
- * 单请求里塞 35 个源时后面的源要排队，线上实测整次搜索 8.1s；拆成两个
- * 独立 invocation（各 6 个槽）后 2.0s。源数 ≤ 8 时本来一轮就发完，
- * 拆分只会白多一次 invocation，所以不拆。
+ * 单批搜索源上限：每批最多 8 个源。
+ * 配合服务端 SEARCH_MAX_PAGES=5，单次 Worker 调用最多产生 8×5=40 个上游子请求，
+ * 严格低于 Cloudflare Workers 免费版 50 subrequests 硬上限。
  */
-const SEARCH_SPLIT_THRESHOLD = 8;
+const SEARCH_CHUNK_SIZE = 8;
+/** 第二梯队（历史超时/连续失败慢源）相对第一梯队的延后启动毫秒数 */
+const SLOW_TIER_DELAY_MS = 250;
 
-/** 把选中源对半拆成 1~2 组；组数只影响 invocation 数，不影响最终结果集 */
-function splitSearchSources(sources: SourceConfig[]): SourceConfig[][] {
-  if (sources.length <= SEARCH_SPLIT_THRESHOLD) return [sources];
-  const half = Math.ceil(sources.length / 2);
-  return [sources.slice(0, half), sources.slice(half)];
+/**
+ * 基于历史 `sourceHealth` 将源划分为两级并按响应速度升序排列：
+ * - fastTier：近期未超时且 failStreak === 0 的快源（未测过的新源按默认 1200ms 排在极快源之后）；
+ * - slowTier：近期超时（timedOut）或 failStreak > 0 的慢源，避免在首屏争抢并发连接。
+ */
+export function partitionSourcesByHealth(
+  sources: SourceConfig[],
+  healthMap: Record<string, SourceHealthEntry> = {}
+): { fastChunks: SourceConfig[][]; slowChunks: SourceConfig[][] } {
+  const fast: SourceConfig[] = [];
+  const slow: SourceConfig[] = [];
+
+  for (const s of sources) {
+    const h = healthMap[s.key];
+    if (h && (!h.ok || h.timedOut || h.failStreak > 0)) {
+      slow.push(s);
+    } else {
+      fast.push(s);
+    }
+  }
+
+  fast.sort((a, b) => {
+    const msA = healthMap[a.key]?.ms ?? 1200;
+    const msB = healthMap[b.key]?.ms ?? 1200;
+    return msA - msB;
+  });
+
+  slow.sort((a, b) => {
+    const hA = healthMap[a.key];
+    const hB = healthMap[b.key];
+    const streakDiff = (hA?.failStreak ?? 0) - (hB?.failStreak ?? 0);
+    if (streakDiff !== 0) return streakDiff;
+    return (hA?.ms ?? 99_999) - (hB?.ms ?? 99_999);
+  });
+
+  const chunk = (arr: SourceConfig[]): SourceConfig[][] => {
+    const out: SourceConfig[][] = [];
+    for (let i = 0; i < arr.length; i += SEARCH_CHUNK_SIZE) {
+      out.push(arr.slice(i, i + SEARCH_CHUNK_SIZE));
+    }
+    return out;
+  };
+
+  return {
+    fastChunks: chunk(fast),
+    slowChunks: chunk(slow),
+  };
+}
+
+/** 慢源延后启动：可被搜索中止信号打断，不留下悬空定时器 */
+function delayWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0 || signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 /** 单组源的搜索：有 onSource 走 NDJSON 流（逐源回调），否则一次性 JSON */
