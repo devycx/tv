@@ -3,9 +3,9 @@
  *
  * 身份判定分两层（2026-11-16 用户改口径）：
  * 1. **封面视觉指纹**（浏览器算的 dHash）：同一张图换域名/文件名/分辨率/压缩率 →
- *    同一组，片名/年份不参与拆分；例外是**跨年护栏**：两个条目都带明确四位年份且
- *    不同时，即使共享封面也不并组（防单个采集站挂错年度海报把 1983/2017 版焊死，
- *    见 aggregateResults 里的 rootYear）；
+ *    同一组，片名/年份不参与拆分。**同封面跨年也并**（2026-11-18 用户明确回滚
+ *    跨年护栏）：即使两个条目的四位年份不同，共享封面仍然并组——采集站错挂年度
+ *    海报时可能把不同年代并成一张卡，这个代价用户已知并接受；
  * 2. **片名 + 年份**再兜一层：同名同年即使封面不同（剧版/影版海报、不同扫描件、
  *    源站配错图）也并进同一组——用户明确要求「同一部片就并到一起，剧版和电影版
  *    并到一张卡也不影响」。
@@ -154,14 +154,6 @@ function buildGroup(key: string, items: SearchResultItem[]): AggregatedGroup {
   };
 }
 
-const EXPLICIT_YEAR_RE = /^(?:19|20)\d{2}$/;
-
-/** 只认四位年份：'1983' / '2017'；'未知' / '2023-12' 之类不参与跨年护栏 */
-function extractExplicitYear(raw?: string): string | undefined {
-  const trimmed = (raw ?? '').trim();
-  return EXPLICIT_YEAR_RE.test(trimmed) ? trimmed : undefined;
-}
-
 /**
  * 按「封面视觉指纹」+「片名 + 年份」两层身份聚合搜索结果。
  * 返回顺序沿用传入顺序（搜索结果已按相关性排序），组的位置取组内第一条出现的位置。
@@ -186,28 +178,18 @@ export function aggregateResults(
    * 根取**先出现**的键：流式搜索是按源追加结果的，取最早出现的键能保证已有分组
    * 的 key 不因后续条目而改变（key 变了 React 会整卡重挂载）。
    *
-   * 跨年护栏（2026-11-18）：连通分量记录已确认的四位年份，两个根年份不同时
-   * 拒绝合并。单个采集站把 2017 版的封面错挂成 1983 版海报时，共享封面节点
-   * 不再把两个年代焊死在同一组（1983 版与 2017 版《射雕英雄传》必须分开）。
+   * 这里**不做跨年拦截**（2026-11-18 用户确认回滚）：同封面 + 不同年份仍并组。
+   * 曾经的 rootYear 护栏会拒绝两个明确年份不同的分量合并，但它同时拆掉了
+   * 「同一部片被源站写成不同年份」的合并，用户选择恢复「同封面必并」。
    */
   const parent = new Map<string, string>();
   const seenAt = new Map<string, number>();
-  /**
-   * 每个连通分量根节点的已确认四位年份：
-   * 若两个根均已携带明确四位年份且不相等（如 '1983' !== '2017'），
-   * 则严禁通过共享封面（visual/cover）合并，防止单个采集站错配海报导致跨年传递并组。
-   */
-  const rootYear = new Map<string, string>();
   let seq = 0;
 
-  const add = (key: string, explicitYear?: string): void => {
+  const add = (key: string): void => {
     if (!parent.has(key)) {
       parent.set(key, key);
       seenAt.set(key, seq++);
-      if (explicitYear) rootYear.set(key, explicitYear);
-    } else if (explicitYear) {
-      const root = find(key);
-      if (!rootYear.has(root)) rootYear.set(root, explicitYear);
     }
   };
 
@@ -223,62 +205,28 @@ export function aggregateResults(
     return root;
   };
 
-  const union = (a: string, b: string): boolean => {
+  const union = (a: string, b: string): void => {
     const rootA = find(a);
     const rootB = find(b);
-    if (rootA === rootB) return true;
-
-    const yearA = rootYear.get(rootA);
-    const yearB = rootYear.get(rootB);
-    if (yearA && yearB && yearA !== yearB) {
-      // 跨年冲突护栏：拒绝通过脏封面桥接两个不同年份的连通分量
-      return false;
-    }
-
-    const [keep, drop] =
-      (seenAt.get(rootA) ?? 0) <= (seenAt.get(rootB) ?? 0) ? [rootA, rootB] : [rootB, rootA];
+    if (rootA === rootB) return;
+    const [keep, drop] = (seenAt.get(rootA) ?? 0) <= (seenAt.get(rootB) ?? 0) ? [rootA, rootB] : [rootB, rootA];
     parent.set(drop, keep);
-    const mergedYear = yearA ?? yearB;
-    if (mergedYear) rootYear.set(keep, mergedYear);
-    return true;
   };
 
   const primaryOf = (item: SearchResultItem): string => groupKeyOf(item, coverHashes, clusters);
-  /** 记录每个条目最终绑定的归组键（当封面与已有年份冲突时退回 titleKey） */
-  const itemBoundKey = new WeakMap<SearchResultItem, string>();
 
   for (const item of named) {
-    const itemYear = extractExplicitYear(item.year);
     const primary = primaryOf(item);
+    add(primary);
     const titleKey = titleKeyOf(item);
-
-    if (titleKey) {
-      add(titleKey, itemYear);
-    }
-
-    // 检查 primary 所在连通分量是否已被其他年份占用
-    if (parent.has(primary)) {
-      const existingRootYear = rootYear.get(find(primary));
-      if (existingRootYear && itemYear && existingRootYear !== itemYear && titleKey) {
-        // 当前条目的封面与已有连通分量发生跨年冲突（脏图），仅绑定到自身的 titleKey
-        itemBoundKey.set(item, titleKey);
-        continue;
-      }
-    }
-
-    add(primary, itemYear);
-    if (titleKey) {
-      const merged = union(primary, titleKey);
-      itemBoundKey.set(item, merged ? primary : titleKey);
-    } else {
-      itemBoundKey.set(item, primary);
-    }
+    if (!titleKey) continue;
+    add(titleKey);
+    union(primary, titleKey);
   }
 
   const buckets = new Map<string, SearchResultItem[]>();
   for (const item of named) {
-    const bound = itemBoundKey.get(item) ?? primaryOf(item);
-    const key = find(bound);
+    const key = find(primaryOf(item));
     const bucket = buckets.get(key);
     if (bucket) bucket.push(item);
     else buckets.set(key, [item]);
