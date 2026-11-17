@@ -10,8 +10,10 @@
  * 两段缩放也是必须的：一步缩到 9×8 会随压缩噪声产生锯齿，同一张海报的扫描件差 15 位。
  *
  * 性能与降级（2026-11-16 按「庆余年」179 条结果 / 123 张封面的实测调整）：
- * - 每个 URL 只算一次；结果存 localStorage（LRU：3000 条 + 1.2MB 双预算，
+ * - 每个 URL 只算一次；结果存 IndexedDB（LRU：3000 条 + 1.2MB 双预算，
  *   见 lib/cover-hash-cache.ts），刷新/重复搜索不再取图；
+ * - 旧版 `localStorage` 的单键缓存（`cover-visual-hashes-v3`）在首次启动时一次性迁移进
+ *   IndexedDB 并删掉旧键：3000 条的整表 JSON 序列化会阻塞主线程，流式搜索期间尤其明显；
  * - 单次搜索最多算 120 张，且**只把预算花在没缓存的封面**上：否则同一关键词反复
  *   搜索永远只算同一批前 48 张，尾部封面永远拿不到指纹（实测 60% 的结果因此被拆卡）；
  * - 并发 8；
@@ -25,10 +27,12 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { coverCropRect, dHashFromRgba } from '@/lib/cover-visual-hash';
 import { trimHashCache } from '@/lib/cover-hash-cache';
+import { loadCoverHashesDb, saveCoverHashesDb } from '@/lib/db';
 
 export type CoverHashState = { status: 'pending' } | { status: 'done'; hash: string } | { status: 'failed' };
 
-const CACHE_KEY = 'cover-visual-hashes-v3';
+/** 旧版 localStorage 缓存键：只用于一次性迁移，迁移后删除 */
+const LEGACY_CACHE_KEY = 'cover-visual-hashes-v3';
 const MAX_PER_SEARCH = 120;
 const MAX_ACTIVE = 8;
 const REQUEST_TIMEOUT_MS = 6000;
@@ -37,7 +41,9 @@ const BREAKER_COOLDOWN_MS = 15_000;
 const HASH_HEX = /^[0-9a-f]{16}$/;
 
 const states = new Map<string, CoverHashState>();
-const cache = loadCache();
+const cache = new Map<string, string>();
+/** 尚未落盘的指纹（成功算完 / 从旧缓存迁移），800ms 合并成一次 IndexedDB 批量写 */
+const dirtyUpserts = new Map<string, string>();
 const queue: string[] = [];
 const listeners = new Set<() => void>();
 /** 图床 CORS 直连结论：避免同一 host 的每个封面都先失败一次再走代理 */
@@ -48,35 +54,88 @@ let consecutiveFailures = 0;
 let breakerUntil = 0;
 let persistTimer: ReturnType<typeof setTimeout> | undefined;
 let resumeTimer: ReturnType<typeof setTimeout> | undefined;
+let dbHydrated = false;
 
-function loadCache(): Map<string, string> {
-  const map = new Map<string, string>();
-  if (typeof window === 'undefined') return map;
+/**
+ * 首次使用时把持久化指纹灌进内存 Map：
+ * 1. 旧版 localStorage 同步读取（首屏立即可用）并立刻删除旧键，释放 localStorage 空间；
+ * 2. IndexedDB 异步读取（不阻塞首屏）。
+ */
+function hydrateCacheOnce(): void {
+  if (typeof window === 'undefined' || dbHydrated) return;
+  dbHydrated = true;
+
+  let migrated = false;
   try {
-    const raw = window.localStorage.getItem(CACHE_KEY);
-    if (!raw) return map;
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    for (const [url, hash] of Object.entries(parsed)) {
-      if (typeof hash === 'string' && HASH_HEX.test(hash)) map.set(url, hash);
+    const raw = window.localStorage.getItem(LEGACY_CACHE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      for (const [url, hash] of Object.entries(parsed)) {
+        if (typeof hash === 'string' && HASH_HEX.test(hash)) {
+          cache.set(url, hash);
+          dirtyUpserts.set(url, hash);
+          migrated = true;
+        }
+      }
+      window.localStorage.removeItem(LEGACY_CACHE_KEY);
     }
   } catch {
-    // 隐私模式 / 配额满：当作没有缓存
+    /* 忽略 localStorage 读取异常（隐私模式 / 配额满） */
   }
-  return map;
+
+  if (migrated) {
+    schedulePersist();
+    // 迁移结果必须通知：调用方在首帧按「未缓存」把这些封面排进待算队列，
+    // 不重算 pending 的话，它们会被 isPending 一直隐藏到下一次指纹完成。
+    notify();
+  }
+
+  // 异步从 IndexedDB 加载持久化指纹
+  void loadCoverHashesDb()
+    .then((rows) => {
+      let added = false;
+      for (const [url, hash] of rows) {
+        if (HASH_HEX.test(hash) && !cache.has(url)) {
+          cache.set(url, hash);
+          added = true;
+        }
+      }
+      if (added) notify();
+    })
+    .catch(() => {});
 }
 
+/**
+ * 800ms 合并落盘：先按 LRU 双预算淘汰，再把新增/淘汰条目异步批量写进 IndexedDB。
+ * 不再同步 JSON.stringify 整张表，流式搜索期间不会卡主线程。
+ */
 function schedulePersist(): void {
   if (typeof window === 'undefined' || persistTimer) return;
   persistTimer = setTimeout(() => {
     persistTimer = undefined;
     try {
-      // 条数 + 字节双预算的 LRU 淘汰（最旧的前面），再写回 localStorage
+      const beforeKeys = new Set(cache.keys());
       const kept = trimHashCache(cache.entries());
+      const keptSet = new Set<string>();
       cache.clear();
-      for (const [url, hash] of kept) cache.set(url, hash);
-      window.localStorage.setItem(CACHE_KEY, JSON.stringify(Object.fromEntries(kept)));
+      for (const [url, hash] of kept) {
+        cache.set(url, hash);
+        keptSet.add(url);
+      }
+      const evicted: string[] = [];
+      for (const k of beforeKeys) {
+        if (!keptSet.has(k)) {
+          evicted.push(k);
+          dirtyUpserts.delete(k);
+        }
+      }
+      const upserts = [...dirtyUpserts.entries()];
+      dirtyUpserts.clear();
+      if (upserts.length > 0 || evicted.length > 0) {
+        void saveCoverHashesDb(upserts, evicted).catch(() => {});
+      }
     } catch {
-      // 写不进去就只保留内存缓存
+      /* 忽略持久化异常 */
     }
   }, 800);
 }
@@ -242,6 +301,7 @@ function pump(): void {
         states.set(url, { status: 'done', hash });
         cache.delete(url); // 重新插入到末尾，LRU 淘汰时先丢最久没用的
         cache.set(url, hash);
+        dirtyUpserts.set(url, hash);
         consecutiveFailures = 0;
         schedulePersist();
         notify();
@@ -323,6 +383,7 @@ export function useCoverHashes(urls: readonly string[]): CoverHashes {
   const plannedSet = useMemo(() => new Set(planned), [planned]);
 
   useEffect(() => {
+    hydrateCacheOnce();
     for (const url of planned) ensure(url);
     // planned 由 key 派生；key 不变时不需要重跑
     // eslint-disable-next-line react-hooks/exhaustive-deps
