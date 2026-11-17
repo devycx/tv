@@ -64,17 +64,17 @@ describe('aggregateResults（按封面聚合）', () => {
     expect(groups[0].items).toHaveLength(2);
   });
 
-  it('同一张封面跨片名、跨年份合并；标题取更短的写法，年份取多数', () => {
+  it('同一张封面但跨年（片名也不同）：不再跨年桥接，各自成组', () => {
     const groups = aggregateResults([
       item({ name: '色戒', year: '2002', pic: COVER_A }),
       item({ name: '色戒Samsara', year: '2001', pic: COVER_A_MIRROR }),
     ]);
 
-    expect(groups).toHaveLength(1);
-    expect(groups[0].name).toBe('色戒');
-    // 年份并列时取列表里先出现的（列表已按相关性排序）
-    expect(groups[0].year).toBe('2002');
-    expect(groups[0].items).toHaveLength(2);
+    // 2026-11-18 起为跨年护栏：共享封面不再把两个明确年份焊死（脏海报会整片误并），
+    // 代价是「同一部片被源站写成不同年份」时会拆成两组
+    expect(groups).toHaveLength(2);
+    expect(groups.map((g) => g.year).sort()).toEqual(['2001', '2002']);
+    expect(groups.every((g) => g.items.length === 1)).toBe(true);
   });
 
   it('同封面镜像源（不同域名、同一内容哈希）合并为一张卡', () => {
@@ -133,10 +133,11 @@ describe('aggregateResults（按封面聚合）', () => {
       ['https://c.com/lust-caution.jpg', hashFar],
     ]);
 
+    // 两条 Samsara 同为 2002：只靠视觉指纹合并（片名不同，片名+年份层不会并）
     const groups = aggregateResults(
       [
         item({ name: '色戒', year: '2002', pic: 'https://a.com/samsara-270.jpg' }),
-        item({ name: '色戒2001', year: '2001', pic: 'https://b.com/samsara-350.jpg' }),
+        item({ name: '色戒2001', year: '2002', pic: 'https://b.com/samsara-350.jpg' }),
         item({ name: '色戒', year: '2007', pic: 'https://c.com/lust-caution.jpg' }),
       ],
       { coverHashes }
@@ -144,8 +145,50 @@ describe('aggregateResults（按封面聚合）', () => {
 
     expect(groups).toHaveLength(2);
     const samsara = groups.find((g) => g.items.length === 2);
-    expect(samsara?.items.map((i) => i.year).sort()).toEqual(['2001', '2002']);
+    expect(samsara?.items.map((i) => i.name).sort()).toEqual(['色戒', '色戒2001']);
     expect(groups.find((g) => g.items.length === 1)?.items[0].year).toBe('2007');
+  });
+
+  it('单个采集站挂错跨年封面：1983 版与 2017 版不因共享封面合并', () => {
+    const groups = aggregateResults(
+      [
+        item({
+          sourceKey: 's1',
+          sourceName: '源1',
+          vodId: '1',
+          name: '射雕英雄传',
+          year: '1983',
+          pic: 'https://img.test/1983.jpg',
+        }),
+        // 源 2 把 2017 版的封面错配成 1983 版海报
+        item({
+          sourceKey: 's2',
+          sourceName: '源2',
+          vodId: '2',
+          name: '射雕英雄传',
+          year: '2017',
+          pic: 'https://img.test/1983.jpg',
+        }),
+        item({
+          sourceKey: 's3',
+          sourceName: '源3',
+          vodId: '3',
+          name: '射雕英雄传',
+          year: '2017',
+          pic: 'https://img.test/2017.jpg',
+        }),
+      ],
+      {
+        coverHashes: new Map([
+          ['https://img.test/1983.jpg', '1111111111111111'],
+          ['https://img.test/2017.jpg', 'ffffffffffffffff'],
+        ]),
+      }
+    );
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((g) => g.year).sort()).toEqual(['1983', '2017']);
+    expect(groups.find((g) => g.year === '2017')?.items).toHaveLength(2);
   });
 
   it('视觉指纹明显不同：同名同年仍并组（片名+年份 层兜底）', () => {
