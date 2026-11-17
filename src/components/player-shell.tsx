@@ -10,6 +10,8 @@ import { useMediaSession } from '@/components/use-media-session';
 import { useSquareArtwork } from '@/components/use-square-artwork';
 import { PlaybackRecovery, describeHlsError } from '@/lib/playback-recovery';
 import { createHlsLoader } from '@/lib/hls-loader';
+import { createGmHlsLoader } from '@/lib/gm-hls-loader';
+import { hasGmFetch } from '@/lib/gm-fetch';
 import {
   getVideoPrefetcher,
   getNextEpisodePrefetcher,
@@ -210,6 +212,8 @@ export function PlayerShell({
   const lastPrefetchEnsureRef = useRef(0);
   // 本集的恢复策略实例：video:error 重建播放链路时共享同一份计数
   const recoveryRef = useRef<PlaybackRecovery | null>(null);
+  // 当前播放地址是否已触发油猴 GM_fetch 跨域降级（新 URL 起播时重置为 false）
+  const gmFallbackRef = useRef(false);
   // 自然播完标记，卸载时不回写进度（避免覆盖「已看完」记录）
   const endedRef = useRef(false);
   // 跳过片段：每集已处理的片段（按 type:start 去重），换集时重置（见 loadEpisode）
@@ -290,8 +294,10 @@ export function PlayerShell({
   // 片段缓存开启时调大 hls.js 自身缓冲，缓冲之外的空窗由预取器补齐
   const buildHlsConfig = (): Partial<HlsConfig> => {
     const p = propsRef.current;
+    // 已降级到油猴通道时不能再让片段缓存介入：缓存/预取都基于原生 fetch，跨域受限源取不到
+    const useGmLoader = gmFallbackRef.current && hasGmFetch();
     const cacheSettings = loadCacheSettings();
-    const cacheEnabled = cacheSettings.enabled && !!p.episodeKey;
+    const cacheEnabled = !useGmLoader && cacheSettings.enabled && !!p.episodeKey;
     return {
       debug: false,
       enableWorker: true,
@@ -307,13 +313,18 @@ export function PlayerShell({
       startLevel: -1,
       abrEwmaDefaultEstimate: 500_000,
       appendErrorMaxRetry: 5,
-      // 组合 loader：广告过滤（blockAd 随设置）+ 片段缓存命中（cacheEnabled）
-      loader: createHlsLoader(Hls, { blockAd: p.adFilter }) as unknown as HlsConfig['loader'],
+      // 组合 loader：广告过滤（blockAd 随设置）+ 片段缓存命中（cacheEnabled）；
+      // 降级后改走 GM_fetch（不受 CORS/混合内容限制），仍保留广告过滤
+      loader: (useGmLoader
+        ? createGmHlsLoader({ blockAd: p.adFilter })
+        : createHlsLoader(Hls, { blockAd: p.adFilter })) as unknown as HlsConfig['loader'],
     };
   };
 
   // 当前集预取（episodeKey 缺省 = 关闭，见 ensure 内部 settings.enabled 判断）
   const ensurePrefetch = (mediaUrl: string, currentTime: number, horizonSeconds?: number) => {
+    // 原生 fetch 无法预取受 CORS 限制的源：已降级到油猴通道时跳过（否则只会白打一串失败请求）
+    if (gmFallbackRef.current) return;
     const p = propsRef.current;
     if (!p.episodeKey) return;
     getVideoPrefetcher().ensure({
@@ -539,11 +550,22 @@ export function PlayerShell({
           break;
         }
         case 'switch-source': {
+          const networkFailure = data.type === Hls.ErrorTypes.NETWORK_ERROR;
+          // 原生直连遭遇 CORS / 防盗链 / 混合内容硬失败时，若装了油猴跨域脚本就先降级重试一次：
+          // 这类失败换同一个直连地址重试不会有不同结果，换源之前还有一条能走的路。
+          if (networkFailure && !gmFallbackRef.current && hasGmFetch()) {
+            gmFallbackRef.current = true;
+            recoveryRef.current = new PlaybackRecovery();
+            // 重建 HLS 会重置 video 的播放位置：允许新链路重新走一次进度恢复（内部会调 play）
+            restoredRef.current = false;
+            showHint('直连受阻，已切换油猴跨域通道重试...');
+            setupHls(video, mediaUrl);
+            break;
+          }
           // 覆盖播放开始后的场景：起播失败走 setError 遮罩；
           // 播放中失败走回调弹换源面板（父级未提供回调时只留 hint）。
           // 网络类硬失败（含 manifestLoadError 重试耗尽）几乎都是 CORS / 防盗链，
           // 直连是唯一路径，所以文案必须把「换源」讲清楚。
-          const networkFailure = data.type === Hls.ErrorTypes.NETWORK_ERROR;
           const message = networkFailure
             ? `${describeHlsError(data.type, data.details)}，${DIRECT_ONLY_FAILURE}`
             : `${describeHlsError(data.type, data.details)}：${decision.reason}`;
@@ -567,6 +589,8 @@ export function PlayerShell({
     mediaHealthyRef.current = true;
     playbackStartedRef.current = false;
     videoErrorRetryUsedRef.current = false;
+    // 新地址重新起播：上一集的跨域降级结论不能沿用
+    gmFallbackRef.current = false;
     restoredRef.current = false;
     lastPrefetchEnsureRef.current = 0;
     // 跳过片段按集重置：上一集已处理过不意味新一集也处理过
@@ -600,6 +624,7 @@ export function PlayerShell({
     mediaHealthyRef.current = true;
     playbackStartedRef.current = false;
     videoErrorRetryUsedRef.current = false;
+    gmFallbackRef.current = false;
     restoredRef.current = false;
     recoveryRef.current = new PlaybackRecovery();
     endedRef.current = false;

@@ -5,12 +5,15 @@ import {
   type RetryConfig,
 } from 'hls.js';
 import { getGmFetch } from './gm-fetch';
+import { stripAdGroups } from './m3u8';
 
 /**
  * hls.js loader：把 manifest / 分片请求交给油猴「跨域助手」暴露的 `window.GM_fetch`。
  *
- * 只在直播播放器里使用（点播保留原生 FetchLoader：它的预取/缓存/下载都走原生 fetch，
- * 播放单独改走扩展会造成「能播不能下、无缓存」的分裂，见 git 历史里的收益/风险对比）。
+ * 直播播放器默认使用；点播播放器只在原生 fetch 连续遇到致命网络错误（CORS / 防盗链 /
+ * 混合内容）且重试耗尽时，按需降级到本 loader（见 components/player-shell.tsx）。
+ * 点播常态仍走原生 FetchLoader：它的预取/缓存/下载都走原生 fetch，播放单独改走扩展
+ * 会造成「能播不能下、无缓存」的分裂。
  *
  * 为什么需要：
  * - 直播源的 m3u8、分片在第三方源站上，大量源不发 `Access-Control-Allow-Origin`；
@@ -91,9 +94,12 @@ export class GmFetchHlsLoader extends BaseLoader {
   private attempt = 0;
   private response: Response | null = null;
   private controller: AbortController | null = null;
+  /** 与原生 loader 对齐的去广告开关：点播降级到本 loader 时 adFilter 不能失效 */
+  protected blockAd = false;
 
-  constructor() {
+  constructor(blockAd = false) {
     super();
+    this.blockAd = blockAd;
   }
 
   getCacheAge(): number | null {
@@ -226,7 +232,10 @@ export class GmFetchHlsLoader extends BaseLoader {
       } else if (context.responseType === 'json') {
         data = await response.json();
       } else {
-        data = await response.text();
+        const rawText = await response.text();
+        // 只过滤播放列表（manifest/level）；分片文本不可能是 m3u8，别白跑一遍正则
+        const isPlaylist = context.type === 'manifest' || context.type === 'level';
+        data = this.blockAd && isPlaylist ? stripAdGroups(rawText) : rawText;
       }
       if (!this.isCurrent(attempt)) return;
       self.clearTimeout(this.requestTimeout);
@@ -259,4 +268,19 @@ export class GmFetchHlsLoader extends BaseLoader {
       this.callbacks?.onError({ code, text }, context, this.getNetworkDetails(), stats);
     }
   }
+}
+
+export interface GmLoaderOptions {
+  blockAd?: boolean;
+}
+
+/** hls.js 的 loader 配置项需要「构造函数」而不是实例；把 blockAd 绑进类里再用 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function createGmHlsLoader(options: GmLoaderOptions = {}): new (config: any) => BaseLoader {
+  const { blockAd = false } = options;
+  return class ConfiguredGmFetchHlsLoader extends GmFetchHlsLoader {
+    constructor() {
+      super(blockAd);
+    }
+  };
 }

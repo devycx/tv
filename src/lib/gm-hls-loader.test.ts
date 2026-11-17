@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LoaderConfiguration, LoaderContext, RetryConfig } from 'hls.js';
-import { GmFetchHlsLoader } from './gm-hls-loader';
+import { GmFetchHlsLoader, createGmHlsLoader } from './gm-hls-loader';
 
 /** 极简 Response 替身：GM_fetch 返回的也是这种 fetch 兼容对象 */
 function fakeResponse(init: {
@@ -223,5 +223,80 @@ describe('GmFetchHlsLoader · 经 GM_fetch 加载', () => {
 
     await vi.waitFor(() => expect(cb.onSuccess).toHaveBeenCalledTimes(1));
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('GmFetchHlsLoader · 播放列表去广告', () => {
+  /** dytt 式片头插入段：首个 DISCONTINUITY 后 2 片广告，再接正片 */
+  const AD_PLAYLIST = [
+    '#EXTM3U',
+    '#EXT-X-DISCONTINUITY',
+    '#EXTINF:5,',
+    'ad0.ts',
+    '#EXTINF:5,',
+    'ad1.ts',
+    '#EXT-X-DISCONTINUITY',
+    '#EXTINF:4,',
+    'movie0.ts',
+    '#EXT-X-DISCONTINUITY',
+    '#EXTINF:4,',
+    'movie1.ts',
+    '#EXT-X-ENDLIST',
+  ].join('\n');
+
+  function stubGm(body: string): void {
+    const gmFetch = vi.fn(async () => fakeResponse({ text: body }));
+    vi.stubGlobal('window', { GM_fetch: gmFetch });
+  }
+
+  it('blockAd 开启：manifest 文本先过 stripAdGroups，广告段与紧邻 DISCONTINUITY 被剔除', async () => {
+    stubGm(AD_PLAYLIST);
+    const loader = new GmFetchHlsLoader(true);
+    const cb = callbacks();
+    loader.load(manifestContext(), loaderConfig(), cb);
+
+    await vi.waitFor(() => expect(cb.onSuccess).toHaveBeenCalledTimes(1));
+    const [response] = cb.onSuccess.mock.calls[0];
+    expect(response.data).not.toContain('ad0.ts');
+    expect(response.data).toContain('movie0.ts');
+    expect(response.data).toContain('movie1.ts');
+    // 正片段之间的分段边界保留，片头失去语义的 DISCONTINUITY 清掉
+    expect((response.data as string).match(/#EXT-X-DISCONTINUITY/g)).toHaveLength(1);
+  });
+
+  it('blockAd 关闭：manifest 原样透传（直播 loader 行为不变）', async () => {
+    stubGm(AD_PLAYLIST);
+    const loader = new GmFetchHlsLoader();
+    const cb = callbacks();
+    loader.load(manifestContext(), loaderConfig(), cb);
+
+    await vi.waitFor(() => expect(cb.onSuccess).toHaveBeenCalledTimes(1));
+    expect(cb.onSuccess.mock.calls[0][0].data).toBe(AD_PLAYLIST);
+  });
+
+  it('createGmHlsLoader 把 blockAd 绑进 hls.js 需要的构造函数', async () => {
+    stubGm(AD_PLAYLIST);
+    const Ctor = createGmHlsLoader({ blockAd: true });
+    // hls.js 内部执行 new Loader(config)；工厂类忽略该参数，config 由 BaseLoader.load 注入
+    const loader = new Ctor(loaderConfig());
+    const cb = callbacks();
+    loader.load(manifestContext(), loaderConfig(), cb);
+
+    await vi.waitFor(() => expect(cb.onSuccess).toHaveBeenCalledTimes(1));
+    expect(cb.onSuccess.mock.calls[0][0].data).not.toContain('ad0.ts');
+  });
+
+  it('分片文本不做广告过滤（只过滤 manifest/level）', async () => {
+    stubGm('#EXTM3U\n');
+    const loader = new GmFetchHlsLoader(true);
+    const cb = callbacks();
+    loader.load(
+      { url: 'https://cdn.example.com/seg.ts', responseType: 'text', type: 'media-fragment' as LoaderContext['type'] },
+      loaderConfig(),
+      cb
+    );
+
+    await vi.waitFor(() => expect(cb.onSuccess).toHaveBeenCalledTimes(1));
+    expect(cb.onSuccess.mock.calls[0][0].data).toBe('#EXTM3U\n');
   });
 });
