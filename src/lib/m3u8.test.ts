@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { parseM3u8Playlist } from './m3u8-parse';
-import { stripAdGroups, stripLeadAdGroup } from './m3u8';
+import { stripAdGroups, stripLeadAdGroup, stripPrefixAnomalyAdGroups } from './m3u8';
 
 /** 按 dytt 实测结构造播放列表：片头广告段（首个 DISCONTINUITY 段）+ 若干正片段 */
 function dyttLike(adCount: number, adDur = 4): string {
@@ -199,7 +199,7 @@ describe('stripAdGroups · 长片间超短中插（phimgood 结构）', () => {
     expect(stripAdGroups(short)).toBe(short);
   });
 
-  it('末组短段（无后邻）保守放过', () => {
+  it('片尾追加的 15~30s 贴片广告（无后邻）：整段剔除', () => {
     const lines = [
       '#EXTM3U',
       ...group(300, 'a'),
@@ -207,7 +207,79 @@ describe('stripAdGroups · 长片间超短中插（phimgood 结构）', () => {
       ...group(20, 'tail'),
       '#EXT-X-ENDLIST',
     ].join('\n');
-    expect(stripAdGroups(lines)).toBe(lines);
+    const out = stripAdGroups(lines);
+    expect(out).not.toContain('tail0.ts');
+    expect(out).toContain('a0.ts');
+  });
+
+  it('正片尾巴只有几秒（无后邻）：保留，避免把密集切片的最后一片当广告', () => {
+    // 柯南源结构：312 个 1s 正片分片 + 独立的结尾分片
+    const lines = ['#EXTM3U'];
+    for (let i = 0; i < 312; i++) lines.push('#EXTINF:1,', `${String(i).padStart(7, '0')}.ts`);
+    lines.push('#EXT-X-DISCONTINUITY', '#EXTINF:1,', '0000312.ts', '#EXT-X-ENDLIST');
+    const input = lines.join('\n');
+    expect(stripAdGroups(input)).toBe(input);
+  });
+});
+
+describe('stripPrefixAnomalyAdGroups · 目录前缀突变广告段', () => {
+  /** 正片 5 组 × 12 片（/20261116/xyz_main/），中间插一组 3 片的异目录广告 */
+  function dyttPrefixLike(adPrefix = 'https://cdn.test/upload/tuiguang/'): string {
+    const lines = ['#EXTM3U', '#EXT-X-TARGETDURATION:8'];
+    const normal = (g: number, s: number) =>
+      `https://cdn.test/20261116/xyz_main/g${g}_${String(s).padStart(4, '0')}.ts`;
+    for (let g = 0; g < 2; g++) {
+      lines.push('#EXT-X-DISCONTINUITY');
+      for (let s = 0; s < 12; s++) lines.push('#EXTINF:3,', normal(g, s));
+    }
+    lines.push('#EXT-X-DISCONTINUITY');
+    for (let s = 0; s < 3; s++) lines.push('#EXTINF:5,', `${adPrefix}a${s}.ts`);
+    for (let g = 2; g < 5; g++) {
+      lines.push('#EXT-X-DISCONTINUITY');
+      for (let s = 0; s < 12; s++) lines.push('#EXTINF:3,', normal(g, s));
+    }
+    lines.push('#EXT-X-ENDLIST');
+    return lines.join('\n');
+  }
+
+  it('主导目录下的短异目录插入段整段剔除，正片完整', () => {
+    const out = stripPrefixAnomalyAdGroups(dyttPrefixLike());
+    expect(out).not.toContain('tuiguang');
+    expect(out).toContain('g0_0000.ts');
+    expect(out).toContain('g4_0011.ts');
+    // 广告段自带的 DISCONTINUITY 一并删除，其余 5 个分组边界保留
+    expect(out.match(/#EXT-X-DISCONTINUITY/g)).toHaveLength(5);
+  });
+
+  it('没有主导目录（两套目录各占一半）时不动，避免误杀多 CDN 源', () => {
+    const lines = ['#EXTM3U'];
+    for (let g = 0; g < 2; g++) {
+      lines.push('#EXT-X-DISCONTINUITY');
+      for (let s = 0; s < 10; s++) lines.push('#EXTINF:3,', `https://a.test/${g}/${s}.ts`);
+      lines.push('#EXT-X-DISCONTINUITY');
+      for (let s = 0; s < 10; s++) lines.push('#EXTINF:3,', `https://b.test/${g}/${s}.ts`);
+    }
+    const input = lines.join('\n');
+    expect(stripPrefixAnomalyAdGroups(input)).toBe(input);
+  });
+
+  it('异目录分组里混入一个正片分片时整段放过', () => {
+    const lines = ['#EXTM3U'];
+    for (let g = 0; g < 4; g++) {
+      lines.push('#EXT-X-DISCONTINUITY');
+      for (let s = 0; s < 10; s++) lines.push('#EXTINF:3,', `https://cdn.test/main/${g}_${s}.ts`);
+    }
+    lines.push('#EXT-X-DISCONTINUITY', '#EXTINF:5,', 'https://cdn.test/ad/x.ts');
+    lines.push('#EXTINF:3,', 'https://cdn.test/main/real.ts', '#EXT-X-ENDLIST');
+    const out = stripPrefixAnomalyAdGroups(lines.join('\n'));
+    expect(out).toContain('/ad/x.ts');
+    expect(out).toContain('main/real.ts');
+  });
+
+  it('总分片数不足 20 或空内容时不动', () => {
+    expect(stripPrefixAnomalyAdGroups('')).toBe('');
+    const tiny = ['#EXTM3U', '#EXT-X-DISCONTINUITY', '#EXTINF:3,', 'https://a.test/x/1.ts'].join('\n');
+    expect(stripPrefixAnomalyAdGroups(tiny)).toBe(tiny);
   });
 });
 

@@ -178,6 +178,13 @@ function stripMarkedAdGroups(m3u8Content: string): string {
  */
 const INTERSTITIAL_MAX_SECONDS = 30;
 const INTERSTITIAL_NEIGHBOR_MIN_SECONDS = 120;
+/**
+ * 片尾短广告的最小总时长。不能只按「最后一个 DISCONTINUITY 段 ≤ 30s」判定：
+ * 大量采集源把正片按 1~4s 密集切片，最后一组常常只有 1 个几秒的尾巴
+ * （实测柯南源：312 个 1s 分片 + 结尾 0000312.ts），按宽口径会把正片尾巴删掉。
+ * 贴片广告实测为 15~30s，这里要求下限 15s，低于它的尾段一律放过。
+ */
+const INTERSTITIAL_TAIL_MIN_SECONDS = 15;
 
 interface AdGroupScan {
   /** 组内容行区间 [start, end)，不含组前的 DISCONTINUITY 行 */
@@ -213,10 +220,13 @@ function scanGroups(lines: string[]): AdGroupScan[] {
 }
 
 /**
- * 剔除「长正片段之间的超短插入段」（URL 无特征的纯时长型中插广告）。
- * 判定：段时长 ≤ 30s，且前后邻段时长都 ≥ 120s。基于原始分组一次性评估，
- * 不级联；dytt 式「全片都是短段」的源因邻段不满足长段条件而完全不触发。
- * 首组交由片头启发式处理，本函数只看 k ≥ 1 的组。
+ * 剔除「长正片段之间的超短插入段」与「片尾贴片短广告」（URL 无特征的纯时长型广告）。
+ * 判定：
+ * - 中插：段时长 ≤ 30s，且前后邻段时长都 ≥ 120s；
+ * - 片尾：最后一个 DISCONTINUITY 段时长 15~30s、分片数 ≤ 10，且前邻段 ≥ 120s
+ *   （没有 next 邻段，无法沿用中插的「两长夹一短」判据，只能靠位置 + 短小）。
+ * 基于原始分组一次性评估，不级联；dytt 式「全片都是短段」的源因邻段不满足长段条件
+ * 而完全不触发。首组交由片头启发式处理，本函数只看 k ≥ 1 的组。
  */
 function stripInterstitialAdGroups(m3u8Content: string): string {
   if (!m3u8Content) return '';
@@ -231,7 +241,13 @@ function stripInterstitialAdGroups(m3u8Content: string): string {
     if (g.count === 0 || g.discLine < 0) continue;
     if (g.seconds <= 0 || g.seconds > INTERSTITIAL_MAX_SECONDS) continue;
     if (!prev || prev.seconds < INTERSTITIAL_NEIGHBOR_MIN_SECONDS) continue;
-    if (!next || next.seconds < INTERSTITIAL_NEIGHBOR_MIN_SECONDS) continue;
+    // 中插段要求前后邻段均 >= 120s；片尾最末段（!next）要求前邻段 >= 120s、
+    // 总时长 >= 15s 且分片数 <= 10（几秒的正片尾巴不在判定范围内）
+    const isValidMiddle = Boolean(next && next.seconds >= INTERSTITIAL_NEIGHBOR_MIN_SECONDS);
+    const isValidTail =
+      !next && g.seconds >= INTERSTITIAL_TAIL_MIN_SECONDS && g.count <= 10;
+    if (!isValidMiddle && !isValidTail) continue;
+
     drop[g.discLine] = true;
     for (let i = g.start; i < g.end; i++) {
       const t = lines[i].trim();
@@ -239,6 +255,89 @@ function stripInterstitialAdGroups(m3u8Content: string): string {
       drop[i] = true;
     }
   }
+  if (!drop.some(Boolean)) return m3u8Content;
+  return lines.filter((_, idx) => !drop[idx]).join('\n');
+}
+
+/**
+ * 提取分片行的目录前缀（去掉查询串与末尾文件名），用于识别「异源/异目录」插入的广告段。
+ */
+function segmentDirPrefix(rawLine: string): string {
+  const clean = rawLine.trim().split('?')[0];
+  const lastSlash = clean.lastIndexOf('/');
+  return lastSlash >= 0 ? clean.slice(0, lastSlash + 1).toLowerCase() : '';
+}
+
+const ANOMALY_AD_MAX_SECONDS = 45;
+const ANOMALY_AD_MAX_SEGMENTS = 15;
+const DOMINANT_PREFIX_MIN_RATIO = 0.75;
+const MIN_TOTAL_SEGMENTS_FOR_PREFIX_CHECK = 20;
+
+/**
+ * 按「分片目录前缀突变」剔除 DISCONTINUITY 广告段：
+ * 当整条 m3u8 总分片数 >= 20 且存在单一主导目录前缀（占比 >= 75%）时，
+ * 若某个带 DISCONTINUITY 边界的短分组（时长 <= 45s 且分片数 <= 15）内
+ * 100% 的分片目录前缀均不等于主导前缀，则判定为异源插入广告并整段剔除。
+ *
+ * 针对 dytt 式「每组 5~15 片、每块仅 20~40s」的采集源：邻段不够长时
+ * stripInterstitialAdGroups 不触发，但广告分片往往落在完全不同的目录
+ * （正片 `/20261116/xyz_main/0001.ts`，广告 `/upload/tuiguang/a1.ts`）。
+ * 没有目录的分片（如 `0001.ts`）前缀为空串，不参与判定，避免误杀。
+ */
+export function stripPrefixAnomalyAdGroups(m3u8Content: string): string {
+  if (!m3u8Content) return '';
+  const lines = m3u8Content.split('\n');
+  const groups = scanGroups(lines);
+  if (groups.length < 2) return m3u8Content;
+
+  const prefixCounts = new Map<string, number>();
+  let totalSegments = 0;
+  for (const line of lines) {
+    if (!isSegment(line)) continue;
+    totalSegments += 1;
+    const prefix = segmentDirPrefix(line);
+    prefixCounts.set(prefix, (prefixCounts.get(prefix) ?? 0) + 1);
+  }
+  if (totalSegments < MIN_TOTAL_SEGMENTS_FOR_PREFIX_CHECK) return m3u8Content;
+
+  let dominantPrefix = '';
+  let dominantCount = 0;
+  for (const [prefix, count] of prefixCounts) {
+    if (count > dominantCount) {
+      dominantPrefix = prefix;
+      dominantCount = count;
+    }
+  }
+  if (!dominantPrefix || dominantCount / totalSegments < DOMINANT_PREFIX_MIN_RATIO) {
+    return m3u8Content;
+  }
+
+  const drop = new Array<boolean>(lines.length).fill(false);
+  for (let k = 0; k < groups.length; k++) {
+    const g = groups[k];
+    if (g.count === 0 || g.count > ANOMALY_AD_MAX_SEGMENTS) continue;
+    if (g.seconds <= 0 || g.seconds > ANOMALY_AD_MAX_SECONDS) continue;
+    // 首组若无前置 DISCONTINUITY，必须确保其后存在 DISCONTINUITY 边界
+    if (k === 0 && groups.length < 2) continue;
+
+    let allForeign = true;
+    for (let i = g.start; i < g.end; i++) {
+      if (!isSegment(lines[i])) continue;
+      if (segmentDirPrefix(lines[i]) === dominantPrefix) {
+        allForeign = false;
+        break;
+      }
+    }
+    if (!allForeign) continue;
+
+    if (g.discLine >= 0) drop[g.discLine] = true;
+    for (let i = g.start; i < g.end; i++) {
+      const t = lines[i].trim();
+      if (t.startsWith('#EXT-X-KEY') || t.startsWith('#EXT-X-MAP')) continue;
+      drop[i] = true;
+    }
+  }
+
   if (!drop.some(Boolean)) return m3u8Content;
   return lines.filter((_, idx) => !drop[idx]).join('\n');
 }
@@ -256,13 +355,22 @@ function stripLeadingDisc(content: string): string {
 }
 
 /**
- * 广告过滤总入口（播放 loader 与下载解析共用），按可靠度依次：
- * 1. URL 特征中插段（adjump 等，任意位置）；
- * 2. 长正片段之间的超短插入段（纯时长型中插广告）；
- * 3. 片头无特征插入段（dytt 式，位置+短小启发式）；
+ * 广告过滤总入口（播放 loader 与下载解析共用），按可靠性依次：
+ * 1. URL 关键字特征中插段（adjump 等，任意位置）；
+ * 2. 目录前缀突变短插入段（异域/异目录广告段）；
+ * 3. 长正片段之间的超短插入段（纯时长型中插/片尾广告）；
+ * 4. 片头无特征插入段（dytt 式，位置+短小启发式）；
  * 最后统一清掉首分片前失去语义的 DISCONTINUITY。
  */
 export function stripAdGroups(m3u8Content: string): string {
   if (!m3u8Content) return '';
-  return stripLeadingDisc(stripLeadAdGroup(stripInterstitialAdGroups(stripMarkedAdGroups(m3u8Content))));
+  return stripLeadingDisc(
+    stripLeadAdGroup(
+      stripInterstitialAdGroups(
+        stripPrefixAnomalyAdGroups(
+          stripMarkedAdGroups(m3u8Content)
+        )
+      )
+    )
+  );
 }
