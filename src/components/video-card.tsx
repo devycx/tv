@@ -58,8 +58,16 @@ export function AggregatedCard({
     return out;
   }, [group.items]);
   const [coverIdx, setCoverIdx] = useState(0);
+  /**
+   * 当前封面是否真正加载成功。
+   * 搜索结果是流式追加的：只按「指纹算完」渲染会在图片还没下完时先出现灰色占位，
+   * 图床慢/失败时还会「灰卡出现 → onCoverBroken 整卡消失」。这里等第一张封面
+   * 加载成功再显示卡片，失败则整卡从头到尾都不出现（用户 2026-11-18 反馈）。
+   */
+  const [coverReady, setCoverReady] = useState(false);
   useEffect(() => {
     setCoverIdx(0);
+    setCoverReady(false);
   }, [group.key]);
   const coverUrl = coverCandidates[coverIdx];
   const showImg = Boolean(coverUrl);
@@ -135,7 +143,14 @@ export function AggregatedCard({
   return (
     <div
       ref={inViewRef}
-      className={cn('card', !multi && 'hover:scale-[1.02] hover:shadow-md', multi && expanded && 'ring-1 ring-accent/40')}
+      className={cn(
+        'card',
+        !multi && 'hover:scale-[1.02] hover:shadow-md',
+        multi && expanded && 'ring-1 ring-accent/40',
+        // 封面没加载好之前整卡不可见（保留布局占位，图成功后再显示）：
+        // 避免灰色封面一闪而过，也避免破图卡片「出现又消失」
+        showImg && !coverReady && 'invisible'
+      )}
     >
       {/* 不用 h-full：展开面板需要撑高卡片，等高裁切会让面板不可见 */}
       <div
@@ -155,7 +170,7 @@ export function AggregatedCard({
       >
         {showImg ? (
           <div
-            className="relative flex-shrink-0 w-[105px] sm:w-[120px] aspect-[2/3] bg-chip cursor-pointer"
+            className="relative flex-shrink-0 w-[105px] sm:w-[120px] aspect-[2/3] cursor-pointer"
             role="button"
             tabIndex={0}
             aria-label={`直接播放 ${group.name}`}
@@ -173,6 +188,7 @@ export function AggregatedCard({
               customProxy={customImageProxy}
               alt={group.name}
               className="absolute inset-0 h-full w-full object-cover"
+              onLoad={() => setCoverReady(true)}
               onExhausted={() => {
                 // 先换组内下一张封面；全组都加载不出来再回报页面整卡隐藏
                 if (coverIdx + 1 < coverCandidates.length) setCoverIdx(coverIdx + 1);
@@ -182,7 +198,7 @@ export function AggregatedCard({
           </div>
         ) : (
           <div
-            className="relative flex-shrink-0 w-[105px] sm:w-[120px] aspect-[2/3] bg-chip flex items-center justify-center cursor-pointer"
+            className="relative flex-shrink-0 w-[105px] sm:w-[120px] aspect-[2/3] flex items-center justify-center cursor-pointer"
             role="button"
             tabIndex={0}
             aria-label={`直接播放 ${group.name}`}
@@ -315,7 +331,12 @@ export function DoubanCard({ item, onClick }: { item: { title: string; cover: st
   const imageProxyMode = useAppStore((s) => s.imageProxyMode);
   const customImageProxy = useAppStore((s) => s.customImageProxy);
   const [imgFailed, setImgFailed] = useState(false);
-  useEffect(() => setImgFailed(false), [item.cover]);
+  /** 封面解码成功后再淡入：首页榜单先铺灰底会闪一下灰色封面（用户 2026-11-18 反馈） */
+  const [coverReady, setCoverReady] = useState(false);
+  useEffect(() => {
+    setImgFailed(false);
+    setCoverReady(false);
+  }, [item.cover]);
 
   return (
     <div
@@ -331,18 +352,22 @@ export function DoubanCard({ item, onClick }: { item: { title: string; cover: st
         }
       }}
     >
-      <div className="relative aspect-[2/3] bg-chip">
+      <div className="relative aspect-[2/3]">
         {item.cover && !imgFailed ? (
           <SmartImage
             url={item.cover}
             mode={imageProxyMode}
             customProxy={customImageProxy}
             alt={item.title}
-            className="w-full h-full object-cover"
+            className={cn(
+              'w-full h-full object-cover transition-opacity duration-200',
+              coverReady ? 'opacity-100' : 'opacity-0'
+            )}
+            onLoad={() => setCoverReady(true)}
             onExhausted={() => setImgFailed(true)}
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center bg-chip">
+          <div className="w-full h-full flex items-center justify-center">
             <svg className="w-8 h-8 text-faint" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 4v16m10-16v16M3 6a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6zm4 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6zm8 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6zm4 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6z" />
             </svg>
