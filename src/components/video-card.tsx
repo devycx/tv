@@ -14,6 +14,13 @@ import { useQualityProbe } from './use-quality-probe';
 import { useInView } from './use-in-view';
 
 /**
+ * 封面加载兜底：图床黑洞/连接挂起时 `<img>` 既不会 load 也不会 error，
+ * 卡片会一直 `invisible` 留一个空位（线上 `ywxohs.com` 实测 13s 仍无结论）。
+ * 超时后先换组内下一张封面；全组候选都超时，再按「封面显示不出来」整卡隐藏。
+ */
+const COVER_LOAD_TIMEOUT_MS = 7000;
+
+/**
  * 聚合影片卡片：
  * - 点击封面图 → 立即播放（播放页会挑画质最好的源、剧集默认最新一集）；
  * - 点击文字区 → 打开详情（看简介 / 选集）；
@@ -79,6 +86,17 @@ export function AggregatedCard({
   }, [group.key]);
   const coverUrl = coverCandidates[coverIdx];
   const showImg = Boolean(coverUrl);
+
+  // 图床挂住时 <img> 既不会 load 也不会 error：到点换组内下一张；全组都挂住才整卡隐藏。
+  // 没有这层兜底，卡片会一直 invisible 留一个空位（比灰卡更像「卡住」）。
+  useEffect(() => {
+    if (coverReady || !showImg) return;
+    const timer = window.setTimeout(() => {
+      if (coverIdx + 1 < coverCandidates.length) setCoverIdx(coverIdx + 1);
+      else onCoverBroken?.(group.key);
+    }, COVER_LOAD_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [coverReady, showImg, coverIdx, coverCandidates.length, group.key, onCoverBroken]);
 
   const multi = group.items.length > 1;
   const adult = useMemo(() => group.items.some((i) => i.isAdult), [group.items]);
@@ -362,6 +380,12 @@ export function DoubanCard({ item, onClick }: { item: { title: string; cover: st
     setImgFailed(false);
     setCoverReady(false);
   }, [item.cover]);
+  // 图床挂住时同样会一直停在 opacity-0：到点按失败处理，露出胶片图标兜底。
+  useEffect(() => {
+    if (coverReady || imgFailed || !item.cover) return;
+    const timer = window.setTimeout(() => setImgFailed(true), COVER_LOAD_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [coverReady, imgFailed, item.cover]);
 
   return (
     <div
