@@ -6,6 +6,7 @@ import { readQuality, useAppStore } from '@/lib/store';
 import { qualityKey } from '@/lib/quality';
 import { compactRemarks, episodeCountOf } from '@/lib/remarks';
 import type { AggregatedGroup } from '@/lib/search-groups';
+import { variantOf } from '@/lib/search-variants';
 import { cn } from '@/lib/utils';
 import { SmartImage } from './smart-image';
 import { QualityBadge } from './quality-badge';
@@ -45,10 +46,17 @@ export function AggregatedCard({
   /**
    * 封面候选链：同一组里各源可能给了不同封面，第一张加载失败时换下一张，
    * 全失败才回报「整卡无封面」。依赖 group.key 重置下标，避免虚拟列表复用串位。
+   * `group.pic` 是聚合层挑的正片封面，放第一位——解说/沉浸版恰好排在前面时，
+   * 卡片封面也不能变成另一条内容的图。
    */
   const coverCandidates = useMemo(() => {
     const seen = new Set<string>();
     const out: string[] = [];
+    const primary = group.pic?.trim();
+    if (primary) {
+      seen.add(primary);
+      out.push(primary);
+    }
     for (const item of group.items) {
       const pic = item.pic?.trim();
       if (!pic || seen.has(pic)) continue;
@@ -56,7 +64,7 @@ export function AggregatedCard({
       out.push(pic);
     }
     return out;
-  }, [group.items]);
+  }, [group.pic, group.items]);
   const [coverIdx, setCoverIdx] = useState(0);
   /**
    * 当前封面是否真正加载成功。
@@ -98,14 +106,18 @@ export function AggregatedCard({
   const singleItem = multi ? undefined : group.items[0];
   const singleKey = singleItem ? qualityKey(singleItem.sourceKey, singleItem.vodId) : undefined;
 
-  // 展开面板按「画质降序 → 集数降序」排：同一部剧里画质最高、集数最全的源排第一，
-  // 用户不必自己横向比较三行灰字。都没探到 / 同分时保持原有源顺序。
+  // 展开面板按「正片优先 → 画质降序 → 集数降序」排：同一部剧里画质最高、集数最全的
+  // 正片源排第一，用户不必自己横向比较三行灰字。解说排到最后——封面直达播放取第一行，
+  // 点封面时不能先播到一段电影解说；都没探到 / 同分时保持原有源顺序。
   const heightOf = (item: SearchResultItem) =>
     readQuality(item.sourceKey, item.vodId)?.height ?? qualities[qualityKey(item.sourceKey, item.vodId)]?.height ?? 0;
   const sortedItems = useMemo(() => {
     return group.items
       .map((item, index) => ({ item, index }))
       .sort((a, b) => {
+        const commentaryRank = (item: SearchResultItem) => (variantOf(item)?.commentary ? 1 : 0);
+        const byVariant = commentaryRank(a.item) - commentaryRank(b.item);
+        if (byVariant !== 0) return byVariant;
         const byHeight = heightOf(b.item) - heightOf(a.item);
         if (byHeight !== 0) return byHeight;
         // 集数只做同画质内的次级排序：源站备注里写着「全34集」/「更新至12集」，
@@ -272,6 +284,7 @@ export function AggregatedCard({
             {sortedItems.map((item) => {
               const itemKey = qualityKey(item.sourceKey, item.vodId);
               const label = compactRemarks(item.remarks);
+              const variant = variantOf(item);
               const isBest = itemKey === bestKey;
               return (
                 <div
@@ -297,9 +310,21 @@ export function AggregatedCard({
                     e.stopPropagation();
                     onOpen(item);
                   }}
-                  aria-label={`使用 ${item.sourceName} 播放${label ? `，${label}` : ''}`}
+                  aria-label={`使用 ${item.sourceName} 播放${variant ? `（${variant.fullLabel}）` : ''}${
+                    label ? `，${label}` : ''
+                  }`}
                 >
                   <span className="font-medium text-content truncate flex-1 min-w-0">{item.sourceName}</span>
+                  {/* 变体标签：同一张封面并进来的解说/沉浸版靠它区分，否则来源行只剩源名，
+                      用户不知道这一行播的是正片还是二创 */}
+                  {variant && (
+                    <span
+                      className="tag shrink-0 bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                      title={variant.fullLabel}
+                    >
+                      {variant.label}
+                    </span>
+                  )}
                   {/* 最高画质只用边框高亮：排序已把它放在首行，首行徽章就是分辨率（4K/1080P），
                       再挂一个「最高」文字标签是同一件事说两遍，还占掉源名的宽度 */}
                   <QualityBadge

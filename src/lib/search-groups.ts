@@ -1,30 +1,33 @@
 /**
  * 搜索结果聚合（纯函数，便于单测）：把扁平的多源结果聚成「一张封面 = 一张卡片」。
  *
- * 身份判定分两层（2026-11-16 用户改口径）：
+ * 身份判定分两层：
  * 1. **封面视觉指纹**（浏览器算的 dHash）：同一张图换域名/文件名/分辨率/压缩率 →
- *    同一组，片名/年份不参与拆分。**同封面跨年也并**（2026-11-18 用户明确回滚
- *    跨年护栏）：即使两个条目的四位年份不同，共享封面仍然并组——采集站错挂年度
- *    海报时可能把不同年代并成一张卡，这个代价用户已知并接受；
+ *    同一组，片名/年份/变体都不参与拆分。**同封面跨年也并**（2026-11-18 用户明确
+ *    回滚跨年护栏）：即使两个条目的四位年份不同，共享封面仍然并组——采集站错挂
+ *    年度海报时可能把不同年代并成一张卡，这个代价用户已知并接受；
  * 2. **片名 + 年份**再兜一层：同名同年即使封面不同（剧版/影版海报、不同扫描件、
  *    源站配错图）也并进同一组——用户明确要求「同一部片就并到一起，剧版和电影版
  *    并到一张卡也不影响」。
+ *
+ * **变体（电影解说 / 沉浸版 / 预告片 …）只看封面**（2026-11-19 用户口径）：
+ * 它们常直接复用正片海报；只要封面一致就并进同一张卡，不能因为片名后缀不同拆卡。
+ * 区别放在来源行上（`search-variants.ts` 的 `variantOf`）用标签标明。
+ * 只有拿不到封面、退回片名兜底时，二创解说（`c:`）才仍与正片（`f:`）分开，
+ * 避免没有封面的解说源混进正片来源列表。
  *
  * 为什么不再「指纹不同就一律拆开」：实测 21 张真实海报两两 dHash 距离中位数 **32**、
  * 最小 24（见 docs/search-cover-aggregation.md §9），「同一部片的两张不同海报」
  * 和「两部不相干的片」完全落在同一区间——把全局阈值从 10 提到 28+ 会随机并掉不相干
  * 的影片，提不到 28 又并不到剧/影。所以阈值留在 10（同图 0–4 vs 不同图 24+，余量最大），
  * 「同片不同海报」交给片名 + 年份这一层。
- *
- * 「电影解说 / 影视解说」这类二创仍然单独成组：它们常直接复用影片海报，若并进正片，
- * 正片的来源列表会混进解说源，封面直达播放也可能播到解说视频。判定放在变体前缀
- * （`f:` 正片 / `c:` 解释）上，两层身份都带这个前缀。
  */
 
 import { normalizeTitle } from './cms-parser';
 import { coverFingerprint } from './cover-fingerprint';
 import { clusterCoverHashes } from './cover-visual-hash';
 import { inferGroupRemarks } from './remarks';
+import { isCommentaryName } from './search-variants';
 import type { SearchResultItem } from './types';
 
 export interface AggregatedGroup {
@@ -43,9 +46,6 @@ export interface AggregateOptions {
   /** 两个指纹允许的最大汉明距离，默认见 cover-visual-hash */
   maxHashDistance?: number;
 }
-
-/** 二创/解说类内容：与正片分开聚合，避免共用海报时被并进正片的来源列表 */
-const COMMENTARY_NAME = /解说|讲解|影评|拉片|速看/;
 
 /** 出现次数最多的值；并列时取列表里先出现的（列表已按相关性排序） */
 function mostCommon(values: Array<string | undefined>): string | undefined {
@@ -110,18 +110,16 @@ function groupKeyOf(
   coverHashes: ReadonlyMap<string, string> | undefined,
   clusters: ReadonlyMap<string, string>
 ): string {
-  const name = (item.name || '').trim();
-  const variant = COMMENTARY_NAME.test(name) ? 'c' : 'f';
-
   const pic = item.pic?.trim();
   const visual = pic ? coverHashes?.get(pic) : undefined;
   if (visual) {
-    // 同图不同副本的 dHash 只差几位，用簇代表（字典序最小）作为稳定 key
-    return `${variant}:visual:${clusters.get(visual) ?? visual}`;
+    // 同图不同副本的 dHash 只差几位，用簇代表（字典序最小）作为稳定 key。
+    // 这里**不带**正片/解说前缀：同封面 = 同一张卡，变体在来源行上标注。
+    return `visual:${clusters.get(visual) ?? visual}`;
   }
 
   const cover = coverFingerprint(pic);
-  if (cover) return `${variant}:cover:${cover}`;
+  if (cover) return `cover:${cover}`;
   return titleKeyOf(item) ?? '';
 }
 
@@ -129,14 +127,29 @@ function groupKeyOf(
  * 「片名 + 年份」键：视觉指纹之外的第二次并组。
  *
  * 同名同年一律并到一起（用户 2026-11-16 明确要求，剧版/影版并一张卡也接受）；
- * 跨年不并（《色戒》2002 与 2007 是两部片）。解说（`c:`）与正片（`f:`）不并。
+ * 跨年不并（《色戒》2002 与 2007 是两部片）。这是**拿不到封面时**的兜底，
+ * 所以二创解说（`c:`）仍与正片（`f:`）分开：同封面时由视觉指纹层并组，
+ * 没封面时不能把解说混进正片来源。
  * 拿不到片名时返回 undefined，不参与并组。
  */
 function titleKeyOf(item: SearchResultItem): string | undefined {
   const name = (item.name || '').trim();
   if (!name) return undefined;
-  const variant = COMMENTARY_NAME.test(name) ? 'c' : 'f';
+  const variant = isCommentaryName(name) ? 'c' : 'f';
   return `${variant}:title:${normalizeTitle(name)}|${(item.year ?? '').trim()}`;
+}
+
+/**
+ * 组封面：优先取正片来源的图。
+ *
+ * 合并解说/沉浸版后，组内第一条可能是变体（它复用了正片海报，通常同图；
+ * 但按片名兜底并组时可能不同图）。封面直达播放取的是正片，卡片封面也应
+ * 尽量和它一致，避免点封面时看到的图属于另一条内容。
+ */
+function groupCover(items: SearchResultItem[]): string | undefined {
+  const withPic = items.filter((item) => item.pic?.trim());
+  const main = withPic.find((item) => !isCommentaryName(item.name));
+  return (main ?? withPic[0])?.pic;
 }
 
 function buildGroup(key: string, items: SearchResultItem[]): AggregatedGroup {
@@ -147,7 +160,7 @@ function buildGroup(key: string, items: SearchResultItem[]): AggregatedGroup {
     name: groupName(items),
     year: mostCommon(items.map((item) => item.year)),
     typeName: mostCommon(items.map((item) => item.typeName)),
-    pic: items.find((item) => item.pic)?.pic,
+    pic: groupCover(items),
     // 同一部剧各源文案详略不同（「全34集」/「完结」/「更新至34集」），推到统一结论
     remarks: inferGroupRemarks(items.map((item) => item.remarks)),
     items,

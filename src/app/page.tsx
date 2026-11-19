@@ -41,6 +41,15 @@ import { Icon } from '@/components/icon';
  */
 const RESULT_PAGE_SIZE = 24;
 
+/**
+ * 封面指纹等待上限：搜索数据到手后最多等这么久。
+ *
+ * 首搜碰上坏图床/慢图时，不能把整页结果无限期扣在灰色骨架上（用户 2026-11-19
+ * 反馈「一列灰色占位卡片卡住」）。超过这个时间后，还没算完的条目先按 URL/片名
+ * 兜底渲染；指纹随后完成会再合并一次，卡片可能重排——这是有意的取舍。
+ */
+const COVER_HASH_WAIT_MS = 2500;
+
 export default function HomePage() {
   return (
     <Suspense>
@@ -186,6 +195,20 @@ function HomeContent() {
     [list]
   );
   const coverHashes = useCoverHashes(coverUrls);
+  /**
+   * 封面指纹等待兜底：到点后不再把 pending 条目从聚合输入里剔除。
+   * 首搜遇到坏图床时，至少先把结果按 URL/片名兜底展示出来。
+   * 从「有第一条结果」开始计时，不是从输入关键词开始：搜索本身慢的时候
+   * 指纹可能已经算完大半，没必要提前降级。
+   */
+  const [coverWaitOver, setCoverWaitOver] = useState(false);
+  const hasResults = list.length > 0;
+  useEffect(() => {
+    setCoverWaitOver(false);
+    if (!urlQuery || !hasResults) return;
+    const timer = window.setTimeout(() => setCoverWaitOver(true), COVER_HASH_WAIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [urlQuery, hasResults]);
   const settledList = useMemo(
     () => list.filter((item) => !coverHashes.isPending(item.pic)),
     [list, coverHashes]
@@ -198,8 +221,12 @@ function HomeContent() {
    *   URL/片名兜底正常展示，真显示不出来由卡片的 onCoverBroken 整卡处理。
    * - 源站根本没给封面（没有 pic）的条目仍然隐藏：没有指纹也渲染不出封面，
    *   只会多一张胶片占位卡。
+   * - 超过 COVER_HASH_WAIT_MS 还没算完的条目也先展示：不能让坏图床把整页扣住。
    */
-  const visibleList = useMemo(() => settledList.filter((item) => Boolean(item.pic?.trim())), [settledList]);
+  const visibleList = useMemo(
+    () => (coverWaitOver ? list : settledList).filter((item) => Boolean(item.pic?.trim())),
+    [coverWaitOver, list, settledList]
+  );
   const coverHashMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const url of coverUrls) {
@@ -446,7 +473,7 @@ function HomeContent() {
                 ) : (
                   searchQuery.data && (
                     <span className="text-faint">
-                      {pendingCovers > 0
+                      {pendingCovers > 0 && groups.length === 0
                         ? '（加载中…）'
                         : filtersActive
                           ? `（筛选出 ${filteredGroups.length} 部 · ${filteredSourceCount} 条 / 共 ${groups.length} 部 · ${visibleList.length} 条）`
@@ -500,7 +527,7 @@ function HomeContent() {
                     </div>
                   )}
                 </>
-              ) : pendingCovers > 0 ? (
+              ) : groups.length === 0 && pendingCovers > 0 ? (
                 <ResultsSkeleton />
               ) : (
                 <EmptyState

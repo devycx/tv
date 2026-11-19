@@ -12,19 +12,21 @@
  * 性能与降级（2026-11-16 按「庆余年」179 条结果 / 123 张封面的实测调整）：
  * - 每个 URL 只算一次；结果存 IndexedDB（LRU：3000 条 + 1.2MB 双预算，
  *   见 lib/cover-hash-cache.ts），刷新/重复搜索不再取图；
- * - 旧版 `localStorage` 的单键缓存（`cover-visual-hashes-v3`）在首次启动时一次性迁移进
- *   IndexedDB 并删掉旧键：3000 条的整表 JSON 序列化会阻塞主线程，流式搜索期间尤其明显；
- * - 单次搜索最多算 120 张，且**只把预算花在没缓存的封面**上：否则同一关键词反复
- *   搜索永远只算同一批前 48 张，尾部封面永远拿不到指纹（实测 60% 的结果因此被拆卡）；
- * - 并发 8；
- * - 连续 4 张失败后**暂停** 15 秒（不把队列判死），到点自动续跑：图床抖动/代理 5xx
- *   大多是暂时的，一次连败不该让剩下几十条结果没有指纹；
- * - 等待中的封面不会先按片名分组再跳变：调用方用 isPending 把条目暂缓渲染；
+ * - **先等 IndexedDB hydrate 完再规划预算**（2026-11-19）：首帧内存缓存是空的，
+ *   如果立刻按「未缓存」排队，会把 120 张预算全花在已缓存的旧封面上，
+ *   新封面排在 120 个请求之后——表现就是「刷新后第一次搜索一直灰屏，再搜一次才正常」；
+ * - 单次搜索最多算 120 张，且只把预算花在没缓存的封面上；
+ * - 并发 8；同 host 只放一个 CORS 直连探测，其余直接走代理（一个坏图床不能
+ *   让 8 个并发一起等 6s）；同 host 连续失败 3 次后暂停 30s；
+ * - 单张封面有 15s 总预算：fetch 有 6s 超时，但 createImageBitmap / img.decode
+ *   在少数坏图上可能永远不返回，没有总超时会让 8 个槽位全挂住、队列停摆；
+ * - 等待中的封面不会先按片名分组再跳变：调用方用 isPending 把条目暂缓渲染，
+ *   但 page.tsx 有 2.5s 兜底，不会让坏图床无限期扣住整页结果；
  * - 取图/解码失败（isFailed）的条目没有指纹，但**照常展示**（URL/片名兜底）：
  *   代理取不到图不代表浏览器显示不出来（很多图床直连正常、Worker 出网 525）。
  */
 
-import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { coverCropRect, dHashFromRgba } from '@/lib/cover-visual-hash';
 import { trimHashCache } from '@/lib/cover-hash-cache';
 import { loadCoverHashesDb, saveCoverHashesDb } from '@/lib/db';
@@ -36,8 +38,16 @@ const LEGACY_CACHE_KEY = 'cover-visual-hashes-v3';
 const MAX_PER_SEARCH = 120;
 const MAX_ACTIVE = 8;
 const REQUEST_TIMEOUT_MS = 6000;
-const BREAKER_FAILURES = 4;
-const BREAKER_COOLDOWN_MS = 15_000;
+/**
+ * 单张封面的总预算（取图 + 解码 + 算 dHash）。
+ * fetch 自身有 6s 超时，但 createImageBitmap / img.decode 在少数坏图上可能永远
+ * 不返回；没有这层兜底时，8 个 active 槽位一旦全被挂住，整个队列就停摆
+ * （pending 永远 > 0，页面停在骨架屏）。
+ */
+const HASH_TIMEOUT_MS = 15_000;
+/** 同一个图床连续失败几次后暂时跳过（只影响指纹取图，不影响卡片封面直连） */
+const HOST_FAILURE_LIMIT = 3;
+const HOST_DEAD_MS = 30_000;
 const HASH_HEX = /^[0-9a-f]{16}$/;
 
 const states = new Map<string, CoverHashState>();
@@ -47,52 +57,52 @@ const dirtyUpserts = new Map<string, string>();
 const queue: string[] = [];
 const listeners = new Set<() => void>();
 /** 图床 CORS 直连结论：避免同一 host 的每个封面都先失败一次再走代理 */
-const hostModes = new Map<string, 'cors' | 'proxy'>();
+const hostModes = new Map<string, 'cors' | 'proxy' | 'probing'>();
+const hostFailures = new Map<string, number>();
+const hostDeadUntil = new Map<string, number>();
 let active = 0;
 let version = 0;
-let consecutiveFailures = 0;
-let breakerUntil = 0;
 let persistTimer: ReturnType<typeof setTimeout> | undefined;
-let resumeTimer: ReturnType<typeof setTimeout> | undefined;
-let dbHydrated = false;
+/**
+ * IndexedDB 缓存的一次性 hydrate。放在 Promise 里而不是同步布尔：
+ * 调用方要等它完成后再规划指纹预算，否则会把已缓存的封面当新封面重新排队。
+ */
+let hydration: Promise<void> | undefined;
 
 /**
  * 首次使用时把持久化指纹灌进内存 Map：
  * 1. 旧版 localStorage 同步读取（首屏立即可用）并立刻删除旧键，释放 localStorage 空间；
- * 2. IndexedDB 异步读取（不阻塞首屏）。
+ * 2. IndexedDB 异步读取（不阻塞首屏，但会决定本轮预算怎么排）。
+ *
+ * 返回的 Promise 在两层都读完（或失败）后 resolve；重复调用复用同一个 Promise。
  */
-function hydrateCacheOnce(): void {
-  if (typeof window === 'undefined' || dbHydrated) return;
-  dbHydrated = true;
+function hydrateCacheOnce(): Promise<void> {
+  if (typeof window === 'undefined') return Promise.resolve();
+  if (hydration) return hydration;
 
-  let migrated = false;
-  try {
-    const raw = window.localStorage.getItem(LEGACY_CACHE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      for (const [url, hash] of Object.entries(parsed)) {
-        if (typeof hash === 'string' && HASH_HEX.test(hash)) {
-          cache.set(url, hash);
-          dirtyUpserts.set(url, hash);
-          migrated = true;
+  hydration = (async () => {
+    let migrated = false;
+    try {
+      const raw = window.localStorage.getItem(LEGACY_CACHE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        for (const [url, hash] of Object.entries(parsed)) {
+          if (typeof hash === 'string' && HASH_HEX.test(hash)) {
+            cache.set(url, hash);
+            dirtyUpserts.set(url, hash);
+            migrated = true;
+          }
         }
+        window.localStorage.removeItem(LEGACY_CACHE_KEY);
       }
-      window.localStorage.removeItem(LEGACY_CACHE_KEY);
+    } catch {
+      /* 忽略 localStorage 读取异常（隐私模式 / 配额满） */
     }
-  } catch {
-    /* 忽略 localStorage 读取异常（隐私模式 / 配额满） */
-  }
 
-  if (migrated) {
-    schedulePersist();
-    // 迁移结果必须通知：调用方在首帧按「未缓存」把这些封面排进待算队列，
-    // 不重算 pending 的话，它们会被 isPending 一直隐藏到下一次指纹完成。
-    notify();
-  }
+    if (migrated) schedulePersist();
 
-  // 异步从 IndexedDB 加载持久化指纹
-  void loadCoverHashesDb()
-    .then((rows) => {
+    try {
+      const rows = await loadCoverHashesDb();
       let added = false;
       for (const [url, hash] of rows) {
         if (HASH_HEX.test(hash) && !cache.has(url)) {
@@ -100,9 +110,13 @@ function hydrateCacheOnce(): void {
           added = true;
         }
       }
-      if (added) notify();
-    })
-    .catch(() => {});
+      if (added || migrated) notify();
+    } catch {
+      if (migrated) notify();
+    }
+  })();
+
+  return hydration;
 }
 
 /**
@@ -159,6 +173,33 @@ function getVersion(): number {
 function cachedHash(url: string): string | undefined {
   const hash = cache.get(url);
   return hash && HASH_HEX.test(hash) ? hash : undefined;
+}
+
+function hostOf(url: string): string | undefined {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function isHostDead(host: string): boolean {
+  const until = hostDeadUntil.get(host);
+  if (!until) return false;
+  if (until > Date.now()) return true;
+  hostDeadUntil.delete(host);
+  return false;
+}
+
+function recordHostFailure(host: string): void {
+  const failures = (hostFailures.get(host) ?? 0) + 1;
+  hostFailures.set(host, failures);
+  if (failures >= HOST_FAILURE_LIMIT) hostDeadUntil.set(host, Date.now() + HOST_DEAD_MS);
+}
+
+function recordHostSuccess(host: string): void {
+  hostFailures.delete(host);
+  hostDeadUntil.delete(host);
 }
 
 /** 两段缩放的中间图倍数：先缩到 9×5 × 8×5，再缩到 9×8 */
@@ -222,43 +263,44 @@ async function hashCoverBlob(blob: Blob): Promise<string> {
   }
 }
 
+/** 浏览器 CORS 直连取图并算指纹；拿不到图片像素时返回 undefined（交给代理） */
+async function tryDirectHash(url: string): Promise<string | undefined> {
+  const direct = await fetch(url, {
+    mode: 'cors',
+    credentials: 'omit',
+    referrerPolicy: 'no-referrer',
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!direct.ok) return undefined;
+  const blob = await direct.blob();
+  // 直连可能拿到防盗链 HTML/占位图（200 但不是图片）：交给代理重试
+  if (!blob.type.startsWith('image/')) return undefined;
+  return hashCoverBlob(blob);
+}
+
 async function hashCoverUrl(url: string): Promise<string> {
-  const host = (() => {
-    try {
-      return new URL(url).hostname.toLowerCase();
-    } catch {
-      return undefined;
-    }
-  })();
-  const mode = host ? hostModes.get(host) : undefined;
+  const host = hostOf(url);
+  if (host && isHostDead(host)) throw new Error('封面图床暂时不可用');
 
   // 不少图床允许浏览器 CORS 直连，但 Cloudflare Worker 出网会 525（源站 TLS 握手失败）。
   // 先试浏览器直连，按 host 记住结论；CORS 失败/非 2xx 再退回同源代理。
-  if (host && mode !== 'proxy' && /^https:/i.test(url)) {
+  //
+  // 同一 host 只放一个直连探测在飞：8 个并发同时等 6s CORS 超时，一个坏图床就能
+  // 把首屏灰屏时间拉到十几秒。探测期间其余 URL 直接走代理，代理通常更快且能成功。
+  const mode = host ? hostModes.get(host) : undefined;
+  if (host && /^https:/i.test(url) && mode !== 'proxy' && mode !== 'probing') {
+    hostModes.set(host, 'probing');
     try {
-      const direct = await fetch(url, {
-        mode: 'cors',
-        credentials: 'omit',
-        referrerPolicy: 'no-referrer',
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
-      if (direct.ok) {
-        const blob = await direct.blob();
-        // 直连可能拿到防盗链 HTML/占位图（200 但不是图片）：解码失败时仍走代理
-        if (blob.type.startsWith('image/')) {
-          try {
-            const hash = await hashCoverBlob(blob);
-            hostModes.set(host, 'cors');
-            return hash;
-          } catch {
-            // 坏图/无法解码：退回代理
-          }
-        }
+      const hash = await tryDirectHash(url);
+      if (hash) {
+        hostModes.set(host, 'cors');
+        return hash;
       }
+      hostModes.set(host, 'proxy');
     } catch {
-      // CORS / 网络失败：走代理
+      // CORS / 网络失败 / 坏图：走代理
+      hostModes.set(host, 'proxy');
     }
-    hostModes.set(host, 'proxy');
   }
 
   const res = await fetch(`/api/cover?url=${encodeURIComponent(url)}`, {
@@ -266,53 +308,58 @@ async function hashCoverUrl(url: string): Promise<string> {
     credentials: 'same-origin',
   });
   if (!res.ok) throw new Error(`封面取图失败 (${res.status})`);
-  return hashCoverBlob(await res.blob());
+  const hash = await hashCoverBlob(await res.blob());
+  // 探针仍在飞时走了代理并成功：后续同 host 继续走代理即可，不再重复等直连
+  if (host && hostModes.get(host) === 'probing') hostModes.set(host, 'proxy');
+  return hash;
 }
 
-/**
- * 熔断到期后自动续跑队列。
- *
- * 不能像以前那样把队列里剩下的封面一次性标成 failed：那会让一次图床连败直接
- * 让几十张封面没有指纹（页面还会按失败隐藏条目）。这里只暂停、不判死。
- */
-function scheduleResume(): void {
-  if (typeof window === 'undefined' || resumeTimer) return;
-  resumeTimer = setTimeout(() => {
-    resumeTimer = undefined;
-    if (Date.now() < breakerUntil) {
-      scheduleResume();
-      return;
-    }
-    pump();
-  }, BREAKER_COOLDOWN_MS + 20);
+/** 给单张封面加总超时：解码挂住时不能把并发槽位一起带走 */
+function hashCoverWithDeadline(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('封面指纹超时')), HASH_TIMEOUT_MS);
+    hashCoverUrl(url).then(
+      (hash) => {
+        clearTimeout(timer);
+        resolve(hash);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
 }
 
 function pump(): void {
   while (active < MAX_ACTIVE && queue.length > 0) {
-    if (Date.now() < breakerUntil) {
-      scheduleResume();
-      return;
-    }
     const url = queue.shift();
     if (!url) return;
+
+    const cached = cachedHash(url);
+    if (cached) {
+      // IndexedDB 在首帧排完队之后才 hydrate 完：已缓存的封面不再重新取图。
+      // 否则预算会先花在 120 个旧封面上，新封面要等它们全部跑完才轮到。
+      states.set(url, { status: 'done', hash: cached });
+      notify();
+      continue;
+    }
+
+    const host = hostOf(url);
     active += 1;
-    hashCoverUrl(url)
+    hashCoverWithDeadline(url)
       .then((hash) => {
         states.set(url, { status: 'done', hash });
         cache.delete(url); // 重新插入到末尾，LRU 淘汰时先丢最久没用的
         cache.set(url, hash);
         dirtyUpserts.set(url, hash);
-        consecutiveFailures = 0;
+        if (host) recordHostSuccess(host);
         schedulePersist();
         notify();
       })
       .catch(() => {
         states.set(url, { status: 'failed' });
-        consecutiveFailures += 1;
-        if (consecutiveFailures >= BREAKER_FAILURES) {
-          breakerUntil = Date.now() + BREAKER_COOLDOWN_MS;
-          scheduleResume();
-        }
+        if (host) recordHostFailure(host);
         notify();
       })
       .finally(() => {
@@ -362,10 +409,24 @@ export interface CoverHashes {
  */
 export function useCoverHashes(urls: readonly string[]): CoverHashes {
   const currentVersion = useSyncExternalStore(subscribe, getVersion, () => 0);
+  const [ready, setReady] = useState(false);
+
+  // 必须先读完 IndexedDB 再规划：首帧 cache 是空的，直接规划会把已缓存的
+  // 封面全部当成新封面（刷新后第一次搜索灰屏、第二次才正常的根因）。
+  useEffect(() => {
+    let alive = true;
+    void hydrateCacheOnce().then(() => {
+      if (alive) setReady(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // urls 每次搜索/流式追加都会是新数组：用内容做依赖，避免 effect 每帧重跑
   const key = urls.join('\n');
   const planned = useMemo(() => {
+    if (!ready) return [];
     const seen = new Set<string>();
     const out: string[] = [];
     for (const url of urls) {
@@ -379,22 +440,26 @@ export function useCoverHashes(urls: readonly string[]): CoverHashes {
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [key, ready]);
   const plannedSet = useMemo(() => new Set(planned), [planned]);
 
   useEffect(() => {
-    hydrateCacheOnce();
+    if (!ready) return;
     for (const url of planned) ensure(url);
-    // planned 由 key 派生；key 不变时不需要重跑
+    // planned 由 key + ready 派生；key 不变时不需要重跑
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
+  }, [key, ready]);
 
   return useMemo(() => {
-    const pending = planned.filter((url) => {
-      const state = states.get(url);
-      if (state?.status === 'done' || state?.status === 'failed') return false;
-      return !cachedHash(url);
-    }).length;
+    const pending = ready
+      ? planned.filter((url) => {
+          const state = states.get(url);
+          if (state?.status === 'done' || state?.status === 'failed') return false;
+          return !cachedHash(url);
+        }).length
+      : urls.length > 0
+        ? 1
+        : 0;
 
     return {
       version: currentVersion,
@@ -406,7 +471,11 @@ export function useCoverHashes(urls: readonly string[]): CoverHashes {
         return state?.status === 'failed' ? undefined : cachedHash(url);
       },
       isPending: (url?: string) => {
-        if (!url || !plannedSet.has(url)) return false;
+        // hydrate 完成前一律按 pending 处理：这时候没法判断哪些封面已有缓存，
+        // 先渲染再分组会整页跳变；IndexedDB 读取通常只有几十毫秒。
+        if (!url) return false;
+        if (!ready) return true;
+        if (!plannedSet.has(url)) return false;
         const state = states.get(url);
         if (state?.status === 'done' || state?.status === 'failed') return false;
         return !cachedHash(url);
@@ -416,7 +485,7 @@ export function useCoverHashes(urls: readonly string[]): CoverHashes {
         return states.get(url)?.status === 'failed';
       },
     };
-    // currentVersion 变化时重算；planned/key 变化时也重算
+    // currentVersion 变化时重算；planned/key/ready 变化时也重算
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentVersion, key, planned, plannedSet]);
+  }, [currentVersion, key, planned, plannedSet, ready, urls.length]);
 }

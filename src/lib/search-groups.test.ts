@@ -89,14 +89,59 @@ describe('aggregateResults（按封面聚合）', () => {
     expect(groups[0].pic).toBe(COVER_A);
   });
 
-  it('电影解说与正片共用海报时不合并', () => {
+  it('电影解说与正片共用海报时并成一张卡（2026-11-19 用户口径）', () => {
     const groups = aggregateResults([
       item({ name: '色，戒', pic: COVER_A }),
-      item({ name: '色，戒[电影解说]', pic: COVER_A }),
+      item({ name: '色，戒[电影解说]', pic: COVER_A, typeName: '电影解说' }),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].items).toHaveLength(2);
+    // 封面优先取正片来源：解说只是组内的一条来源
+    expect(groups[0].pic).toBe(COVER_A);
+  });
+
+  it('电影解说封面不同时仍分开：变体只在同封面时并组', () => {
+    const groups = aggregateResults([
+      item({ name: '色，戒', year: '2007', pic: COVER_A }),
+      item({ name: '色，戒[电影解说]', year: '2007', pic: COVER_B, typeName: '电影解说' }),
     ]);
 
     expect(groups).toHaveLength(2);
-    expect(groups.map((g) => g.items[0].name).sort()).toEqual(['色，戒', '色，戒[电影解说]'].sort());
+  });
+
+  it('沉浸版与正片同封面（dHash 距离 4）并组', () => {
+    const coverHashes = new Map([
+      ['https://a.com/main.jpg', '1454326a020a0006'],
+      ['https://b.com/immersive.jpg', '1454356a020a0002'],
+    ]);
+    const groups = aggregateResults(
+      [
+        item({ name: '后会友期', year: '2026', pic: 'https://a.com/main.jpg' }),
+        item({ name: '后会友期 沉浸版', year: '2026', pic: 'https://b.com/immersive.jpg' }),
+      ],
+      { coverHashes }
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].items).toHaveLength(2);
+  });
+
+  it('组封面优先取正片来源的图（解说恰好排在前面时也不拿解说的图）', () => {
+    const coverHashes = new Map([
+      ['https://a.com/commentary.jpg', '1111111111111111'],
+      ['https://b.com/main.jpg', '1111111111111111'],
+    ]);
+    const groups = aggregateResults(
+      [
+        item({ name: '色，戒[电影解说]', pic: 'https://a.com/commentary.jpg', typeName: '电影解说' }),
+        item({ name: '色，戒', pic: 'https://b.com/main.jpg' }),
+      ],
+      { coverHashes }
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].pic).toBe('https://b.com/main.jpg');
   });
 
   it('没有封面时退回「片名 + 年份」：同年合并，跨年拆分', () => {
