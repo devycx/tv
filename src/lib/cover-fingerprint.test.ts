@@ -23,6 +23,21 @@ describe('coverFingerprint', () => {
     expect(thumb).toBe(plain);
   });
 
+  it('豆瓣编号图床与已知反代域折叠为同一个镜像身份', () => {
+    const original = coverFingerprint('https://img1.doubanio.com/view/photo/l/public/p123.jpg');
+    expect(coverFingerprint('https://img9.doubanio.com/view/photo/l/public/p123.jpg')).toBe(original);
+    expect(coverFingerprint('https://img.doubanio.cmliussss.net/view/photo/l/public/p123.jpg')).toBe(original);
+    expect(original).toBe('url:doubanio.com/view/photo/l/public/p123.jpg');
+  });
+
+  it('只去缓存/追踪 query，保留图片 id、签名与处理指令', () => {
+    const plain = coverFingerprint('https://img.example.com/poster.jpg?id=123&sign=abc');
+    expect(coverFingerprint('https://img.example.com/poster.jpg?id=123&sign=abc&t=99&_=/&v=2&utm_source=x')).toBe(plain);
+    expect(coverFingerprint('https://img.example.com/poster.jpg?id=456&sign=abc')).not.toBe(plain);
+    expect(coverFingerprint('https://img.example.com/poster.jpg?id=123&sign=xyz')).not.toBe(plain);
+    expect(plain).toBe('url:img.example.com/poster.jpg?id=123&sign=abc');
+  });
+
   it('数字 id 不做跨站合并：不同站点上的 1828115.jpg 可能是不同影片', () => {
     const a = coverFingerprint('https://a.com/upload/1828115.webp');
     const b = coverFingerprint('https://b.com/upload/1828115.webp');

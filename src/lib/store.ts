@@ -207,6 +207,8 @@ export interface SourceHealthEntry {
 }
 
 interface AppState extends AppSettings {
+  /** 用户是否主动改过点播源选择；出厂默认未改选时才启用搜索源分层 */
+  sourceSelectionTouched: boolean;
   /** 部署者通过 DEFAULT_SOURCES 环境变量预置的源（服务端下发，不持久化） */
   envSources: SourceConfig[];
   /** 已向用户展示过并自动勾选过的预置源 key（持久化：用户取消勾选后不再反复勾上） */
@@ -346,6 +348,7 @@ export const useAppStore = create<AppState>()(
       qualityMap: {},
       envSubsSeen: [],
       selectedKeys: [],
+      sourceSelectionTouched: false,
       yellowFilter: true,
       adFilter: true,
       searchTimeoutMs: DEFAULT_SOURCE_TIMEOUT_MS,
@@ -375,6 +378,7 @@ export const useAppStore = create<AppState>()(
         set({
           customAPIs: [...list, entry],
           selectedKeys: selectable ? [...get().selectedKeys, entry.key] : get().selectedKeys,
+          sourceSelectionTouched: true,
         });
       },
 
@@ -394,6 +398,7 @@ export const useAppStore = create<AppState>()(
         set({
           customAPIs: get().customAPIs.filter((a) => a.key !== key),
           selectedKeys: get().selectedKeys.filter((k) => k !== key),
+          sourceSelectionTouched: true,
         });
         return { entry, selected };
       },
@@ -404,6 +409,7 @@ export const useAppStore = create<AppState>()(
         set({
           customAPIs: [...get().customAPIs, entry],
           selectedKeys: selected ? [...get().selectedKeys, entry.key] : get().selectedKeys,
+          sourceSelectionTouched: true,
         });
         return true;
       },
@@ -411,16 +417,16 @@ export const useAppStore = create<AppState>()(
       toggleSourceSelected: (key) => {
         const cur = get().selectedKeys;
         if (cur.includes(key)) {
-          set({ selectedKeys: cur.filter((k) => k !== key) });
+          set({ selectedKeys: cur.filter((k) => k !== key), sourceSelectionTouched: true });
           return;
         }
         // 成人内容过滤开启时不允许勾选成人源
         const src = [...get().customAPIs, ...get().envSources].find((a) => a.key === key);
         if (src?.isAdult && get().yellowFilter) return;
-        set({ selectedKeys: [...cur, key] });
+        set({ selectedKeys: [...cur, key], sourceSelectionTouched: true });
       },
 
-      setSelectedKeys: (keys) => set({ selectedKeys: keys }),
+      setSelectedKeys: (keys) => set({ selectedKeys: keys, sourceSelectionTouched: true }),
 
       setEnvSources: (list) => {
         // 预置源首次出现时自动勾选（开箱即搜）；用户此后取消勾选不会被反复勾回
@@ -440,7 +446,7 @@ export const useAppStore = create<AppState>()(
 
       addSubscription: (url, name) => {
         if (get().subscriptions.some((s) => s.url === url)) return;
-        set({ subscriptions: [...get().subscriptions, { url, name }] });
+        set({ subscriptions: [...get().subscriptions, { url, name }], sourceSelectionTouched: true });
       },
 
       removeSubscription: (url) => {
@@ -464,6 +470,7 @@ export const useAppStore = create<AppState>()(
           liveSelectedUrls: get().liveSelectedUrls.filter((u) => !orphanUrls.has(u)),
           // 收藏的频道是用户主动留下的，删除订阅时保留；其余残留状态一并清理
           liveRecent: get().liveRecent.filter((r) => !r.sourceUrl || !orphanUrls.has(r.sourceUrl)),
+          sourceSelectionTouched: true,
         });
       },
 
@@ -957,6 +964,7 @@ export const useAppStore = create<AppState>()(
       partialize: (s) => ({
         customAPIs: s.customAPIs,
         selectedKeys: s.selectedKeys,
+        sourceSelectionTouched: s.sourceSelectionTouched,
         envKeysSeen: s.envKeysSeen,
         subscriptions: s.subscriptions,
         liveEnvKeysSeen: s.liveEnvKeysSeen,

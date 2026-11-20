@@ -53,12 +53,6 @@ export interface SegmentMetaEntry {
   lastAccess: number;
 }
 
-export interface CoverHashEntry {
-  url: string;
-  hash: string;
-  updatedAt: number;
-}
-
 export type DownloadStatus = 'waiting' | 'downloading' | 'paused' | 'completed' | 'error';
 
 export interface DownloadTaskEntry {
@@ -83,7 +77,6 @@ export const db = new Dexie('libretv') as Dexie & {
   liveProbe: EntityTable<LiveProbeEntry & { url: string }, 'url'>;
   segmentMeta: EntityTable<SegmentMetaEntry, 'key'>;
   downloads: EntityTable<DownloadTaskEntry, 'id'>;
-  coverHashes: EntityTable<CoverHashEntry, 'url'>;
 };
 
 db.version(1).stores({
@@ -103,8 +96,8 @@ db.version(3).stores({
   downloads: 'id, createdAt',
 });
 
-// v4：封面视觉指纹（dHash）从 localStorage 迁入独立表，避免流式搜索期间主线程整表
-// JSON.stringify + localStorage.setItem 的同步卡顿（旧数据由 use-cover-hashes 一次性迁移）
+// v4 的 coverHashes 是已停用的封面视觉指纹表。保留 schema 与版本号但不再读写：
+// 老用户数据库无需迁移，history / qualityMap / sourceHealth / 播放进度等数据完全不受影响。
 db.version(4).stores({
   coverHashes: 'url, updatedAt',
 });
@@ -334,41 +327,6 @@ export async function importConfig(content: string): Promise<void> {
       });
     }
   }
-}
-
-// —— 封面视觉指纹（dHash） ——
-// 最多 3000 条的「封面 URL → 16 位 dHash」；放 IndexedDB 后写入是异步的，
-// 流式搜索期间不再同步阻塞主线程。内存 Map 仍是热读层（见 use-cover-hashes）。
-
-/** 按写入时间升序返回（最旧在前），与内存缓存 LRU 顺序一致 */
-export async function loadCoverHashesDb(): Promise<Array<[string, string]>> {
-  const rows = await db.coverHashes.orderBy('updatedAt').toArray();
-  return rows.map((r) => [r.url, r.hash]);
-}
-
-/**
- * 批量落盘：upserts 覆盖写、deletes 删除（LRU 淘汰的条目）。
- * updatedAt 用「同一毫秒 + 递增序号」保证扫描顺序稳定，避免批量写入内部乱序。
- */
-export async function saveCoverHashesDb(
-  upserts: Array<[string, string]>,
-  deletes: string[] = []
-): Promise<void> {
-  const now = Date.now();
-  await db.transaction('rw', db.coverHashes, async () => {
-    if (deletes.length > 0) {
-      await db.coverHashes.bulkDelete(deletes);
-    }
-    if (upserts.length > 0) {
-      await db.coverHashes.bulkPut(
-        upserts.map(([url, hash], idx) => ({
-          url,
-          hash,
-          updatedAt: now + idx,
-        }))
-      );
-    }
-  });
 }
 
 export type { SourceConfig };

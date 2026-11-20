@@ -88,7 +88,7 @@ describe('GET /api/cover', () => {
     const res = await GET(makeRequest('https://img.example.com/ok.jpg'));
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toBe('image/jpeg');
-    expect(res.headers.get('cache-control')).toContain('private');
+    expect(res.headers.get('cache-control')).toBe('private, max-age=86400');
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4]));
   });
 

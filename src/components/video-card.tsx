@@ -13,12 +13,8 @@ import { QualityBadge } from './quality-badge';
 import { useQualityProbe } from './use-quality-probe';
 import { useInView } from './use-in-view';
 
-/**
- * 封面加载兜底：图床黑洞/连接挂起时 `<img>` 既不会 load 也不会 error，
- * 卡片会一直 `invisible` 留一个空位（线上 `ywxohs.com` 实测 13s 仍无结论）。
- * 超时后先换组内下一张封面；全组候选都超时，再按「封面显示不出来」整卡隐藏。
- */
-const COVER_LOAD_TIMEOUT_MS = 7000;
+/** 首页豆瓣榜单的封面兜底；搜索结果卡不再删卡或等待固定超时。 */
+const DOUBAN_COVER_LOAD_TIMEOUT_MS = 7000;
 
 /**
  * 聚合影片卡片：
@@ -35,11 +31,6 @@ interface AggregatedCardProps {
   onPlay: (item: SearchResultItem) => void;
   /** 完整源配置：探测画质需要 source.url / source.detail，搜索结果里只带 sourceUrl */
   sources?: SourceConfig[];
-  /**
-   * 该组所有候选封面都加载失败（图床不可达/防盗链/混合内容）：
-   * 交由页面整卡隐藏——搜索页只展示能看见封面的影片（用户 2026-11-15 要求）。
-   */
-  onCoverBroken?: (key: string) => void;
 }
 
 /**
@@ -58,7 +49,6 @@ export const AggregatedCard = memo(function AggregatedCard({
   onOpen,
   onPlay,
   sources,
-  onCoverBroken,
 }: AggregatedCardProps) {
   const imageProxyMode = useAppStore((s) => s.imageProxyMode);
   const customImageProxy = useAppStore((s) => s.customImageProxy);
@@ -86,30 +76,23 @@ export const AggregatedCard = memo(function AggregatedCard({
     return out;
   }, [group.pic, group.items]);
   const [coverIdx, setCoverIdx] = useState(0);
-  /**
-   * 当前封面是否真正加载成功。
-   * 搜索结果是流式追加的：只按「指纹算完」渲染会在图片还没下完时先出现灰色占位，
-   * 图床慢/失败时还会「灰卡出现 → onCoverBroken 整卡消失」。这里等第一张封面
-   * 加载成功再显示卡片，失败则整卡从头到尾都不出现（用户 2026-11-18 反馈）。
-   */
-  const [coverReady, setCoverReady] = useState(false);
+  /** 三个局部状态：loading（shimmer）/ loaded（淡入）/ failed（标题占位卡）。 */
+  const [coverState, setCoverState] = useState<{
+    url?: string;
+    status: 'loading' | 'loaded' | 'failed';
+    cacheHit: boolean;
+  }>({ status: 'loading', cacheHit: false });
   useEffect(() => {
     setCoverIdx(0);
-    setCoverReady(false);
+    setCoverState({ status: 'loading', cacheHit: false });
   }, [group.key]);
   const coverUrl = coverCandidates[coverIdx];
-  const showImg = Boolean(coverUrl);
-
-  // 图床挂住时 <img> 既不会 load 也不会 error：到点换组内下一张；全组都挂住才整卡隐藏。
-  // 没有这层兜底，卡片会一直 invisible 留一个空位（比灰卡更像「卡住」）。
-  useEffect(() => {
-    if (coverReady || !showImg) return;
-    const timer = window.setTimeout(() => {
-      if (coverIdx + 1 < coverCandidates.length) setCoverIdx(coverIdx + 1);
-      else onCoverBroken?.(group.key);
-    }, COVER_LOAD_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
-  }, [coverReady, showImg, coverIdx, coverCandidates.length, group.key, onCoverBroken]);
+  const coverStatus: 'loading' | 'loaded' | 'failed' = coverUrl
+    ? coverState.url === coverUrl
+      ? coverState.status
+      : 'loading'
+    : 'failed';
+  const coverCacheHit = coverUrl !== undefined && coverState.url === coverUrl && coverState.cacheHit;
 
   const multi = group.items.length > 1;
   const adult = useMemo(() => group.items.some((i) => i.isAdult), [group.items]);
@@ -189,10 +172,7 @@ export const AggregatedCard = memo(function AggregatedCard({
       className={cn(
         'card',
         !multi && 'hover:scale-[1.02] hover:shadow-md',
-        multi && expanded && 'ring-1 ring-accent/40',
-        // 封面没加载好之前整卡不可见（保留布局占位，图成功后再显示）：
-        // 避免灰色封面一闪而过，也避免破图卡片「出现又消失」
-        showImg && !coverReady && 'invisible'
+        multi && expanded && 'ring-1 ring-accent/40'
       )}
     >
       {/* 不用 h-full：展开面板需要撑高卡片，等高裁切会让面板不可见 */}
@@ -211,53 +191,68 @@ export const AggregatedCard = memo(function AggregatedCard({
           }
         }}
       >
-        {showImg ? (
-          <div
-            className="relative flex-shrink-0 w-[105px] sm:w-[120px] aspect-[2/3] cursor-pointer"
-            role="button"
-            tabIndex={0}
-            aria-label={`直接播放 ${group.name}`}
-            title="直接播放"
-            onClick={playFromCover}
-            onKeyDown={(e) => {
-              if (e.key !== 'Enter' && e.key !== ' ') return;
-              e.preventDefault();
-              playFromCover(e);
-            }}
-          >
-            <SmartImage
-              url={coverUrl}
-              mode={imageProxyMode}
-              customProxy={customImageProxy}
-              alt={group.name}
-              className="absolute inset-0 h-full w-full object-cover"
-              onLoad={() => setCoverReady(true)}
-              onExhausted={() => {
-                // 先换组内下一张封面；全组都加载不出来再回报页面整卡隐藏
-                if (coverIdx + 1 < coverCandidates.length) setCoverIdx(coverIdx + 1);
-                else onCoverBroken?.(group.key);
-              }}
-            />
-          </div>
-        ) : (
-          <div
-            className="relative flex-shrink-0 w-[105px] sm:w-[120px] aspect-[2/3] flex items-center justify-center cursor-pointer"
-            role="button"
-            tabIndex={0}
-            aria-label={`直接播放 ${group.name}`}
-            title="直接播放"
-            onClick={playFromCover}
-            onKeyDown={(e) => {
-              if (e.key !== 'Enter' && e.key !== ' ') return;
-              e.preventDefault();
-              playFromCover(e);
-            }}
-          >
-            <svg className="w-8 h-8 text-faint" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 4v16m10-16v16M3 6a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6zm4 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6zm8 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6zm4 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6z" />
-            </svg>
-          </div>
-        )}
+        <div
+          className="relative flex-shrink-0 w-[105px] sm:w-[120px] aspect-[2/3] cursor-pointer overflow-hidden"
+          role="button"
+          tabIndex={0}
+          aria-label={`直接播放 ${group.name}`}
+          aria-busy={coverStatus === 'loading'}
+          title="直接播放"
+          onClick={playFromCover}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            playFromCover(e);
+          }}
+        >
+          {coverStatus !== 'failed' && coverUrl ? (
+            <>
+              {coverStatus === 'loading' && (
+                <div aria-hidden className="absolute inset-0 animate-pulse bg-chip" />
+              )}
+              <SmartImage
+                key={coverUrl}
+                url={coverUrl}
+                mode={imageProxyMode}
+                customProxy={customImageProxy}
+                alt={group.name}
+                className={cn(
+                  'absolute inset-0 h-full w-full object-cover transition-opacity duration-200',
+                  coverStatus === 'loaded' ? 'opacity-100' : 'opacity-0',
+                  coverCacheHit && 'transition-none'
+                )}
+                onLoad={(cacheHit) =>
+                  setCoverState({ url: coverUrl, status: 'loaded', cacheHit: Boolean(cacheHit) })
+                }
+                onExhausted={() => {
+                  // 换组内下一张候选图；全组都不可达时保留卡片，停在标题占位卡。
+                  if (coverIdx + 1 < coverCandidates.length) setCoverIdx(coverIdx + 1);
+                  else setCoverState({ url: coverUrl, status: 'failed', cacheHit: false });
+                }}
+              />
+            </>
+          ) : (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-slate-900 px-2 text-center">
+              <svg
+                aria-hidden
+                className="h-7 w-7 shrink-0 text-slate-500"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M7 4v16m10-16v16M3 6a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V6zm4 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6zm8 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6zm4 0a1 1 0 011-1h1a1 1 0 011 1v12a1 1 0 01-1 1h-1a1 1 0 01-1-1V6z"
+                />
+              </svg>
+              <span className="line-clamp-4 break-words text-[11px] leading-tight text-slate-300">
+                {group.name}
+              </span>
+            </div>
+          )}
+        </div>
 
         <div className="p-2.5 flex flex-col flex-grow min-w-0">
           <div className="flex-grow">
@@ -396,7 +391,7 @@ export function DoubanCard({ item, onClick }: { item: { title: string; cover: st
   // 图床挂住时同样会一直停在 opacity-0：到点按失败处理，露出胶片图标兜底。
   useEffect(() => {
     if (coverReady || imgFailed || !item.cover) return;
-    const timer = window.setTimeout(() => setImgFailed(true), COVER_LOAD_TIMEOUT_MS);
+    const timer = window.setTimeout(() => setImgFailed(true), DOUBAN_COVER_LOAD_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
   }, [coverReady, imgFailed, item.cover]);
 

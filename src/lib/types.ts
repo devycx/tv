@@ -8,6 +8,8 @@ export interface SourceConfig {
   /** 可选：详情页根地址（部分源需要爬详情页提取 m3u8） */
   detail?: string;
   isAdult?: boolean;
+  /** 搜索分层：1 = 默认首轮主力源；缺省 / 2 = 按需扩搜的长尾源 */
+  tier?: 1 | 2;
 }
 
 export interface SearchResultItem {

@@ -9,14 +9,13 @@ import { DetailModal } from '@/components/detail-modal';
 import { AggregatedCard } from '@/components/video-card';
 import { useAppStore, resolveSource, isInDisabledSubscription, isSourceDisabled } from '@/lib/store';
 import { api } from '@/lib/client-api';
-import type { SearchResultItem, SourceSearchOutcome } from '@/lib/types';
+import type { SearchResultItem } from '@/lib/types';
 import { SearchHistoryDropdown, useSearchHistory } from '@/components/search-history';
 import { cn, buildWatchUrl, validateSourceUrl } from '@/lib/utils';
 import { addSearchHistory } from '@/lib/db';
-import { compareSearchResults } from '@/lib/relevance';
 import { applyFrozenOrder, orderDiffers } from '@/lib/result-paging';
-import { aggregateResults } from '@/lib/search-groups';
-import { clusterCoverHashes } from '@/lib/cover-visual-hash';
+import { aggregateResults, mergeExpandedGroups } from '@/lib/search-groups';
+import { planSearchSourceTiers } from '@/lib/source-tiers';
 import {
   EMPTY_FILTERS,
   buildFacets,
@@ -26,7 +25,6 @@ import {
   type SearchFacets,
   type SearchFilters,
 } from '@/lib/search-facets';
-import { useCoverHashes } from '@/components/use-cover-hashes';
 import { useToast } from '@/components/toast';
 import { EmptyState } from '@/components/states';
 import { Icon } from '@/components/icon';
@@ -41,15 +39,6 @@ import { Icon } from '@/components/icon';
  * 所以 24 足够覆盖绝大多数查询；一次挂太多卡片会让流式阶段每个源结算都整页重渲染。
  */
 const RESULT_PAGE_SIZE = 24;
-
-/**
- * 「等齐再画」的兜底上限：从第一条结果出现开始计时。
- *
- * 正常情况下封面指纹（命中 IndexedDB 的 <50ms，冷搜一轮 48 张）会很快全部有结论，
- * 到点还没结论的封面被「封印」——本屏按 URL/片名兜底分组，晚到的指纹只写缓存、
- * 不再改动这一屏，坏图床不能把页面无限期扣在骨架上。
- */
-const COVER_HASH_SETTLE_TIMEOUT_MS = 3000;
 
 export default function HomePage() {
   return (
@@ -72,11 +61,12 @@ function HomeContent() {
   const yellowFilter = useAppStore((s) => s.yellowFilter);
   const searchTimeoutMs = useAppStore((s) => s.searchTimeoutMs);
   const sourceHealth = useAppStore((s) => s.sourceHealth);
+  const sourceSelectionTouched = useAppStore((s) => s.sourceSelectionTouched);
   const subscriptions = useAppStore((s) => s.subscriptions);
   const [input, setInput] = useState(urlQuery);
   const [detailItem, setDetailItem] = useState<SearchResultItem | null>(null);
-  /** 流式搜索中已结算的源（data 就绪前用于增量渲染） */
-  const [streamedOutcomes, setStreamedOutcomes] = useState<SourceSearchOutcome[]>([]);
+  /** 记录用户主动扩搜的是哪一轮查询；换关键词/源配置后自动失效，无需清理在途状态 */
+  const [expandScope, setExpandScope] = useState<string | null>(null);
   /** 结果标签筛选（类型 / 年份 / 18禁）；查询变化时清空 */
   const [filters, setFilters] = useState<SearchFilters>(EMPTY_FILTERS);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -102,59 +92,57 @@ function HomeContent() {
       .filter((s) => !isInDisabledSubscription({ subscriptions }, s.key));
   }, [customAPIs, envSources, selectedKeys, sourceHealth, subscriptions]);
 
+  const sourceTiers = useMemo(
+    () =>
+      planSearchSourceTiers({
+        activeSources: selectedSources,
+        envSources,
+        selectedKeys,
+        customSourceCount: customAPIs.length,
+        yellowFilter,
+        sourceSelectionTouched,
+      }),
+    [selectedSources, envSources, selectedKeys, customAPIs.length, yellowFilter, sourceSelectionTouched]
+  );
+  const expandedSourceKeys = useMemo(() => sourceTiers.tier2.map((source) => source.key), [sourceTiers]);
+  /**
+   * 查询身份只取用户选择，不取实时健康度：逐源回调会写 sourceHealth，
+   * 若把「当前可用源 key」放进 queryKey，一个源刚被判失败就会取消并重启整轮搜索。
+   */
+  const expansionScope = JSON.stringify([
+    urlQuery,
+    selectedKeys,
+    customAPIs.length,
+    envSources.length,
+    sourceSelectionTouched,
+    yellowFilter,
+    searchTimeoutMs,
+  ]);
+  const expansionRequested = expandScope === expansionScope;
+
   const searchQuery = useQuery({
-    queryKey: ['search', urlQuery, selectedKeys, yellowFilter, searchTimeoutMs],
-    // 与 runSearch 的截断规则保持一致：顶栏搜索 / 手动构造长链接不会绕过上限
-    queryFn: async ({ signal }) => {
-      setStreamedOutcomes([]);
-      /**
-       * 流式源结算按 100ms 合并提交（2026-11-20）：
-       * 快源集中返回时，原来每个源事件都要触发一次全量 compareSearchResults +
-       * aggregateResults + buildFacets；合并后一屏只重算一两次。
-       * 首个有结果的源仍然立刻上屏，保证首屏速度。
-       */
-      const pending: SourceSearchOutcome[] = [];
-      let flushTimer: ReturnType<typeof setTimeout> | null = null;
-      let cancelled = false;
-      const flushOutcomes = () => {
-        if (flushTimer) {
-          clearTimeout(flushTimer);
-          flushTimer = null;
-        }
-        if (cancelled || pending.length === 0) return;
-        const batch = pending.splice(0, pending.length);
-        setStreamedOutcomes((prev) => [...prev, ...batch]);
-      };
-      signal?.addEventListener('abort', () => {
-        cancelled = true;
-        if (flushTimer) {
-          clearTimeout(flushTimer);
-          flushTimer = null;
-        }
-        pending.length = 0;
-      }, { once: true });
-      try {
-        return await api.search(urlQuery.slice(0, 100), selectedSources, yellowFilter, {
-          signal,
-          timeoutMs: searchTimeoutMs,
-          // 逐源结算即更新：结果边搜边渲染，同时滚动健康度
-          // （停用/超时不再在这里提示：源健康状况只在设置 → 点播源里看）
-          onSource: (outcome) => {
-            useAppStore.getState().recordSourceHealth([outcome]);
-            pending.push(outcome);
-            if (pending.length === 1 && outcome.list.length > 0) {
-              flushOutcomes();
-              return;
-            }
-            if (!flushTimer) flushTimer = setTimeout(flushOutcomes, 100);
-          },
-        });
-      } finally {
-        flushOutcomes();
-      }
-    },
-    enabled: Boolean(urlQuery) && selectedSources.length > 0,
+    queryKey: ['search', expansionScope],
+    // 首轮 Tier 1 整批结算后一次上屏；逐源事件只更新健康度，不再驱动整页重排。
+    queryFn: async ({ signal }) =>
+      api.search(urlQuery.slice(0, 100), sourceTiers.tier1, yellowFilter, {
+        signal,
+        timeoutMs: searchTimeoutMs,
+        onSource: (outcome) => useAppStore.getState().recordSourceHealth([outcome]),
+      }),
+    enabled: Boolean(urlQuery) && sourceTiers.tier1.length > 0,
     // 5 分钟内从播放页返回时直接使用缓存，不重新搜索（服务端另有 60s 结果缓存兜底）
+    staleTime: 300_000,
+  });
+
+  const expandedQuery = useQuery({
+    queryKey: ['search-more', expansionScope],
+    queryFn: async ({ signal }) =>
+      api.search(urlQuery.slice(0, 100), sourceTiers.tier2, yellowFilter, {
+        signal,
+        timeoutMs: searchTimeoutMs,
+        onSource: (outcome) => useAppStore.getState().recordSourceHealth([outcome]),
+      }),
+    enabled: expansionRequested && Boolean(searchQuery.data) && sourceTiers.tier2.length > 0,
     staleTime: 300_000,
   });
 
@@ -207,231 +195,22 @@ function HomeContent() {
   const openDetail = useCallback((item: SearchResultItem) => setDetailItem(item), []);
 
   const isSearching = Boolean(urlQuery) && searchQuery.isFetching && !searchQuery.data;
-  /**
-   * 聚合数据未就绪时，用已结算源的结果增量渲染（健康源不再等坏源超时）。
-   *
-   * 这里用与服务端完全相同的比较器就地排序：服务端逐源推送的是「每个源自己排好的列表」，
-   * 客户端按到达顺序拼接会得到「源1的一批、源2的一批…」，首屏在 done 之前并不是全局相关性顺序。
-   * 就地排序后，任何时刻展示的都是「已到达结果里的最优顺序」，done 只会插入新条目、不会整体重排。
-   */
-  const streamedList = useMemo(
-    () =>
-      streamedOutcomes
-        .flatMap((o) => o.list)
-        .sort((a, b) => compareSearchResults(a, b, urlQuery)),
-    [streamedOutcomes, urlQuery]
-  );
-  const list = useMemo(
-    () => searchQuery.data?.list ?? (isSearching ? streamedList : []),
-    [searchQuery.data, isSearching, streamedList]
-  );
+  const list = useMemo(() => searchQuery.data?.list ?? [], [searchQuery.data]);
   // 分批渲染：新一次搜索（查询/源选择/过滤条件变化）时重置回首批。
-  // 不能依赖 groups：流式搜索每追加一个源就会重建数组，会把「加载更多」反复重置。
   const [visibleCount, setVisibleCount] = useState(RESULT_PAGE_SIZE);
-  // 封面视觉指纹：浏览器经 /api/cover 取图后算 dHash，用于「同一张封面」聚合。
-  // 指纹还没算完的条目先不参与聚合，避免先按片名分组、随后又跳变。
-  //
-  // 只为「当前展示窗口 + 预热 1 页」的封面算指纹（2026-11-20）：原来把 list 里
-  // 最多 120 张封面全部入队，屏幕外没翻到、用户可能永远不会看的封面也会触发
-  // /api/cover Worker 请求，白白消耗配额和带宽。
-  const coverUrls = useMemo(() => {
-    const limit = visibleCount + RESULT_PAGE_SIZE;
-    const urls: string[] = [];
-    for (let i = 0; i < list.length && urls.length < limit; i++) {
-      const pic = list[i]?.pic;
-      if (typeof pic === 'string' && pic.length > 0 && !pic.startsWith('data:') && !pic.startsWith('blob:')) {
-        urls.push(pic);
-      }
-    }
-    return urls;
-  }, [list, visibleCount]);
-  const coverHashes = useCoverHashes(coverUrls);
-  const { hashOf: coverHashOf, isPending: coverIsPending } = coverHashes;
-  const hasResults = list.length > 0;
-  /**
-   * 首批结果「等齐再画」：**搜索流结算完 + 封面指纹都有结论**后整屏上屏，期间只显示骨架。
-   *
-   * 只等指纹不够：先结算的源会先上屏，后面陆续到的源再一张张冒出来（每张都
-   * invisible→visible），而且后到的条目还会把已上屏的卡合并掉——2026-11-20 用户
-   * 手机实测「风中有朵雨做的云」就是「闪来闪去」。等流结束再画一次，之后不再变化。
-   */
-  const [coverReady, setCoverReady] = useState(false);
-  /** 被封印的封面：本屏不再等它，也不接受它晚到的指纹参与分组 */
-  const [sealedCovers, setSealedCovers] = useState<ReadonlySet<string>>(() => new Set());
-  /** 本轮搜索的等待截止时间（从第一条结果出现起算，避免搜索本身慢导致提前放弃） */
-  const [coverDeadline, setCoverDeadline] = useState<number | null>(null);
-  // 定时器回调要读最新的窗口与 pending 判断，用 ref 兜住闭包
-  const coverWindowRef = useRef(coverUrls);
-  coverWindowRef.current = coverUrls;
-  const coverIsPendingRef = useRef(coverIsPending);
-  coverIsPendingRef.current = coverIsPending;
-
-  /** 封印当前窗口里还没结论的封面（不再等它，也不再让它的指纹改动本屏分组） */
-  const sealPendingCovers = useCallback(() => {
-    setSealedCovers((prev) => {
-      const next = new Set(prev);
-      for (const url of coverWindowRef.current) {
-        if (coverIsPendingRef.current(url)) next.add(url);
-      }
-      return next;
-    });
-  }, []);
-  /** 还没结论、也没被封印的封面数：封印后立刻归零，不必等它真的超时 */
-  const pendingCovers = useMemo(
-    () => coverUrls.filter((url) => !sealedCovers.has(url) && coverIsPending(url)).length,
-    [coverUrls, sealedCovers, coverIsPending]
-  );
-
-  useEffect(() => {
-    setCoverReady(false);
-    setSealedCovers(new Set());
-    setCoverDeadline(null);
-  }, [urlQuery]);
-
-  useEffect(() => {
-    if (!urlQuery || !hasResults) return;
-    setCoverDeadline((prev) => prev ?? Date.now() + COVER_HASH_SETTLE_TIMEOUT_MS);
-  }, [urlQuery, hasResults]);
-
-  useEffect(() => {
-    if (!urlQuery || !hasResults || coverReady) return;
-    // 放行条件：流结算完 且 指纹都已有结论（或已封印）
-    if (pendingCovers === 0 && !searchQuery.isFetching) {
-      setCoverReady(true);
-      return;
-    }
-    // 截止时间只负责「封印封面」，不负责放行：放行仍要等流结束，否则等于又把
-    // 半截结果画上屏、后面再变一次（用户明确不要这种变化）。
-    if (coverDeadline === null || pendingCovers === 0) return;
-    const remain = coverDeadline - Date.now();
-    if (remain <= 0) {
-      sealPendingCovers();
-      return;
-    }
-    const timer = window.setTimeout(sealPendingCovers, remain);
-    return () => window.clearTimeout(timer);
-  }, [
-    urlQuery,
-    hasResults,
-    coverReady,
-    pendingCovers,
-    coverDeadline,
-    sealPendingCovers,
-    searchQuery.isFetching,
-  ]);
-  /** 该封面是否已有最终结论（算完 / 失败 / 被封印）——没结论的条目不上屏 */
-  const coverSettled = useCallback(
-    (url?: string) => {
-      if (!url) return false;
-      if (sealedCovers.has(url)) return true;
-      return !coverIsPending(url);
-    },
-    [sealedCovers, coverIsPending]
-  );
-  /**
-   * 已经上过屏的条目（`sourceKey_vodId`）：一旦显示就永不隐藏。
-   *
-   * 为什么需要：指纹窗口是从 `list` 现算的，流式追加 / `done` 重排会让「窗口外的条目」
-   * 先按片名兜底上屏、随后又被划进窗口变成 pending 而被抽走，卡片数量在 7↔8 之间来回跳
-   * （2026-11-20 本地手机尺寸实测「风中有朵雨做的云」8s 内卡片数反复增减）。
-   */
-  const shownItemsRef = useRef(new Set<string>());
-  /**
-   * 指纹 → 分组代表（sticky）：一个封面的分组 key 一旦分配就不再改变。
-   *
-   * `clusterCoverHashes` 的代表取簇内字典序最小值：新封面并入簇时代表会变，
-   * 对应卡片的 React key 随之变化 → 整卡重挂载 → 封面重新解码显示，肉眼就是「闪」。
-   * 实测同一次搜索里同一张卡被重建了几百次。
-   */
-  const stickyRepRef = useRef(new Map<string, string>());
-  useEffect(() => {
-    shownItemsRef.current = new Set();
-    stickyRepRef.current = new Map();
-  }, [urlQuery]);
-  /**
-   * 展示用的条目：分组结论已定稿、且**确实有封面图**的。
-   *
-   * - 「等齐再画」期间返回空数组，页面显示骨架（不先画一批再重组）；
-   * - 取图/解码失败的条目照常展示（失败也是结论）：代理拿不到图不代表浏览器显示不出来
-   *   （很多图床直连正常、Worker 出网 525），隐藏等于吞掉真实来源；真显示不出来由卡片的
-   *   onCoverBroken 整卡处理；
-   * - 源站根本没给封面（没有 pic）的条目仍然隐藏：渲染不出封面，只会多一张胶片占位卡。
-   */
-  const visibleList = useMemo(() => {
-    if (!coverReady) return [];
-    const shown = shownItemsRef.current;
-    const next: SearchResultItem[] = [];
-    for (const item of list) {
-      if (!item.pic?.trim()) continue;
-      const key = `${item.sourceKey}_${item.vodId}`;
-      // 已上过屏：无条件保留，别再因为「被划进指纹窗口」而抽走（会闪）
-      if (shown.has(key)) {
-        next.push(item);
-        continue;
-      }
-      if (!coverSettled(item.pic)) continue;
-      shown.add(key);
-      next.push(item);
-    }
-    return next;
-  }, [coverReady, list, coverSettled]);
-  const coverHashMap = useMemo(() => {
-    const pairs: Array<[string, string]> = [];
-    for (const url of coverUrls) {
-      // 封印的封面不参与分组：晚到的指纹只写缓存，否则整屏会重新合组
-      if (sealedCovers.has(url)) continue;
-      const hash = coverHashOf(url);
-      if (hash) pairs.push([url, hash]);
-    }
-    const map = new Map<string, string>();
-    if (pairs.length === 0) return map;
-    // 先在页面侧聚一次，再把「簇代表」按首次分配固定下来；传给 aggregateResults 时
-    // 用 maxHashDistance=0，避免它再算出会变化的代表（key 稳定性优先于重新聚类）。
-    const clusters = clusterCoverHashes(pairs.map(([, hash]) => hash));
-    const sticky = stickyRepRef.current;
-    for (const [url, hash] of pairs) {
-      const rep = clusters.get(hash) ?? hash;
-      const canonical = sticky.get(rep) ?? sticky.get(hash) ?? rep;
-      sticky.set(hash, canonical);
-      sticky.set(rep, canonical);
-      map.set(url, canonical);
-    }
-    return map;
-  }, [coverUrls, coverHashOf, sealedCovers]);
-
-  /**
-   * 封面在浏览器里根本显示不出来的组（图床不可达 / 防盗链 / 混合内容）：
-   * 这类条目算不出可展示的封面，卡片只剩胶片占位图（线上「色戒」的 thzpic 源就是这样），
-   * 卡片自己回报后整卡隐藏。失败状态是会话级的，刷新会重新尝试。
-   */
-  const [brokenCovers, setBrokenCovers] = useState<ReadonlySet<string>>(() => new Set());
-  const markCoverBroken = useCallback((key: string) => {
-    setBrokenCovers((prev) => {
-      if (prev.has(key)) return prev;
-      const next = new Set(prev);
-      next.add(key);
-      return next;
-    });
-  }, []);
-  useEffect(() => {
-    setBrokenCovers(new Set());
-  }, [urlQuery]);
-
-  // 跨源聚合：视觉指纹相同（同一张封面）合并为一张卡片，展开后可选择具体来源。
-  // maxHashDistance=0：聚类已经在上面用 sticky canonical 固定过，这里只做「同值并组」，
-  // 避免再算出一个会随新封面变化的分组代表（那会让卡片 key 变化 → 整卡重挂载 → 闪）。
+  const primaryGroups = useMemo(() => aggregateResults(list), [list]);
   const groups = useMemo(
     () =>
-      aggregateResults(visibleList, { coverHashes: coverHashMap, maxHashDistance: 0 }).filter(
-        (group) => !brokenCovers.has(group.key)
-      ),
-    [visibleList, coverHashMap, brokenCovers]
+      expandedQuery.data
+        ? mergeExpandedGroups(primaryGroups, expandedQuery.data.list)
+        : primaryGroups,
+    [primaryGroups, expandedQuery.data]
   );
   // 结果标签自动生成筛选项：只收集当前结果里出现过的类型 / 年份 / 18禁
   const facets = useMemo(() => buildFacets(groups, filters), [groups, filters]);
   const filteredGroups = useMemo(() => filterGroups(groups, filters), [groups, filters]);
   const filtersActive = hasActiveFilters(filters);
-  /** 条数从组里统计：封面显示失败被整卡隐藏的来源不该再计入 */
+  /** 条数从聚合组统计，与结果头「N 条」口径一致 */
   const visibleSourceCount = useMemo(
     () => groups.reduce((sum, group) => sum + group.items.length, 0),
     [groups]
@@ -444,13 +223,12 @@ function HomeContent() {
    * 本次搜索里被「成人内容过滤」隐藏的相关条数。
    * 原来被过滤的结果静默消失，用户只看到空态，容易误判成「没有片源」。
    */
-  const filteredAdultCount = searchQuery.data?.filteredAdultCount ?? 0;
+  const filteredAdultCount =
+    (searchQuery.data?.filteredAdultCount ?? 0) + (expandedQuery.data?.filteredAdultCount ?? 0);
 
-  // 分批渲染的计数已在上方声明（封面指纹窗口要用到它）。
   /**
-   * 翻过页之后冻结当前顺序。
-   * 搜索结果是流式的：源陆续结算、`done` 时还会整体按相关性重排。用户已经翻到第二页时
-   * 再跟着重排，正在看的卡片会被顶走；冻结后新条目只追加到尾部，顺序由用户点按钮才更新。
+   * 翻过页之后冻结当前顺序：扩搜或筛选更新时，正在看的卡片不被顶走。
+   * 扩搜本身已经在 mergeExpandedGroups 里冻结旧组，这里再兜住分页边界。
    */
   const [frozenKeys, setFrozenKeys] = useState<string[] | null>(null);
   const orderedGroups = useMemo(
@@ -474,7 +252,30 @@ function HomeContent() {
   useEffect(() => {
     setVisibleCount(RESULT_PAGE_SIZE);
     setFrozenKeys(null);
-  }, [urlQuery, selectedKeys, yellowFilter, filters]);
+  }, [urlQuery, expansionScope, filters]);
+
+  const canExpand =
+    sourceTiers.tiered && expandedSourceKeys.length > 0 && Boolean(searchQuery.data);
+  const expandBusy = expansionRequested && expandedQuery.isFetching;
+  const expandFailed = expansionRequested && expandedQuery.isError;
+  const moreSourcesAction =
+    canExpand && (!expansionRequested || expandBusy || expandFailed) ? (
+      <button
+        type="button"
+        className="btn-ghost btn-sm"
+        disabled={expandBusy}
+        onClick={() => {
+          if (expansionRequested) void expandedQuery.refetch();
+          else setExpandScope(expansionScope);
+        }}
+      >
+        {expandBusy
+          ? '正在搜索更多源…'
+          : expandFailed
+            ? `重试搜索更多源（剩余 ${expandedSourceKeys.length} 个）`
+            : `搜索更多源（剩余 ${expandedSourceKeys.length} 个）`}
+      </button>
+    ) : null;
 
   const loadMore = () => {
     // 先冻结再增加：这一批之后的任何重排都不再影响已渲染的卡片
@@ -634,17 +435,15 @@ function HomeContent() {
               <h2 className="w-full text-sm text-muted sm:w-auto">
                 “<span className="text-content">{urlQuery}</span>” 的搜索结果
                 {isSearching ? (
-                  <span className="text-faint">
-                    （{streamedOutcomes.length}/{selectedSources.length} 源已完成）
-                  </span>
+                  <span className="text-faint">（搜索中…）</span>
                 ) : (
                   searchQuery.data && (
                     <span className="text-faint">
-                      {hasResults && !coverReady
-                        ? '（加载中…）'
-                        : filtersActive
-                          ? `（筛选出 ${filteredGroups.length} 部 · ${filteredSourceCount} 条 / 共 ${groups.length} 部 · ${visibleList.length} 条）`
-                          : `（${groups.length} 部 · ${visibleSourceCount} 条）`}
+                      {filtersActive
+                        ? `（筛选出 ${filteredGroups.length} 部 · ${filteredSourceCount} 条 / 共 ${groups.length} 部 · ${visibleSourceCount} 条）`
+                        : `（${groups.length} 部 · ${visibleSourceCount} 条）`}
+                      {expandBusy ? ' · 正在搜索更多源…' : ''}
+                      {!expandBusy && expandFailed ? ' · 更多源搜索失败' : ''}
                     </span>
                   )
                 )}
@@ -670,11 +469,10 @@ function HomeContent() {
 
             {selectedSources.length === 0 ? (
               <NoSourceGuide hasSources={customAPIs.length > 0 || envSources.length > 0} />
-            ) : list.length > 0 ? (
-              // 指纹没齐之前只显示骨架：先画一批再合组就是「跳变」的来源
-              !coverReady ? (
-                <ResultsSkeleton />
-              ) : filteredGroups.length > 0 ? (
+            ) : isSearching || (expandBusy && groups.length === 0) ? (
+              <ResultsSkeleton />
+            ) : groups.length > 0 ? (
+              filteredGroups.length > 0 ? (
                 <>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 items-start">
                     {visibleGroups.map((group) => (
@@ -684,7 +482,6 @@ function HomeContent() {
                         sources={selectedSources}
                         onOpen={openDetail}
                         onPlay={playBest}
-                        onCoverBroken={markCoverBroken}
                       />
                     ))}
                   </div>
@@ -704,6 +501,11 @@ function HomeContent() {
                       </button>
                     </div>
                   )}
+                  {moreSourcesAction && (
+                    <div className="mt-4 flex justify-center">
+                      {moreSourcesAction}
+                    </div>
+                  )}
                 </>
               ) : (
                 <EmptyState
@@ -717,12 +519,15 @@ function HomeContent() {
                   className="!py-16"
                 />
               )
-            ) : isSearching ? (
-              <ResultsSkeleton />
             ) : (
               <EmptyState
                 icon="search"
-                title="没有找到匹配的结果"
+                title={expandFailed ? '更多源搜索失败，当前结果已保留' : '没有找到匹配的结果'}
+                action={
+                  moreSourcesAction ? (
+                    <div className="flex flex-col items-center gap-2">{moreSourcesAction}</div>
+                  ) : undefined
+                }
                 className="!py-16"
               />
             )}

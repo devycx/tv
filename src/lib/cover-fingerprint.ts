@@ -48,10 +48,25 @@ export function coverFingerprint(raw?: string): string | undefined {
   const compact = stem.replace(/[-_]/g, '');
   if (CONTENT_HASH.test(compact)) return `hash:${compact}`;
 
-  // 相对地址没有可比对的 host：只能按路径归一，保持与旧行为一致的保守合并
-  if (url.hostname === 'relative.invalid') return `path:${path}`;
+  // 仅移除明确的缓存 busting / 追踪参数；id、签名、图片处理指令都可能改变实际图片，
+  // 不能像旧版那样把整个 query 一刀切掉。hash 文件名本身已经是跨站内容身份，不拼 query。
+  for (const key of [...url.searchParams.keys()]) {
+    const lower = key.toLowerCase();
+    if (lower === 't' || lower === '_' || lower === 'v' || lower.startsWith('utm_')) {
+      url.searchParams.delete(key);
+    }
+  }
+  const query = url.search;
 
-  // www 前缀不影响图床身份；保留 host 是为了避免不同站点的同名文件被误合并
-  const host = url.hostname.toLowerCase().replace(/^www\./, '');
-  return `url:${host}${path}`;
+  // 相对地址没有 host：路径与保留下来的语义 query 共同决定身份。
+  if (url.hostname === 'relative.invalid') return `path:${path}${query}`;
+
+  // www 前缀不影响图床身份；豆瓣的编号 img 域与已知反代都只是同图镜像。
+  const hostname = url.hostname.toLowerCase().replace(/^www\./, '');
+  const host = /^(?:img\d*\.)?doubanio\.com$/.test(hostname) ||
+    /^img\.doubanio\.cmliussss\.(?:com|net)$/.test(hostname) ||
+    hostname === 'doubanio.viki.moe'
+    ? 'doubanio.com'
+    : hostname;
+  return `url:${host}${path}${query}`;
 }

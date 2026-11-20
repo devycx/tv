@@ -1,31 +1,12 @@
 /**
- * 搜索结果聚合（纯函数，便于单测）：把扁平的多源结果聚成「一张封面 = 一张卡片」。
+ * 搜索结果的零网络聚合：封面 URL 指纹优先，片名 + 年份兜底。
  *
- * 身份判定分两层：
- * 1. **封面视觉指纹**（浏览器算的 dHash）：同一张图换域名/文件名/分辨率/压缩率 →
- *    同一组，片名/年份/变体都不参与拆分。**同封面跨年也并**（2026-11-18 用户明确
- *    回滚跨年护栏）：即使两个条目的四位年份不同，共享封面仍然并组——采集站错挂
- *    年度海报时可能把不同年代并成一张卡，这个代价用户已知并接受；
- * 2. **片名 + 年份**再兜一层：同名同年即使封面不同（剧版/影版海报、不同扫描件、
- *    源站配错图）也并进同一组——用户明确要求「同一部片就并到一起，剧版和电影版
- *    并到一张卡也不影响」。
- *
- * **变体（电影解说 / 沉浸版 / 预告片 …）只看封面**（2026-11-19 用户口径）：
- * 它们常直接复用正片海报；只要封面一致就并进同一张卡，不能因为片名后缀不同拆卡。
- * 区别放在来源行上（`search-variants.ts` 的 `variantOf`）用标签标明。
- * 只有拿不到封面、退回片名兜底时，二创解说（`c:`）才仍与正片（`f:`）分开，
- * 避免没有封面的解说源混进正片来源列表。
- *
- * 为什么不再「指纹不同就一律拆开」：实测 21 张真实海报两两 dHash 距离中位数 **32**、
- * 最小 24（见 docs/search-cover-aggregation.md §9），「同一部片的两张不同海报」
- * 和「两部不相干的片」完全落在同一区间——把全局阈值从 10 提到 28+ 会随机并掉不相干
- * 的影片，提不到 28 又并不到剧/影。所以阈值留在 10（同图 0–4 vs 不同图 24+，余量最大），
- * 「同片不同海报」交给片名 + 年份这一层。
+ * 不再取图、解码或计算 dHash。两个身份层仍通过并查集连通，因此同封面可跨片名/
+ * 年份合并，同名同年也可跨不同海报合并；电影解说等变体沿用现有产品口径。
  */
 
 import { normalizeTitle } from './cms-parser';
 import { coverFingerprint } from './cover-fingerprint';
-import { clusterCoverHashes } from './cover-visual-hash';
 import { inferGroupRemarks } from './remarks';
 import { isCommentaryName } from './search-variants';
 import type { SearchResultItem } from './types';
@@ -40,14 +21,29 @@ export interface AggregatedGroup {
   items: SearchResultItem[];
 }
 
-export interface AggregateOptions {
-  /** 封面 URL → 视觉指纹（dHash）；由页面在浏览器里异步算好后传入 */
-  coverHashes?: ReadonlyMap<string, string>;
-  /** 两个指纹允许的最大汉明距离，默认见 cover-visual-hash */
-  maxHashDistance?: number;
+const QUALITY_LABEL = '(?:hd|4k|2160p|1080p|720p|蓝光|国语|中字|tc|ts)';
+const BRACKETED_QUALITY_SUFFIX = new RegExp(
+  `[\\[【(（]\\s*${QUALITY_LABEL}(?:[\\s_\\-/|]+${QUALITY_LABEL})*\\s*[\\]】)）]\\s*$`,
+  'iu'
+);
+const PLAIN_QUALITY_SUFFIX = new RegExp(`(?:\\s+|[._\\-—–|/\\\\]+)${QUALITY_LABEL}\\s*$`, 'iu');
+
+/**
+ * 聚合专用片名归一：只剥离末尾清晰度/音轨标签，不改变搜索相关性使用的 normalizeTitle。
+ * 季数、年番、特别篇、剧场版、导演剪辑版等作品区分词一律保留。
+ */
+export function normalizeGroupTitle(raw: string): string {
+  let title = raw.trim();
+  // 多个标签常连写（如「片名[4K][国语]」），每次只剥最末一个，设置上限防御异常输入。
+  for (let i = 0; i < 6; i += 1) {
+    const next = title.replace(BRACKETED_QUALITY_SUFFIX, '').replace(PLAIN_QUALITY_SUFFIX, '').trim();
+    if (next === title) break;
+    title = next;
+  }
+  return normalizeTitle(title);
 }
 
-/** 出现次数最多的值；并列时取列表里先出现的（列表已按相关性排序） */
+/** 出现次数最多的值；并列时取列表里先出现的（列表已按相关性排序）。 */
 function mostCommon(values: Array<string | undefined>): string | undefined {
   const counts = new Map<string, { count: number; first: number }>();
   values.forEach((raw, index) => {
@@ -67,11 +63,7 @@ function mostCommon(values: Array<string | undefined>): string | undefined {
   return best?.value;
 }
 
-/**
- * 组标题：优先选「更干净」的写法（不带年份后缀、不带括号附注、更短），
- * 其次看出处数量。源站常给片名追加「2007」「Samsara」「[电影解说]」之类后缀，
- * 同一张封面下按出处数量取多数会选中「色戒2007」这种不适合当标题的写法。
- */
+/** 组标题优先「不带年份/括号附注、更短」的写法，其次看出处数量。 */
 function groupName(items: SearchResultItem[]): string {
   const counts = new Map<string, number>();
   for (const item of items) {
@@ -104,47 +96,26 @@ function groupName(items: SearchResultItem[]): string {
   return best?.name ?? '';
 }
 
-/** 条目的聚合键：视觉指纹优先；其次 URL 指纹；最后「片名 + 年份」 */
-function groupKeyOf(
-  item: SearchResultItem,
-  coverHashes: ReadonlyMap<string, string> | undefined,
-  clusters: ReadonlyMap<string, string>
-): string {
-  const pic = item.pic?.trim();
-  const visual = pic ? coverHashes?.get(pic) : undefined;
-  if (visual) {
-    // 同图不同副本的 dHash 只差几位，用簇代表（字典序最小）作为稳定 key。
-    // 这里**不带**正片/解说前缀：同封面 = 同一张卡，变体在来源行上标注。
-    return `visual:${clusters.get(visual) ?? visual}`;
-  }
-
-  const cover = coverFingerprint(pic);
-  if (cover) return `cover:${cover}`;
-  return titleKeyOf(item) ?? '';
-}
-
-/**
- * 「片名 + 年份」键：视觉指纹之外的第二次并组。
- *
- * 同名同年一律并到一起（用户 2026-11-16 明确要求，剧版/影版并一张卡也接受）；
- * 跨年不并（《色戒》2002 与 2007 是两部片）。这是**拿不到封面时**的兜底，
- * 所以二创解说（`c:`）仍与正片（`f:`）分开：同封面时由视觉指纹层并组，
- * 没封面时不能把解说混进正片来源。
- * 拿不到片名时返回 undefined，不参与并组。
- */
 function titleKeyOf(item: SearchResultItem): string | undefined {
   const name = (item.name || '').trim();
   if (!name) return undefined;
   const variant = isCommentaryName(name) ? 'c' : 'f';
-  return `${variant}:title:${normalizeTitle(name)}|${(item.year ?? '').trim()}`;
+  return `${variant}:title:${normalizeGroupTitle(name)}|${(item.year ?? '').trim()}`;
+}
+
+function coverKeyOf(item: SearchResultItem): string | undefined {
+  const cover = coverFingerprint(item.pic);
+  return cover ? `cover:${cover}` : undefined;
+}
+
+/** URL 指纹优先；没有封面时退回片名 + 年份。 */
+function groupKeyOf(item: SearchResultItem): string {
+  return coverKeyOf(item) ?? titleKeyOf(item) ?? '';
 }
 
 /**
- * 组封面：优先取正片来源的图。
- *
- * 合并解说/沉浸版后，组内第一条可能是变体（它复用了正片海报，通常同图；
- * 但按片名兜底并组时可能不同图）。封面直达播放取的是正片，卡片封面也应
- * 尽量和它一致，避免点封面时看到的图属于另一条内容。
+ * 封面取输入顺序中第一个正片来源：首轮结果先于扩搜结果，因此高优 Tier 1 的图
+ * 不会被后到的 Tier 2 抢走；没有正片时才使用变体封面。
  */
 function groupCover(items: SearchResultItem[]): string | undefined {
   const withPic = items.filter((item) => item.pic?.trim());
@@ -154,47 +125,21 @@ function groupCover(items: SearchResultItem[]): string | undefined {
 
 function buildGroup(key: string, items: SearchResultItem[]): AggregatedGroup {
   return {
-    // key 只由封面/片名决定，不能带 items：流式搜索期间逐源追加结果时 key 必须稳定，
-    // 否则 React 会整卡重挂载（展开的来源列表收起、画质探测状态清零）。
     key,
     name: groupName(items),
     year: mostCommon(items.map((item) => item.year)),
     typeName: mostCommon(items.map((item) => item.typeName)),
     pic: groupCover(items),
-    // 同一部剧各源文案详略不同（「全34集」/「完结」/「更新至34集」），推到统一结论
     remarks: inferGroupRemarks(items.map((item) => item.remarks)),
     items,
   };
 }
 
-/**
- * 按「封面视觉指纹」+「片名 + 年份」两层身份聚合搜索结果。
- * 返回顺序沿用传入顺序（搜索结果已按相关性排序），组的位置取组内第一条出现的位置。
- */
-export function aggregateResults(
-  list: SearchResultItem[],
-  options: AggregateOptions = {}
-): AggregatedGroup[] {
-  const { coverHashes, maxHashDistance } = options;
-  const clusters =
-    coverHashes && coverHashes.size > 0
-      ? clusterCoverHashes(coverHashes.values(), maxHashDistance)
-      : new Map<string, string>();
-
+/** 纯函数聚合，返回顺序沿用输入中各组第一次出现的位置。 */
+export function aggregateResults(list: SearchResultItem[]): AggregatedGroup[] {
   const named = list.filter((item) => (item.name || '').trim());
   if (named.length === 0) return [];
 
-  /**
-   * 并查集：每个条目先有 primary 键（视觉/URL/片名指纹），再把 primary 和
-   * 「片名 + 年份」键连起来——同名同年的不同封面因此进同一组。
-   *
-   * 根取**先出现**的键：流式搜索是按源追加结果的，取最早出现的键能保证已有分组
-   * 的 key 不因后续条目而改变（key 变了 React 会整卡重挂载）。
-   *
-   * 这里**不做跨年拦截**（2026-11-18 用户确认回滚）：同封面 + 不同年份仍并组。
-   * 曾经的 rootYear 护栏会拒绝两个明确年份不同的分量合并，但它同时拆掉了
-   * 「同一部片被源站写成不同年份」的合并，用户选择恢复「同封面必并」。
-   */
   const parent = new Map<string, string>();
   const seenAt = new Map<string, number>();
   let seq = 0;
@@ -205,7 +150,6 @@ export function aggregateResults(
       seenAt.set(key, seq++);
     }
   };
-
   const find = (key: string): string => {
     let root = key;
     while (parent.get(root) !== root) root = parent.get(root) as string;
@@ -217,7 +161,6 @@ export function aggregateResults(
     }
     return root;
   };
-
   const union = (a: string, b: string): void => {
     const rootA = find(a);
     const rootB = find(b);
@@ -226,10 +169,8 @@ export function aggregateResults(
     parent.set(drop, keep);
   };
 
-  const primaryOf = (item: SearchResultItem): string => groupKeyOf(item, coverHashes, clusters);
-
   for (const item of named) {
-    const primary = primaryOf(item);
+    const primary = groupKeyOf(item);
     add(primary);
     const titleKey = titleKeyOf(item);
     if (!titleKey) continue;
@@ -239,11 +180,100 @@ export function aggregateResults(
 
   const buckets = new Map<string, SearchResultItem[]>();
   for (const item of named) {
-    const key = find(primaryOf(item));
+    const key = find(groupKeyOf(item));
     const bucket = buckets.get(key);
     if (bucket) bucket.push(item);
     else buckets.set(key, [item]);
   }
-
   return [...buckets].map(([key, items]) => buildGroup(key, items));
+}
+
+function itemId(item: SearchResultItem): string {
+  return `${item.sourceKey}_${item.vodId}`;
+}
+
+/**
+ * 把按需扩搜结果并入首轮分组，且绝不桥接、删除或重排首轮卡片。
+ *
+ * 直接对两批结果重新跑并查集会让一个 Tier 2 条目把两个 Tier 1 组连成一组，
+ * 导致前排卡片突然塌陷。这里改为分组级合并：封面匹配优先，其次片名年份；
+ * 命中多个旧组时只选第一个，不改旧组身份。纯新增组按扩搜顺序追加到末尾。
+ */
+export function mergeExpandedGroups(
+  baseGroups: readonly AggregatedGroup[],
+  expandedItems: readonly SearchResultItem[]
+): AggregatedGroup[] {
+  const groups = baseGroups.map((group) => ({ ...group, items: [...group.items] }));
+  const coverOwner = new Map<string, number>();
+  const titleOwner = new Map<string, number>();
+  const usedItems = new Set<string>();
+  const usedGroupKeys = new Set<string>();
+
+  const register = (index: number, items: readonly SearchResultItem[]): void => {
+    for (const item of items) {
+      usedItems.add(itemId(item));
+      const cover = coverKeyOf(item);
+      const title = titleKeyOf(item);
+      if (cover && !coverOwner.has(cover)) coverOwner.set(cover, index);
+      if (title && !titleOwner.has(title)) titleOwner.set(title, index);
+    }
+  };
+  groups.forEach((group, index) => {
+    usedGroupKeys.add(group.key);
+    register(index, group.items);
+  });
+
+  const uniqueExpanded: SearchResultItem[] = [];
+  for (const item of expandedItems) {
+    const id = itemId(item);
+    if (usedItems.has(id)) continue;
+    usedItems.add(id);
+    uniqueExpanded.push(item);
+  }
+
+  for (const expanded of aggregateResults(uniqueExpanded)) {
+    let target: number | undefined;
+    for (const item of expanded.items) {
+      const cover = coverKeyOf(item);
+      const owner = cover ? coverOwner.get(cover) : undefined;
+      if (owner !== undefined) {
+        target = owner;
+        break;
+      }
+    }
+    if (target === undefined) {
+      for (const item of expanded.items) {
+        const title = titleKeyOf(item);
+        const owner = title ? titleOwner.get(title) : undefined;
+        if (owner !== undefined) {
+          target = owner;
+          break;
+        }
+      }
+    }
+
+    if (target !== undefined) {
+      const current = groups[target];
+      const merged = buildGroup(current.key, [...current.items, ...expanded.items]);
+      groups[target] = {
+        ...merged,
+        // 已上屏卡片只增加来源数；标题与展示元数据不被长尾源改写。
+        name: current.name,
+        year: current.year,
+        typeName: current.typeName,
+        pic: current.pic,
+        remarks: current.remarks,
+      };
+      register(target, expanded.items);
+      continue;
+    }
+
+    let key = expanded.key;
+    while (usedGroupKeys.has(key)) key = `expanded:${key}`;
+    usedGroupKeys.add(key);
+    groups.push({ ...expanded, key });
+    register(groups.length - 1, expanded.items);
+  }
+
+  return groups;
 }

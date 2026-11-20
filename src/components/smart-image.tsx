@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { buildImageCandidates } from '@/lib/utils';
 
 interface SmartImageProps {
@@ -13,13 +13,16 @@ interface SmartImageProps {
   loading?: 'lazy' | 'eager';
   /** 候选链耗尽后回调，调用方切换占位图等兜底 UI */
   onExhausted?: () => void;
-  /** 当前候选图真正解码成功（可用于「图加载好再显示卡片」，避免灰色占位闪现） */
-  onLoad?: () => void;
+  /** 当前候选图真正解码成功；cacheHit=true 表示浏览器缓存命中，可直接显示、跳过淡入 */
+  onLoad?: (cacheHit?: boolean) => void;
 }
+
+/** 浏览器已在挂载前完成解码时，在首帧前补发 onLoad，避免缓存命中还闪一下 shimmer。 */
+const useBrowserLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect;
 
 /**
  * 带降级链的封面图组件：按 buildImageCandidates 的顺序加载，onError 逐级回退
- * （豆瓣图：公共镜像 → 原站直连）。全部失败后触发 onExhausted 并停止渲染，由调用方展示占位图。
+ * （豆瓣图：公共镜像 → 原站直连）。全部失败后触发 onExhausted，由调用方展示占位图。
  * 封面全部由浏览器直连，不经本站 Worker；referrerPolicy=no-referrer 规避部分图床的 Referer 校验。
  */
 export function SmartImage({
@@ -33,33 +36,39 @@ export function SmartImage({
   onLoad,
 }: SmartImageProps) {
   const candidates = buildImageCandidates(url, mode, customProxy);
-  const [idx, setIdx] = useState(0);
+  const candidateKey = `${url ?? ''}\u0000${mode}\u0000${customProxy}`;
+  /** 进度与候选链绑定：url/mode 变化的同一帧就回到第 0 张，不会先消费旧下标。 */
+  const [progress, setProgress] = useState({ key: candidateKey, index: 0 });
+  const idx = progress.key === candidateKey ? progress.index : 0;
   const imgRef = useRef<HTMLImageElement | null>(null);
-  // 回调放进 ref：父级常传内联函数，直接进 effect 依赖会反复执行
   const onLoadRef = useRef(onLoad);
+  const onExhaustedRef = useRef(onExhausted);
   onLoadRef.current = onLoad;
+  onExhaustedRef.current = onExhausted;
 
-  // 地址或加载方式变化时重置降级进度
-  useEffect(() => setIdx(0), [url, mode, customProxy]);
-  useEffect(() => {
-    if (idx >= candidates.length) onExhausted?.();
-    // 候选数组随 url/mode 变化，length 是充分的稳定信号
-  }, [idx, candidates.length, onExhausted]);
+  const advance = (): void => {
+    setProgress((prev) => ({
+      key: candidateKey,
+      index: (prev.key === candidateKey ? prev.index : 0) + 1,
+    }));
+  };
 
   const src = candidates[idx];
 
   /**
-   * 缓存命中的图片可能在 React 挂载监听之前就已是 complete 状态，原生 load 事件
-   * 不会再补发——只靠 onLoad 会让等待方永远以为没加载好。这里按 src 同步补查一次：
-   * 已成功则补发 onLoad，已失败则直接推进候选链。
+   * 缓存命中时浏览器不会补发 load 事件：按 src 补查一次，已成功则带上 cacheHit=true。
+   * 失败则推进候选链；SVG 可以合法地没有固有尺寸，不能按坏图处理。
    */
-  useEffect(() => {
+  useBrowserLayoutEffect(() => {
     const el = imgRef.current;
     if (!el || !el.complete) return;
-    if (el.naturalWidth > 0) onLoadRef.current?.();
-    // SVG 可以合法地没有固有尺寸（naturalWidth 0），不能按坏图推进候选链
-    else if (!/\.svg(?:[?#]|$)/i.test(src ?? '')) setIdx((i) => i + 1);
+    if (el.naturalWidth > 0) onLoadRef.current?.(true);
+    else if (!/\.svg(?:[?#]|$)/i.test(src ?? '')) advance();
   }, [src]);
+
+  useEffect(() => {
+    if (idx >= candidates.length) onExhaustedRef.current?.();
+  }, [idx, candidates.length]);
 
   if (!src) return null;
   return (
@@ -70,9 +79,10 @@ export function SmartImage({
       alt={alt}
       className={className}
       loading={loading}
+      decoding="async"
       referrerPolicy="no-referrer"
-      onLoad={() => onLoadRef.current?.()}
-      onError={() => setIdx((i) => i + 1)}
+      onLoad={() => onLoadRef.current?.(false)}
+      onError={advance}
     />
   );
 }

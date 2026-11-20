@@ -5,16 +5,14 @@ import { fetchUpstream } from '@/lib/fetch-utils';
 export const runtime = 'nodejs';
 
 /**
- * 封面取图代理，**只服务搜索页的封面感知哈希**，不用于页面展示。
- *
- * 为什么需要它：浏览器直连图床时 canvas 会被跨域污染，`getImageData` 读不到像素，
- * 而「同封面合并」必须比较像素。这里把图取回同源，客户端再用 9×8 canvas 算 dHash。
+ * 保留的登录取图代理。搜索页已改为零网络 URL 指纹，不再为 dHash 调用这里；
+ * 路由继续兼容显式代理场景，并强制至少一天的浏览器私有缓存。
  *
  * 约束：
  * - 必须登录（不是开放代理）；每次请求只取一张图；
  * - 复用 fetchUpstream 的 SSRF 防护（逐跳校验重定向），挡内网/保留地址；
  * - 只接受图片内容（content-type 或图片扩展名），单张上限 3MB；
- * - 浏览器私有缓存 7 天：同一张封面只取一次，哈希本身还会存 localStorage。
+ * - 浏览器私有缓存 1 天：覆盖上游 no-cache/no-store，重复访问直接复用。
  */
 const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 const IMAGE_EXT = /\.(?:jpe?g|png|webp|gif|avif|bmp|jxl)(?:$|[?#])/i;
@@ -79,7 +77,7 @@ export async function GET(req: Request) {
     headers: {
       'Content-Type': contentType.startsWith('image/') ? contentType : 'application/octet-stream',
       'Content-Length': String(body.byteLength),
-      'Cache-Control': 'private, max-age=604800, immutable',
+      'Cache-Control': 'private, max-age=86400',
       'X-Content-Type-Options': 'nosniff',
       // 即便透传的图片类型有意外，也不允许它作为同源文档执行脚本
       'Content-Security-Policy': "default-src 'none'; sandbox",

@@ -18,13 +18,15 @@
       "key": "env_2",
       "name": "无尽资源",
       "url": "https://api.wujinapi.me/api.php/provide/vod",
-      "isAdult": false
+      "isAdult": false,
+      "tier": 1
     },
     {
       "key": "env_3",
       "name": "极速资源",
       "url": "https://jszyapi.com/api.php/provide/vod",
-      "isAdult": false
+      "isAdult": false,
+      "tier": 1
     },
     {
       "key": "env_4",
@@ -36,13 +38,15 @@
       "key": "env_5",
       "name": "暴风资源",
       "url": "https://bfzyapi.com/api.php/provide/vod",
-      "isAdult": false
+      "isAdult": false,
+      "tier": 1
     },
     {
       "key": "env_6",
       "name": "优酷资源",
       "url": "https://api.ukuapi88.com/api.php/provide/vod",
-      "isAdult": false
+      "isAdult": false,
+      "tier": 1
     },
     {
       "key": "env_7",
@@ -54,13 +58,15 @@
       "key": "env_8",
       "name": "豪华资源",
       "url": "https://hhzyapi.com/api.php/provide/vod",
-      "isAdult": false
+      "isAdult": false,
+      "tier": 1
     },
     {
       "key": "env_9",
       "name": "魔都资源",
       "url": "https://www.mdzyapi.com/api.php/provide/vod",
-      "isAdult": false
+      "isAdult": false,
+      "tier": 1
     },
     {
       "key": "env_10",
@@ -78,7 +84,8 @@
       "key": "env_12",
       "name": "速播资源",
       "url": "https://subocj.com/api.php/provide/vod",
-      "isAdult": false
+      "isAdult": false,
+      "tier": 1
     },
     {
       "key": "env_13",
@@ -108,7 +115,8 @@
       "key": "env_17",
       "name": "┃量子┃资源",
       "url": "https://lzizy1.com/api.php/provide/vod",
-      "isAdult": false
+      "isAdult": false,
+      "tier": 1
     },
     {
       "key": "env_18",

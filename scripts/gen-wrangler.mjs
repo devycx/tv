@@ -7,7 +7,10 @@ import fs from 'node:fs';
  * - DEFAULT_SOURCES：部署者预置点播源，登录后自动勾选，开箱即搜
  * - DEFAULT_LIVE_SOURCES：部署者预置直播源，/live 页直接可看
  *
- * 修改源列表后重跑本脚本 + `npx wrangler deploy` 即可。
+ * 修改源列表后重跑本脚本生成 wrangler 配置与首屏 bootstrap。
+ *
+ * tier: 1 是默认首轮搜索的 8 个主力源（2026-11-20 按线上实测速度与片库互补精选）；
+ * 其余源只在用户点击「搜索更多源」后查询。用户手动改过选源时不启用分层。
  */
 
 /**
@@ -33,22 +36,22 @@ import fs from 'node:fs';
 const sources = [
   { name: '电影天堂', url: 'http://caiji.dyttzyapi.com/api.php/provide/vod', isAdult: false },
   { name: '飘零资源', url: 'https://p2100.net/api.php/provide/vod', isAdult: false },
-  { name: '无尽资源', url: 'https://api.wujinapi.me/api.php/provide/vod', isAdult: false },
-  { name: '极速资源', url: 'https://jszyapi.com/api.php/provide/vod', isAdult: false },
+  { name: '无尽资源', url: 'https://api.wujinapi.me/api.php/provide/vod', isAdult: false, tier: 1 },
+  { name: '极速资源', url: 'https://jszyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
   { name: '爱坤资源', url: 'https://ikunzyapi.com/api.php/provide/vod', isAdult: false },
-  { name: '暴风资源', url: 'https://bfzyapi.com/api.php/provide/vod', isAdult: false },
-  { name: '优酷资源', url: 'https://api.ukuapi88.com/api.php/provide/vod', isAdult: false },
+  { name: '暴风资源', url: 'https://bfzyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
+  { name: '优酷资源', url: 'https://api.ukuapi88.com/api.php/provide/vod', isAdult: false, tier: 1 },
   { name: '新狼资源', url: 'https://api.xinlangapi.com/xinlangapi.php/provide/vod', isAdult: false },
-  { name: '豪华资源', url: 'https://hhzyapi.com/api.php/provide/vod', isAdult: false },
-  { name: '魔都资源', url: 'https://www.mdzyapi.com/api.php/provide/vod', isAdult: false },
+  { name: '豪华资源', url: 'https://hhzyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
+  { name: '魔都资源', url: 'https://www.mdzyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
   { name: '百度资源', url: 'https://api.apibdzy.com/api.php/provide/vod', isAdult: false },
   { name: '艾旦影视', url: 'https://lovedan.net/api.php/provide/vod', isAdult: false },
-  { name: '速播资源', url: 'https://subocj.com/api.php/provide/vod', isAdult: false },
+  { name: '速播资源', url: 'https://subocj.com/api.php/provide/vod', isAdult: false, tier: 1 },
   { name: '速博资源', url: 'https://subocaiji.com/api.php/provide/vod', isAdult: false },
   { name: '茅台资源', url: 'https://caiji.maotaizy.cc/api.php/provide/vod', isAdult: false },
   { name: '废柴', url: 'http://fhapi9.com/api.php/provide/vod', isAdult: true },
   { name: '155', url: 'https://155api.com/api.php/provide/vod', isAdult: true },
-  { name: '┃量子┃资源', url: 'https://lzizy1.com/api.php/provide/vod', isAdult: false },
+  { name: '┃量子┃资源', url: 'https://lzizy1.com/api.php/provide/vod', isAdult: false, tier: 1 },
   { name: '暴风影音', url: 'https://app.bfzyapi.com/api.php/provide/vod', isAdult: false },
   { name: '大地', url: 'https://dadiapi.com/api.php/provide/vod', isAdult: true },
   { name: '乐播', url: 'https://lbapi9.com/api.php/provide/vod', isAdult: false },
@@ -141,6 +144,7 @@ const bootstrap = {
     url: s.url.replace(/\/+$/, ''),
     ...(s.detail ? { detail: s.detail } : {}),
     isAdult: s.isAdult === true,
+    ...(s.tier === 1 ? { tier: 1 } : {}),
   })),
   defaultLiveSources: liveSources.map((s, i) => ({
     key: `envlive_${i}`,

@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { aggregateResults } from './search-groups';
+import { aggregateResults, mergeExpandedGroups, normalizeGroupTitle } from './search-groups';
 import type { SearchResultItem } from './types';
 
 let seq = 0;
-
 function item(overrides: Partial<SearchResultItem> & { name: string }): SearchResultItem {
   seq += 1;
   return {
@@ -17,294 +16,156 @@ function item(overrides: Partial<SearchResultItem> & { name: string }): SearchRe
 const COVER_A = 'https://a.com/cover/78288c7898fdad99aee06e3b42213c7b.jpg';
 const COVER_A_MIRROR = 'https://b.com/upload/78288c7898fdad99aee06e3b42213c7b.webp';
 const COVER_B = 'https://a.com/cover/bb36e395b063bec9205952807471e86a.jpg';
+const COVER_C = 'https://a.com/cover/cc36e395b063bec9205952807471e86a.jpg';
+const COVER_D = 'https://a.com/cover/dd36e395b063bec9205952807471e86a.jpg';
 
-describe('aggregateResults（按封面聚合）', () => {
-  it('同名同年、封面不同：并成一张卡（2026-11-16 用户改口径：同片不同海报也要并）', () => {
-    const groups = aggregateResults([
-      item({ name: '色戒', year: '2007', pic: COVER_A, typeName: '剧情片' }),
-      item({ name: '色戒', year: '2007', pic: COVER_B, typeName: '伦理片' }),
-    ]);
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0].items).toHaveLength(2);
+describe('normalizeGroupTitle', () => {
+  it('只剥离末尾清晰度与音轨标签', () => {
+    expect(normalizeGroupTitle('斗破苍穹[4K][国语]')).toBe('斗破苍穹');
+    expect(normalizeGroupTitle('阿凡达 1080P 中字')).toBe('阿凡达');
+    expect(normalizeGroupTitle('Lust, Caution HD')).toBe('lustcaution');
   });
 
-  it('同名不同年：不并（《色戒》2002 Samsara 与 2007 是两部片）', () => {
-    const groups = aggregateResults([
+  it('保留季数、年番、特别篇、剧场版等作品区分词', () => {
+    expect(normalizeGroupTitle('斗破苍穹 第四季 4K')).toBe('斗破苍穹第四季');
+    expect(normalizeGroupTitle('斗破苍穹年番')).toBe('斗破苍穹年番');
+    expect(normalizeGroupTitle('名侦探柯南：特别篇')).toBe('名侦探柯南特别篇');
+    expect(normalizeGroupTitle('新世纪福音战士剧场版')).toBe('新世纪福音战士剧场版');
+  });
+});
+
+describe('aggregateResults（零网络聚合）', () => {
+  it('同名同年即使封面不同也并组，同名不同年不并', () => {
+    expect(aggregateResults([
+      item({ name: '色戒', year: '2007', pic: COVER_A }),
+      item({ name: '色 戒', year: '2007', pic: COVER_B }),
+    ])).toHaveLength(1);
+    expect(aggregateResults([
       item({ name: '色戒', year: '2002', pic: COVER_A }),
       item({ name: '色戒', year: '2007', pic: COVER_B }),
-    ]);
-
-    expect(groups).toHaveLength(2);
+    ])).toHaveLength(2);
   });
 
-  it('不同片名、不同封面：不并（不靠 URL 指纹跨站乱并）', () => {
-    const groups = aggregateResults([
-      item({ name: '色戒', year: '2007', pic: COVER_A }),
-      item({ name: '大开色戒', year: '2007', pic: COVER_B }),
-    ]);
-
-    expect(groups).toHaveLength(2);
-  });
-
-  it('剧版/影版同名同年、封面指纹距离 28：并组（用户接受剧影同卡）', () => {
-    const coverHashes = new Map([
-      ['https://a.com/tv.jpg', 'b68ecece8ea7cbc9'],
-      ['https://b.com/movie.jpg', '234663494d1b1911'],
-    ]);
-    const groups = aggregateResults(
-      [
-        item({ name: '三生三世十里桃花', year: '2017', pic: 'https://a.com/tv.jpg', typeName: '国产剧' }),
-        item({ name: '三生三世十里桃花', year: '2017', pic: 'https://b.com/movie.jpg', typeName: '爱情片' }),
-      ],
-      { coverHashes }
-    );
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0].items).toHaveLength(2);
-  });
-
-  it('同一张封面跨片名、跨年份合并；标题取更短的写法，年份取多数', () => {
+  it('相同内容哈希封面跨站、跨片名、跨年份合并', () => {
     const groups = aggregateResults([
       item({ name: '色戒', year: '2002', pic: COVER_A }),
       item({ name: '色戒Samsara', year: '2001', pic: COVER_A_MIRROR }),
     ]);
-
-    // 2026-11-18 用户确认恢复「同封面必并」：视觉指纹层不按年份拆分
     expect(groups).toHaveLength(1);
     expect(groups[0].name).toBe('色戒');
-    // 年份并列时取列表里先出现的（列表已按相关性排序）
-    expect(groups[0].year).toBe('2002');
     expect(groups[0].items).toHaveLength(2);
   });
 
-  it('同封面镜像源（不同域名、同一内容哈希）合并为一张卡', () => {
+  it('清晰度/音轨后缀不会拆卡，但季数不会误并', () => {
+    const quality = aggregateResults([
+      item({ name: '斗破苍穹', year: '2024', pic: COVER_A }),
+      item({ name: '斗破苍穹 4K 国语', year: '2024', pic: COVER_B }),
+    ]);
+    expect(quality).toHaveLength(1);
+
+    const seasons = aggregateResults([
+      item({ name: '斗破苍穹 第三季', year: '2024', pic: COVER_A }),
+      item({ name: '斗破苍穹 第四季', year: '2024', pic: COVER_B }),
+    ]);
+    expect(seasons).toHaveLength(2);
+  });
+
+  it('没有封面时按片名 + 年份合并', () => {
     const groups = aggregateResults([
-      item({ name: '色戒2007', year: '2007', pic: COVER_A, sourceName: 'A' }),
-      item({ name: '色戒2007', year: '2007', pic: COVER_A_MIRROR, sourceName: 'B' }),
-    ]);
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0].items).toHaveLength(2);
-    expect(groups[0].pic).toBe(COVER_A);
-  });
-
-  it('电影解说与正片共用海报时并成一张卡（2026-11-19 用户口径）', () => {
-    const groups = aggregateResults([
-      item({ name: '色，戒', pic: COVER_A }),
-      item({ name: '色，戒[电影解说]', pic: COVER_A, typeName: '电影解说' }),
-    ]);
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0].items).toHaveLength(2);
-    // 封面优先取正片来源：解说只是组内的一条来源
-    expect(groups[0].pic).toBe(COVER_A);
-  });
-
-  it('电影解说封面不同时仍分开：变体只在同封面时并组', () => {
-    const groups = aggregateResults([
-      item({ name: '色，戒', year: '2007', pic: COVER_A }),
-      item({ name: '色，戒[电影解说]', year: '2007', pic: COVER_B, typeName: '电影解说' }),
-    ]);
-
-    expect(groups).toHaveLength(2);
-  });
-
-  it('沉浸版与正片同封面（dHash 距离 4）并组', () => {
-    const coverHashes = new Map([
-      ['https://a.com/main.jpg', '1454326a020a0006'],
-      ['https://b.com/immersive.jpg', '1454356a020a0002'],
-    ]);
-    const groups = aggregateResults(
-      [
-        item({ name: '后会友期', year: '2026', pic: 'https://a.com/main.jpg' }),
-        item({ name: '后会友期 沉浸版', year: '2026', pic: 'https://b.com/immersive.jpg' }),
-      ],
-      { coverHashes }
-    );
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0].items).toHaveLength(2);
-  });
-
-  it('组封面优先取正片来源的图（解说恰好排在前面时也不拿解说的图）', () => {
-    const coverHashes = new Map([
-      ['https://a.com/commentary.jpg', '1111111111111111'],
-      ['https://b.com/main.jpg', '1111111111111111'],
-    ]);
-    const groups = aggregateResults(
-      [
-        item({ name: '色，戒[电影解说]', pic: 'https://a.com/commentary.jpg', typeName: '电影解说' }),
-        item({ name: '色，戒', pic: 'https://b.com/main.jpg' }),
-      ],
-      { coverHashes }
-    );
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0].pic).toBe('https://b.com/main.jpg');
-  });
-
-  it('没有封面时退回「片名 + 年份」：同年合并，跨年拆分', () => {
-    const sameYear = aggregateResults([
       item({ name: '色戒', year: '2007' }),
       item({ name: '色 戒', year: '2007' }),
     ]);
-    expect(sameYear).toHaveLength(1);
-    expect(sameYear[0].items).toHaveLength(2);
-
-    const crossYear = aggregateResults([
-      item({ name: '色戒', year: '2007' }),
-      item({ name: '色戒', year: '2002' }),
-    ]);
-    expect(crossYear).toHaveLength(2);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].items).toHaveLength(2);
   });
 
-  it('有封面与无封面的同名同年条目：并组（片名+年份 兜底）', () => {
+  it('电影解说共用海报时并卡；无封面时不混进正片', () => {
+    expect(aggregateResults([
+      item({ name: '色，戒', pic: COVER_A }),
+      item({ name: '色，戒[电影解说]', pic: COVER_A_MIRROR, typeName: '电影解说' }),
+    ])).toHaveLength(1);
+    expect(aggregateResults([
+      item({ name: '色，戒', year: '2007' }),
+      item({ name: '色，戒[电影解说]', year: '2007', typeName: '电影解说' }),
+    ])).toHaveLength(2);
+  });
+
+  it('组封面优先正片来源，组标题取更干净写法', () => {
     const groups = aggregateResults([
-      item({ name: '色戒', year: '2007', pic: COVER_A }),
-      item({ name: '色戒', year: '2007' }),
+      item({ name: '色戒2007[电影解说]', pic: COVER_A, typeName: '电影解说' }),
+      item({ name: '色戒', pic: COVER_A_MIRROR }),
     ]);
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0].items).toHaveLength(2);
-  });
-
-  it('封面视觉指纹相近：不同 URL/片名的同一张海报合并', () => {
-    const hashA = 'b25eb2aa76e2b132';
-    const hashNear = 'b636b2aa76e2e13a'; // 同海报不同分辨率，汉明距离 7
-    const hashFar = '7cf4e1d3d5d496e8'; // 另一部片的海报
-    const coverHashes = new Map([
-      ['https://a.com/samsara-270.jpg', hashA],
-      ['https://b.com/samsara-350.jpg', hashNear],
-      ['https://c.com/lust-caution.jpg', hashFar],
-    ]);
-
-    // 同海报两条的年份不同：视觉指纹层仍然合并（跨年护栏已按用户要求回滚）
-    const groups = aggregateResults(
-      [
-        item({ name: '色戒', year: '2002', pic: 'https://a.com/samsara-270.jpg' }),
-        item({ name: '色戒2001', year: '2001', pic: 'https://b.com/samsara-350.jpg' }),
-        item({ name: '色戒', year: '2007', pic: 'https://c.com/lust-caution.jpg' }),
-      ],
-      { coverHashes }
-    );
-
-    expect(groups).toHaveLength(2);
-    const samsara = groups.find((g) => g.items.length === 2);
-    expect(samsara?.items.map((i) => i.year).sort()).toEqual(['2001', '2002']);
-    expect(groups.find((g) => g.items.length === 1)?.items[0].year).toBe('2007');
-  });
-
-  it('同封面跨年（含采集站错挂海报）：按用户口径一律并组（已知代价）', () => {
-    const groups = aggregateResults(
-      [
-        item({
-          sourceKey: 's1',
-          sourceName: '源1',
-          vodId: '1',
-          name: '射雕英雄传',
-          year: '1983',
-          pic: 'https://img.test/1983.jpg',
-        }),
-        // 源 2 把 2017 版的封面错配成 1983 版海报：2026-11-18 用户确认接受这个代价
-        item({
-          sourceKey: 's2',
-          sourceName: '源2',
-          vodId: '2',
-          name: '射雕英雄传',
-          year: '2017',
-          pic: 'https://img.test/1983.jpg',
-        }),
-        item({
-          sourceKey: 's3',
-          sourceName: '源3',
-          vodId: '3',
-          name: '射雕英雄传',
-          year: '2017',
-          pic: 'https://img.test/2017.jpg',
-        }),
-      ],
-      {
-        coverHashes: new Map([
-          ['https://img.test/1983.jpg', '1111111111111111'],
-          ['https://img.test/2017.jpg', 'ffffffffffffffff'],
-        ]),
-      }
-    );
-
-    // 共享封面把三个条目连成一个连通分量；年份取多数 2017
-    expect(groups).toHaveLength(1);
-    expect(groups[0].items).toHaveLength(3);
-    expect(groups[0].year).toBe('2017');
-  });
-
-  it('视觉指纹明显不同：同名同年仍并组（片名+年份 层兜底）', () => {
-    const coverHashes = new Map([
-      ['https://a.com/lust-a.jpg', '0000000000000000'],
-      ['https://b.com/lust-b.jpg', 'ffffffffffffffff'],
-    ]);
-
-    const groups = aggregateResults(
-      [
-        item({ name: '色戒', year: '2007', pic: 'https://a.com/lust-a.jpg' }),
-        item({ name: '色戒', year: '2007', pic: 'https://b.com/lust-b.jpg' }),
-      ],
-      { coverHashes }
-    );
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0].items).toHaveLength(2);
-  });
-
-  it('没有视觉指纹时按 URL 指纹分组，但同名同年仍并组', () => {
-    const groups = aggregateResults(
-      [
-        item({ name: '色戒', year: '2007', pic: COVER_A }),
-        item({ name: '色戒', year: '2007', pic: COVER_B }),
-      ],
-      { coverHashes: new Map([[COVER_A, '0000000000000000']]) }
-    );
-
-    // A 走视觉指纹、B 走 URL 指纹，靠「片名 + 年份」这一层并到一起
-    expect(groups).toHaveLength(1);
-    expect(groups[0].items).toHaveLength(2);
+    expect(groups[0].name).toBe('色戒');
+    expect(groups[0].pic).toBe(COVER_A_MIRROR);
   });
 
   it('组内备注推到统一结论', () => {
     const groups = aggregateResults([
-      item({ name: '庆余年', year: '2019', pic: COVER_A, remarks: '全36集' }),
-      item({ name: '庆余年', year: '2019', pic: COVER_A_MIRROR, remarks: '更新至36集' }),
+      item({ name: '庆余年', pic: COVER_A, remarks: '全36集' }),
+      item({ name: '庆余年', pic: COVER_A_MIRROR, remarks: '更新至36集' }),
     ]);
-
     expect(groups[0].remarks).toBe('全36集');
   });
 
-  it('组标题取更干净的写法，组顺序按首次出现的位置', () => {
-    const groups = aggregateResults([
-      item({ name: '色戒2007', year: '2007', pic: COVER_A }),
-      item({ name: '色戒', year: '2007', pic: COVER_A_MIRROR }),
-      item({ name: '色戒2007', year: '2007', pic: 'https://c.com/x/78288c7898fdad99aee06e3b42213c7b.jpg' }),
-      item({ name: '大开色戒', year: '1999', pic: COVER_B }),
-    ]);
-
-    expect(groups).toHaveLength(2);
-    // 出处多数是「色戒2007」，但标题应去掉年份后缀，取「色戒」
-    expect(groups[0].name).toBe('色戒');
-    expect(groups[0].items).toHaveLength(3);
-    expect(groups[1].name).toBe('大开色戒');
-  });
-
-  it('组内没有干净写法时保留原标题', () => {
-    const groups = aggregateResults([
-      item({ name: '色·戒.Lust, Caution.2007.TW.BluRay.x264', pic: COVER_A }),
-      item({ name: '色·戒.Lust, Caution.2007.TW.BluRay.x265', pic: COVER_A_MIRROR }),
-    ]);
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0].name).toContain('色·戒');
-  });
-
-  it('空片名条目直接丢弃', () => {
+  it('不同片名不同封面不并，空片名丢弃', () => {
+    expect(aggregateResults([
+      item({ name: '色戒', pic: COVER_A }),
+      item({ name: '大开色戒', pic: COVER_B }),
+    ])).toHaveLength(2);
     expect(aggregateResults([item({ name: '   ' })])).toEqual([]);
+  });
+});
+
+describe('mergeExpandedGroups（扩搜稳定合并）', () => {
+  it('旧组顺序、key、标题与封面不变，匹配来源补进旧组，新作品追加', () => {
+    const base = aggregateResults([
+      item({ name: '甲', year: '2024', pic: COVER_A, typeName: '剧情片' }),
+      item({ name: '乙', year: '2025', pic: COVER_B, typeName: '国产剧' }),
+    ]);
+    const result = mergeExpandedGroups(base, [
+      item({ name: '甲 4K 国语', year: '2024', pic: COVER_C, sourceKey: 'tier2_a' }),
+      item({ name: '丙', year: '2026', pic: COVER_D, sourceKey: 'tier2_b' }),
+    ]);
+
+    expect(result.map((group) => group.key)).toEqual([...base.map((group) => group.key), result[2].key]);
+    expect(result.slice(0, 2).map((group) => group.name)).toEqual(['甲', '乙']);
+    expect(result[0].pic).toBe(base[0].pic);
+    expect(result[0].typeName).toBe(base[0].typeName);
+    expect(result[0].items).toHaveLength(2);
+    expect(result[1].items).toHaveLength(1);
+    expect(result[2].name).toBe('丙');
+  });
+
+  it('一个扩搜条目同时撞两个旧组时只按封面归入一个，不桥接旧卡', () => {
+    const base = aggregateResults([
+      item({ name: '甲', year: '2024', pic: COVER_A }),
+      item({ name: '乙', year: '2025', pic: COVER_B }),
+    ]);
+    const result = mergeExpandedGroups(base, [
+      item({ name: '乙', year: '2025', pic: COVER_A_MIRROR, sourceKey: 'tier2_bridge' }),
+    ]);
+
+    expect(result).toHaveLength(2);
+    expect(result.map((group) => group.key)).toEqual(base.map((group) => group.key));
+    expect(result[0].items).toHaveLength(2);
+    expect(result[1].items).toHaveLength(1);
+    expect(result.map((group) => group.name)).toEqual(['甲', '乙']);
+  });
+
+  it('重复 sourceKey + vodId 不会重复补来源', () => {
+    const existing = item({ name: '甲', pic: COVER_A, sourceKey: 'same', vodId: '1' });
+    const base = aggregateResults([existing]);
+    const result = mergeExpandedGroups(base, [{ ...existing }, { ...existing }]);
+    expect(result).toHaveLength(1);
+    expect(result[0].items).toHaveLength(1);
+  });
+
+  it('空扩搜返回等价旧组且不修改输入', () => {
+    const base = aggregateResults([item({ name: '甲', pic: COVER_A })]);
+    const before = JSON.stringify(base);
+    const result = mergeExpandedGroups(base, []);
+    expect(result).toEqual(base);
+    expect(JSON.stringify(base)).toBe(before);
+    expect(result[0]).not.toBe(base[0]);
   });
 });
