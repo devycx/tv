@@ -272,7 +272,7 @@ export const api = {
 
   /**
    * 直播列表（页面主路径）：浏览器直连上游 M3U，网络/CORS/解析失败时自动回退
-   * `/api/live/playlist`。12 个预置源都允许跨域，直连可省掉每个列表一次 Worker 请求。
+   * `/api/live/playlist`。10 个预置源都允许跨域，直连可省掉每个列表一次 Worker 请求。
    */
   livePlaylistAuto: (url: string, signal?: AbortSignal) => fetchLivePlaylistDirect(url, signal),
 

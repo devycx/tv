@@ -9,89 +9,89 @@ import fs from 'node:fs';
  *
  * 修改源列表后重跑本脚本生成 wrangler 配置与首屏 bootstrap。
  *
- * tier: 1 是默认首轮搜索的 8 个主力源（2026-11-20 按线上实测速度与片库互补精选）；
- * 其余源只在用户点击「搜索更多源」后查询。用户手动改过选源时不启用分层。
+ * 2026-11-20 换榜：全部 20 个点播源 + 10 个直播源都来自
+ * `libretv-source-audit/` 的实测榜单（同一天按同一口径重测），
+ * 旧的全量合并列表（35 源）整体作废。三份榜单：
+ * - 综合点播 top10 → libretv-top10.json / README.md
+ * - 18+ 点播 top10 → adult-top10.json / README-adult.md
+ * - 直播源 top10   → live-top10.json  / README-live.md
+ *
+ * tier: 1 是默认首轮搜索的 8 个综合主力源；其余源只在用户点击「搜索更多源」后
+ * 查询。用户手动改过选源时不启用分层。18+ 源一律不标 tier：它们在站内「成人内容
+ * 过滤」关闭时才参与搜索，不该出现在首屏的固定 8 源里。
  */
 
 /**
- * 点播源（2026-11-14 全量合并）：35 个源，其中 35 个 search+detail 通过
- * （本次线上复验 20 个 + 原有保留 15 个）、2 个画质可测（height）。
+ * 点播源 · 综合（2026-11-20 实测 top10，顺序即榜单顺序）
  *
- * 排序（可用性优先）：
- * 1. 画质实测有 height：电影天堂 1080、飘零资源 720；
- * 2. search+detail 通过：原有 13 个保留在前（沿用既有结论，本次未复测），
- *    本次线上复验的 20 个按 search+detail 耗时升序排在后面；
- * 3. 仅搜索可用（详情/画质不通）：本次无（详情不通的源已剔除）。
- *
- * 候选全集 = tested.json ∪ tested2.json ∪ near-miss.json ∪ recommended.json ∪ 原有 15 个，
- * 按规范化 URL 去重（忽略协议与主机大小写、去尾斜杠），同一源的多协议变体只保留复验通过的那个，
- * 名称取第一次出现。成人内容不剔除：9 个成人向源照旧标 isAdult: true（与 DEPLOY-CLOUDFLARE.md
- * 的「18🈲 成人内容标识与开关」一致），搜索结果是否过滤成人条目由站内「成人内容过滤」设置控制。
- *
- * 线上复验（新纳入的源）：POST /api/search（庆余年，无结果再试 流浪地球，filterAdult=false）
- * + GET /api/detail，episodes 非空才算通过；仅成人目录的 森林 / jkun 用第三关键词 狂飙 复验通过。
- * 注：非同源的两个「非凡」（ffzy.tv / cj.ffzyapi.com）名称相同，按原始配置名保留，靠 URL 区分。
- * 验证时间：2026-11-14。
+ * 口径：228 个去重采集接口 → 5 关键词检索 → 片库规模 → 3 轮延迟中位数 →
+ * 线路感知的真播（master → variant → 首分片，2xx 且 >1KB，不看 manifest 就算过）。
+ * 排序依据是「检索覆盖 100 分制 + 片库 + 延迟」，明细见 libretv-source-audit/README.md。
  */
 const sources = [
-  { name: '电影天堂', url: 'http://caiji.dyttzyapi.com/api.php/provide/vod', isAdult: false },
-  { name: '飘零资源', url: 'https://p2100.net/api.php/provide/vod', isAdult: false },
-  { name: '无尽资源', url: 'https://api.wujinapi.me/api.php/provide/vod', isAdult: false, tier: 1 },
-  { name: '极速资源', url: 'https://jszyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
-  { name: '爱坤资源', url: 'https://ikunzyapi.com/api.php/provide/vod', isAdult: false },
   { name: '暴风资源', url: 'https://bfzyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
-  { name: '优酷资源', url: 'https://api.ukuapi88.com/api.php/provide/vod', isAdult: false, tier: 1 },
-  { name: '新狼资源', url: 'https://api.xinlangapi.com/xinlangapi.php/provide/vod', isAdult: false },
-  { name: '豪华资源', url: 'https://hhzyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
-  { name: '魔都资源', url: 'https://www.mdzyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
-  { name: '百度资源', url: 'https://api.apibdzy.com/api.php/provide/vod', isAdult: false },
-  { name: '艾旦影视', url: 'https://lovedan.net/api.php/provide/vod', isAdult: false },
-  { name: '速播资源', url: 'https://subocj.com/api.php/provide/vod', isAdult: false, tier: 1 },
-  { name: '速博资源', url: 'https://subocaiji.com/api.php/provide/vod', isAdult: false },
-  { name: '茅台资源', url: 'https://caiji.maotaizy.cc/api.php/provide/vod', isAdult: false },
-  { name: '废柴', url: 'http://fhapi9.com/api.php/provide/vod', isAdult: true },
-  { name: '155', url: 'https://155api.com/api.php/provide/vod', isAdult: true },
-  { name: '┃量子┃资源', url: 'https://lzizy1.com/api.php/provide/vod', isAdult: false, tier: 1 },
-  { name: '暴风影音', url: 'https://app.bfzyapi.com/api.php/provide/vod', isAdult: false },
+  { name: '最大资源', url: 'https://api.zuidapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
+  { name: '量子资源', url: 'https://cj.lziapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
+  { name: '金鹰资源', url: 'https://jyzyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
+  { name: '如意资源', url: 'https://cj.rycjapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
+  { name: '无尽资源', url: 'https://api.wujinapi.me/api.php/provide/vod', isAdult: false, tier: 1 },
+  { name: '爱坤资源', url: 'https://ikunzyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
+  { name: '红牛资源', url: 'https://www.hongniuzy2.com/api.php/provide/vod', isAdult: false, tier: 1 },
+  { name: '360资源', url: 'https://360zy.com/api.php/provide/vod', isAdult: false },
+  { name: '1080资源库', url: 'https://api.1080zyku.com/inc/apijson.php', isAdult: false },
+
+  /**
+   * 点播源 · 18+（2026-11-20 实测 top10）
+   *
+   * 口径：101 个可用接口里先按 60 条最新片名 + 分类表判成人占比，再交叉
+   * play3 的真播结果；只留「成人内容为主 + 至少一条线路真能播」的源，
+   * 按片库规模排序后逐条复验 search → detail → master/variant/分片，
+   * 并要求播放链带 Access-Control-Allow-Origin（播放器是浏览器直连，没有代理）。
+   * 明细见 libretv-source-audit/README-adult.md。
+   *
+   * 注：辣椒只有 http 入口（https 不可达），服务端代理拉取不受影响。
+   */
+  { name: '乐播', url: 'https://lbapi9.com/api.php/provide/vod', isAdult: true },
+  { name: '鲨鱼', url: 'https://shayuapi.com/api.php/provide/vod', isAdult: true },
   { name: '大地', url: 'https://dadiapi.com/api.php/provide/vod', isAdult: true },
-  { name: '乐播', url: 'https://lbapi9.com/api.php/provide/vod', isAdult: false },
-  { name: '尤酷', url: 'https://api.ukuapi.com/api.php/provide/vod', isAdult: false },
-  { name: '┃非凡┃资源', url: 'http://ffzy1.tv/api.php/provide/vod', isAdult: false },
-  { name: '非凡', url: 'http://ffzy.tv/api.php/provide/vod', isAdult: false },
-  { name: '红牛资源', url: 'http://www.hongniuzy2.com/api.php/provide/vod', isAdult: false },
-  { name: '量子', url: 'http://cj.lziapi.com/api.php/provide/vod', isAdult: false },
-  { name: '非凡', url: 'http://cj.ffzyapi.com/api.php/provide/vod', isAdult: false },
   { name: '森林', url: 'https://slapibf.com/api.php/provide/vod', isAdult: true },
-  { name: '滴滴', url: 'https://api.ddapi.cc/api.php/provide/vod', isAdult: true },
-  { name: '精品下', url: 'http://www.jingpinx.com/api.php/provide/vod', isAdult: false },
-  { name: '文才资源', url: 'http://api.zeqaht.com/api.php/provide/vod', isAdult: false },
-  { name: 'jkun', url: 'https://jkunzyapi.com/api.php/provide/vod', isAdult: true },
+  { name: '废柴', url: 'https://fhapi9.com/api.php/provide/vod', isAdult: true },
   { name: '辣椒', url: 'http://api.11bat.com/api.php/provide/vod', isAdult: true },
-  { name: '魔法', url: 'http://madouse.la/api.php/provide/vod', isAdult: true },
   { name: '玉兔资源', url: 'https://apiyutu.com/api.php/provide/vod', isAdult: true },
+  { name: '155', url: 'https://155api.com/api.php/provide/vod', isAdult: true },
+  { name: '魔法', url: 'https://madouse.la/api.php/provide/vod', isAdult: true },
+  { name: '精品下', url: 'https://www.jingpinx.com/api.php/provide/vod', isAdult: true },
 ];
 
+/**
+ * 直播源（2026-11-20 实测 top10）
+ *
+ * 播放器是浏览器直连 CDN，没有服务端中转，所以每个列表都过四道：
+ * 1. 列表级：能拉、有 ACAO（/live 首屏是浏览器直连列表，失败才回退代理）；
+ * 2. 频道级：抽样 110 个（按分组分层），https + 200/206 + 真实 m3u8/ts；
+ * 3. 直连级：带 Access-Control-Allow-Origin（没有 ACAO 的频道浏览器必拦）；
+ * 4. 分片级：抽 25 个直连频道追 master → variant → 首分片，2xx 且 >1KB 才算稳。
+ *
+ * 综合分 = 规模（估算可直连频道数的 log）+ 分片通过率 + 可达率 + 延迟 + https 占比，
+ * 小列表（<25 个可直连）另扣分。明细见 libretv-source-audit/README-live.md。
+ */
 const liveSources = [
-  { name: 'iptv-org 中国大陆', url: 'https://iptv-org.github.io/iptv/countries/cn.m3u' },
-  { name: 'zbds IPTV4', url: 'https://live.zbds.top/tv/iptv4.m3u' },
-  { name: 'aptv 综合', url: 'https://raw.githubusercontent.com/Kimentanm/aptv/master/m3u/iptv.m3u' },
-  {
-    name: '4K 专区',
-    url: 'https://gist.githubusercontent.com/yifanwang-yet/c2c9263066c0c5d20f50ce9b31d40e7e/raw/libretv-4k.m3u',
-  },
-  // 2026-11-14 扩容：8 个全部按「全量频道逐个探测 200/206 + ACAO」筛选，约 1398 频道，
-  // 与上面 4 个合计 ~2061 频道；粗略估算约 619 条可直连（混合内容 http 流已排除）。
-  { name: '海外 FAST 频道（akiralereal）', url: 'https://raw.githubusercontent.com/akiralereal/iptv/main/IPTV-overseas.m3u' },
-  { name: 'GNTV 港台/国际/地方（YueChan）', url: 'https://raw.githubusercontent.com/YueChan/Live/main/GNTV.m3u' },
+  { name: 'GNTV 港台/国际/地方', url: 'https://raw.githubusercontent.com/YueChan/Live/main/GNTV.m3u' },
+  { name: 'iptv-org 全球', url: 'https://iptv-org.github.io/iptv/index.m3u' },
+  { name: 'iptv-org 新闻', url: 'https://iptv-org.github.io/iptv/categories/news.m3u' },
+  { name: 'iptv-org 体育', url: 'https://iptv-org.github.io/iptv/categories/sports.m3u' },
   {
     name: 'Collect-IPTV 省台/轮播',
     url: 'https://raw.githubusercontent.com/zilong7728/Collect-IPTV/refs/heads/main/best_sorted.m3u',
   },
-  { name: 'ChinaIPTV 台湾', url: 'https://raw.githubusercontent.com/hujingguang/ChinaIPTV/main/TaiWan.m3u8' },
-  { name: 'ChinaIPTV cnTV 自动更新', url: 'https://raw.githubusercontent.com/hujingguang/ChinaIPTV/main/cnTV_AutoUpdate.m3u8' },
-  { name: 'iptv-org 台湾', url: 'https://iptv-org.github.io/iptv/countries/tw.m3u' },
-  { name: 'iptv-org 香港', url: 'https://iptv-org.github.io/iptv/countries/hk.m3u' },
-  { name: 'Guovin iptv-api IPv4', url: 'https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/ipv4/result.m3u' },
+  { name: '海外 FAST 频道', url: 'https://raw.githubusercontent.com/akiralereal/iptv/main/IPTV-overseas.m3u' },
+  {
+    name: 'Guovin 央视/卫视 IPv4',
+    url: 'https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/ipv4/result.m3u',
+  },
+  { name: 'Guovin 综合', url: 'https://raw.githubusercontent.com/Guovin/iptv-api/gd/output/result.m3u' },
+  { name: 'iptv-org 电影', url: 'https://iptv-org.github.io/iptv/categories/movies.m3u' },
+  { name: 'zbds 央视/卫视', url: 'https://live.zbds.top/tv/iptv4.m3u' },
 ];
 
 const config = {
@@ -113,7 +113,7 @@ const config = {
     DEFAULT_SOURCES: JSON.stringify(sources),
     DEFAULT_LIVE_SOURCES: JSON.stringify(liveSources),
     // Workers 免费版单次 invocation 只有 50 个 subrequest：
-    // 35 个源 × 多页 + 重试会超限（实测报 "Too many subrequests"）。
+    // 20 个源 × 多页 + 重试会超限（实测报 "Too many subrequests"）。
     // 每个源只抓第一页、关闭重试，把最坏情况压到「源数量 + 少量重定向」。
     SEARCH_MAX_PAGES: '1',
     SEARCH_SOURCE_TIMEOUT_MS: '3000',
@@ -162,5 +162,7 @@ fs.writeFileSync(
   'utf8'
 );
 console.log(
-  `wrangler.jsonc + bootstrap.generated.json written: ${sources.length} VOD sources, ${liveSources.length} live sources`
+  `wrangler.jsonc + bootstrap.generated.json written: ${sources.length} VOD sources (${
+    sources.filter((s) => s.isAdult).length
+  } adult, ${sources.filter((s) => s.tier === 1).length} tier-1), ${liveSources.length} live sources`
 );

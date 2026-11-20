@@ -20,7 +20,7 @@
 - push `main` → CI（typecheck / lint / test）→ 自动 `cf:build` + `wrangler deploy`；本地 deploy 只留给预览、热修、回滚
 - 登录检查挪到 middleware：未登录的页面 302 到 `/login`，`/api/*` 直接 401，HTML 不下发
 - 视频和直播流全部浏览器直连源站，Worker 只出页面和 JSON。Cloudflare 不让拿 Workers 分发站外视频，`/api/proxy`、`/api/live/stream` 删掉了
-- 首屏预置 35 个点播源、12 个直播源（上千个频道），构建期写进 `wrangler.jsonc` 和内联 bootstrap，登录即用
+- 首屏预置 20 个点播源（10 综合 + 10 个 18+）、10 个直播源（1.7 万条频道条目，跨源同名合并后仍上千个），构建期写进 `wrangler.jsonc` 和内联 bootstrap，登录即用
 - Worker 入口加了一层缓存（页面 6h、搜索 60s），免费版 CPU 吃紧时不至于每次重新渲染
 
 部署细节、预置源清单、排错和回滚：[DEPLOY-CLOUDFLARE.md](DEPLOY-CLOUDFLARE.md)

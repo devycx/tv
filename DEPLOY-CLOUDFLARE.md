@@ -40,14 +40,17 @@ Cloudflare 明确限制「站外托管的视频/大文件经其 CDN 分发给访
 
 | 变量 | 内容 |
 | --- | --- |
-| `DEFAULT_SOURCES` | 35 个点播源（苹果CMS 采集站），全部经线上 search + detail 复验通过；其中 2 个可测出画质 |
-| `DEFAULT_LIVE_SOURCES` | 12 个直播源，约 2060 个频道（现有 4 + 新增 8） |
+| `DEFAULT_SOURCES` | 20 个点播源：10 个综合 + 10 个 18+，全部来自 2026-11-20 实测榜单（`libretv-source-audit/`）；综合前 8 个标了 `tier: 1`，只参与首轮搜索 |
+| `DEFAULT_LIVE_SOURCES` | 10 个直播源，17,241 条频道条目（`/live` 页按 URL 去重 + 跨源同名合并后仍上千） |
 
-- 画质实测通过（`height` 有数值）：电影天堂 1080、飘零资源 720。
-- 其余源只验证到「搜索 + 详情有播放地址」；能否播放取决于源站 CORS / 防盗链 / 协议（见上一节），失败请换源。
-- 直播源：`/api/live/playlist` 实测 12 个列表共 **2059 个频道**（`/live` 页按 URL 去重后约 1489）；
-  但直连模式下只有 **https + 带 `ACAO`** 的频道能播，估算约 30%（≈619 条），
-  http 流会被浏览器混合内容拦截、无 CORS 的会被拦——**这是「很多频道看不了」的主因**，换频道即可。
+- 综合 10 源的口径：228 个去重接口 → 5 关键词检索覆盖 → 片库规模 → 3 轮延迟中位数 →
+  线路感知真播（master → variant → 首分片 2xx 且 >1KB，只看 manifest 不算过）。
+  明细见 `libretv-source-audit/README.md`。
+- 18+ 10 源：60 条最新片名 + 分类表判定成人占比 ≥ 50%，再要 search → detail → 分片全通、
+  播放链带 `ACAO`。明细见 `libretv-source-audit/README-adult.md`。
+- 直播源：10 个列表 17,241 条频道条目，抽样 1,258 个实测「可直连」占 30%（https + `ACAO`），
+  分片级复核 79.4% 通过。直连模式下 http 流会被混合内容拦、无 CORS 的会被拦——
+  **这是「有些频道看不了」的主因**，换频道即可。明细见 `libretv-source-audit/README-live.md`。
 - 修改源：编辑 `scripts/gen-wrangler.mjs` 里的数组 → `npm run cf:build`（会同时重写 `wrangler.jsonc` 与
   `src/lib/bootstrap.generated.json`）→ `npx wrangler deploy`。**不再支持「只改变量不重建」**：
   首屏预置源是构建期静态注入的，改完必须重新构建。
