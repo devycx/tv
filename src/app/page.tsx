@@ -233,27 +233,33 @@ function HomeContent() {
   // 只为「当前展示窗口 + 预热 1 页」的封面算指纹（2026-11-20）：原来把 list 里
   // 最多 120 张封面全部入队，屏幕外没翻到、用户可能永远不会看的封面也会触发
   // /api/cover Worker 请求，白白消耗配额和带宽。
-  const coverUrls = useMemo(() => {
+  const { coverUrls, firstPageUrls } = useMemo(() => {
     const limit = visibleCount + RESULT_PAGE_SIZE;
     const urls: string[] = [];
+    const firstPage: string[] = [];
     for (let i = 0; i < list.length && urls.length < limit; i++) {
       const pic = list[i]?.pic;
-      if (typeof pic === 'string' && pic.length > 0 && !pic.startsWith('data:') && !pic.startsWith('blob:')) {
-        urls.push(pic);
+      if (typeof pic !== 'string' || pic.length === 0 || pic.startsWith('data:') || pic.startsWith('blob:')) {
+        continue;
       }
+      urls.push(pic);
+      // 第一页（本屏真正渲染的卡片来源）的封面：只有这批要等到齐才上屏，
+      // 「预热 1 页」那部分继续在后台算，不用拿它卡首屏。
+      if (firstPage.length < RESULT_PAGE_SIZE) firstPage.push(pic);
     }
-    return urls;
+    return { coverUrls: urls, firstPageUrls: firstPage };
   }, [list, visibleCount]);
   const coverHashes = useCoverHashes(coverUrls);
-  const { pending: pendingCovers, hashOf: coverHashOf, isPending: coverIsPending } = coverHashes;
+  const { hashOf: coverHashOf, isPending: coverIsPending } = coverHashes;
   const hasResults = list.length > 0;
   /**
-   * 首批结果「等齐再画」：当前窗口的封面指纹全部有结论（算完/失败）后再整屏上屏，
+   * 首批结果「等齐再画」：**第一页**的封面指纹全部有结论（算完/失败）后再整屏上屏，
    * 等待期间只显示骨架。
    *
    * 这样每张卡片的分组 key 在第一次出现时就已定稿，不会出现「先按片名分组、
    * 指纹到了再合组」的跳变（用户 2026-11-20 明确要求：不要合组跳变）。
-   * 之后的流式追加只会新增卡片或给已有卡片加来源，不会改动已上屏的分组。
+   * 「预热 1 页」的封面不参与这道闸门，否则冷搜会白等一倍的图；
+   * 它们的条目算完才上屏，位置只会在已有卡片之后追加。
    */
   const [coverReady, setCoverReady] = useState(false);
   /** 被封印的封面：本屏不再等它，也不接受它晚到的指纹参与分组 */
@@ -261,22 +267,27 @@ function HomeContent() {
   /** 本轮搜索的等待截止时间（从第一条结果出现起算，避免搜索本身慢导致提前放弃） */
   const [coverDeadline, setCoverDeadline] = useState<number | null>(null);
   // 定时器回调要读最新的窗口与 pending 判断，用 ref 兜住闭包
-  const coverWindowRef = useRef(coverUrls);
-  coverWindowRef.current = coverUrls;
+  const firstPageRef = useRef(firstPageUrls);
+  firstPageRef.current = firstPageUrls;
   const coverIsPendingRef = useRef(coverIsPending);
   coverIsPendingRef.current = coverIsPending;
 
-  /** 封印当前窗口里还没结论的封面，然后放行渲染 */
+  /** 封印第一页里还没结论的封面，然后放行渲染 */
   const sealPendingCovers = useCallback(() => {
     setSealedCovers((prev) => {
       const next = new Set(prev);
-      for (const url of coverWindowRef.current) {
+      for (const url of firstPageRef.current) {
         if (coverIsPendingRef.current(url)) next.add(url);
       }
       return next;
     });
     setCoverReady(true);
   }, []);
+
+  const pendingFirstPage = useMemo(
+    () => firstPageUrls.filter((url) => !sealedCovers.has(url) && coverIsPending(url)).length,
+    [firstPageUrls, sealedCovers, coverIsPending]
+  );
 
   useEffect(() => {
     setCoverReady(false);
@@ -291,8 +302,8 @@ function HomeContent() {
 
   useEffect(() => {
     if (!urlQuery || !hasResults || coverReady) return;
-    // 全部有结论：直接放行，不用等满上限
-    if (pendingCovers === 0) {
+    // 第一页的封面全部有结论：直接放行，不用等满上限
+    if (pendingFirstPage === 0) {
       setCoverReady(true);
       return;
     }
@@ -304,7 +315,7 @@ function HomeContent() {
     }
     const timer = window.setTimeout(sealPendingCovers, remain);
     return () => window.clearTimeout(timer);
-  }, [urlQuery, hasResults, coverReady, pendingCovers, coverDeadline, sealPendingCovers]);
+  }, [urlQuery, hasResults, coverReady, pendingFirstPage, coverDeadline, sealPendingCovers]);
   /** 该封面是否已有最终结论（算完 / 失败 / 被封印）——没结论的条目不上屏 */
   const coverSettled = useCallback(
     (url?: string) => {
