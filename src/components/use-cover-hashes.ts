@@ -330,13 +330,23 @@ async function hashCoverBlob(blob: Blob): Promise<string> {
   }
 }
 
+/**
+ * CORS 直连探测的超时：比正式取图短得多。
+ *
+ * 探测只回答「这个 host 能不能浏览器直连」，失败就走同源代理，代价只是多一次代理。
+ * 坏图床/被墙 host 的 CORS 握手会一直挂到超时，而探测占着并发槽位——冷搜首屏
+ * 现在要等指纹齐全，探测挂 3s 会让 8 个槽位排出好几轮。1.5s 足够快 host 成功，
+ * 慢 host 直接判给代理。
+ */
+const PROBE_TIMEOUT_MS = 1500;
+
 /** 浏览器 CORS 直连取图并算指纹；拿不到图片像素时返回 undefined（交给代理） */
 async function tryDirectHash(url: string): Promise<string | undefined> {
   const direct = await fetch(url, {
     mode: 'cors',
     credentials: 'omit',
     referrerPolicy: 'no-referrer',
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
   });
   if (!direct.ok) return undefined;
   const blob = await direct.blob();
@@ -352,7 +362,7 @@ async function hashCoverUrl(url: string): Promise<string> {
   // 不少图床允许浏览器 CORS 直连，但 Cloudflare Worker 出网会 525（源站 TLS 握手失败）。
   // 先试浏览器直连，按 host 记住结论；CORS 失败/非 2xx 再退回同源代理。
   //
-  // 同一 host 只放一个直连探测在飞：8 个并发同时等 6s CORS 超时，一个坏图床就能
+  // 同一 host 只放一个直连探测在飞：8 个并发同时等 CORS 超时，一个坏图床就能
   // 把首屏灰屏时间拉到十几秒。探测期间其余 URL 直接走代理，代理通常更快且能成功。
   const mode = host ? hostModes.get(host) : undefined;
   if (host && /^https:/i.test(url) && mode !== 'proxy' && mode !== 'probing') {
