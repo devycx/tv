@@ -16,6 +16,7 @@ import { addSearchHistory } from '@/lib/db';
 import { compareSearchResults } from '@/lib/relevance';
 import { applyFrozenOrder, orderDiffers } from '@/lib/result-paging';
 import { aggregateResults } from '@/lib/search-groups';
+import { clusterCoverHashes } from '@/lib/cover-visual-hash';
 import {
   EMPTY_FILTERS,
   buildFacets,
@@ -245,15 +246,14 @@ function HomeContent() {
     return urls;
   }, [list, visibleCount]);
   const coverHashes = useCoverHashes(coverUrls);
-  const { pending: pendingCovers, hashOf: coverHashOf, isPending: coverIsPending } = coverHashes;
+  const { hashOf: coverHashOf, isPending: coverIsPending } = coverHashes;
   const hasResults = list.length > 0;
   /**
-   * 首批结果「等齐再画」：当前窗口的封面指纹全部有结论（算完/失败）后再整屏上屏，
-   * 等待期间只显示骨架。
+   * 首批结果「等齐再画」：**搜索流结算完 + 封面指纹都有结论**后整屏上屏，期间只显示骨架。
    *
-   * 这样每张卡片的分组 key 在第一次出现时就已定稿，不会出现「先按片名分组、
-   * 指纹到了再合组」的跳变（用户 2026-11-20 明确要求：不要合组跳变）。
-   * 之后的流式追加只会新增卡片或给已有卡片加来源，不会改动已上屏的分组。
+   * 只等指纹不够：先结算的源会先上屏，后面陆续到的源再一张张冒出来（每张都
+   * invisible→visible），而且后到的条目还会把已上屏的卡合并掉——2026-11-20 用户
+   * 手机实测「风中有朵雨做的云」就是「闪来闪去」。等流结束再画一次，之后不再变化。
    */
   const [coverReady, setCoverReady] = useState(false);
   /** 被封印的封面：本屏不再等它，也不接受它晚到的指纹参与分组 */
@@ -266,7 +266,7 @@ function HomeContent() {
   const coverIsPendingRef = useRef(coverIsPending);
   coverIsPendingRef.current = coverIsPending;
 
-  /** 封印当前窗口里还没结论的封面，然后放行渲染 */
+  /** 封印当前窗口里还没结论的封面（不再等它，也不再让它的指纹改动本屏分组） */
   const sealPendingCovers = useCallback(() => {
     setSealedCovers((prev) => {
       const next = new Set(prev);
@@ -275,8 +275,12 @@ function HomeContent() {
       }
       return next;
     });
-    setCoverReady(true);
   }, []);
+  /** 还没结论、也没被封印的封面数：封印后立刻归零，不必等它真的超时 */
+  const pendingCovers = useMemo(
+    () => coverUrls.filter((url) => !sealedCovers.has(url) && coverIsPending(url)).length,
+    [coverUrls, sealedCovers, coverIsPending]
+  );
 
   useEffect(() => {
     setCoverReady(false);
@@ -291,12 +295,14 @@ function HomeContent() {
 
   useEffect(() => {
     if (!urlQuery || !hasResults || coverReady) return;
-    // 全部有结论：直接放行，不用等满上限
-    if (pendingCovers === 0) {
+    // 放行条件：流结算完 且 指纹都已有结论（或已封印）
+    if (pendingCovers === 0 && !searchQuery.isFetching) {
       setCoverReady(true);
       return;
     }
-    if (coverDeadline === null) return;
+    // 截止时间只负责「封印封面」，不负责放行：放行仍要等流结束，否则等于又把
+    // 半截结果画上屏、后面再变一次（用户明确不要这种变化）。
+    if (coverDeadline === null || pendingCovers === 0) return;
     const remain = coverDeadline - Date.now();
     if (remain <= 0) {
       sealPendingCovers();
@@ -304,7 +310,15 @@ function HomeContent() {
     }
     const timer = window.setTimeout(sealPendingCovers, remain);
     return () => window.clearTimeout(timer);
-  }, [urlQuery, hasResults, coverReady, pendingCovers, coverDeadline, sealPendingCovers]);
+  }, [
+    urlQuery,
+    hasResults,
+    coverReady,
+    pendingCovers,
+    coverDeadline,
+    sealPendingCovers,
+    searchQuery.isFetching,
+  ]);
   /** 该封面是否已有最终结论（算完 / 失败 / 被封印）——没结论的条目不上屏 */
   const coverSettled = useCallback(
     (url?: string) => {
@@ -315,6 +329,26 @@ function HomeContent() {
     [sealedCovers, coverIsPending]
   );
   /**
+   * 已经上过屏的条目（`sourceKey_vodId`）：一旦显示就永不隐藏。
+   *
+   * 为什么需要：指纹窗口是从 `list` 现算的，流式追加 / `done` 重排会让「窗口外的条目」
+   * 先按片名兜底上屏、随后又被划进窗口变成 pending 而被抽走，卡片数量在 7↔8 之间来回跳
+   * （2026-11-20 本地手机尺寸实测「风中有朵雨做的云」8s 内卡片数反复增减）。
+   */
+  const shownItemsRef = useRef(new Set<string>());
+  /**
+   * 指纹 → 分组代表（sticky）：一个封面的分组 key 一旦分配就不再改变。
+   *
+   * `clusterCoverHashes` 的代表取簇内字典序最小值：新封面并入簇时代表会变，
+   * 对应卡片的 React key 随之变化 → 整卡重挂载 → 封面重新解码显示，肉眼就是「闪」。
+   * 实测同一次搜索里同一张卡被重建了几百次。
+   */
+  const stickyRepRef = useRef(new Map<string, string>());
+  useEffect(() => {
+    shownItemsRef.current = new Set();
+    stickyRepRef.current = new Map();
+  }, [urlQuery]);
+  /**
    * 展示用的条目：分组结论已定稿、且**确实有封面图**的。
    *
    * - 「等齐再画」期间返回空数组，页面显示骨架（不先画一批再重组）；
@@ -323,18 +357,44 @@ function HomeContent() {
    *   onCoverBroken 整卡处理；
    * - 源站根本没给封面（没有 pic）的条目仍然隐藏：渲染不出封面，只会多一张胶片占位卡。
    */
-  const visibleList = useMemo(
-    () =>
-      coverReady ? list.filter((item) => Boolean(item.pic?.trim()) && coverSettled(item.pic)) : [],
-    [coverReady, list, coverSettled]
-  );
+  const visibleList = useMemo(() => {
+    if (!coverReady) return [];
+    const shown = shownItemsRef.current;
+    const next: SearchResultItem[] = [];
+    for (const item of list) {
+      if (!item.pic?.trim()) continue;
+      const key = `${item.sourceKey}_${item.vodId}`;
+      // 已上过屏：无条件保留，别再因为「被划进指纹窗口」而抽走（会闪）
+      if (shown.has(key)) {
+        next.push(item);
+        continue;
+      }
+      if (!coverSettled(item.pic)) continue;
+      shown.add(key);
+      next.push(item);
+    }
+    return next;
+  }, [coverReady, list, coverSettled]);
   const coverHashMap = useMemo(() => {
-    const map = new Map<string, string>();
+    const pairs: Array<[string, string]> = [];
     for (const url of coverUrls) {
       // 封印的封面不参与分组：晚到的指纹只写缓存，否则整屏会重新合组
       if (sealedCovers.has(url)) continue;
       const hash = coverHashOf(url);
-      if (hash) map.set(url, hash);
+      if (hash) pairs.push([url, hash]);
+    }
+    const map = new Map<string, string>();
+    if (pairs.length === 0) return map;
+    // 先在页面侧聚一次，再把「簇代表」按首次分配固定下来；传给 aggregateResults 时
+    // 用 maxHashDistance=0，避免它再算出会变化的代表（key 稳定性优先于重新聚类）。
+    const clusters = clusterCoverHashes(pairs.map(([, hash]) => hash));
+    const sticky = stickyRepRef.current;
+    for (const [url, hash] of pairs) {
+      const rep = clusters.get(hash) ?? hash;
+      const canonical = sticky.get(rep) ?? sticky.get(hash) ?? rep;
+      sticky.set(hash, canonical);
+      sticky.set(rep, canonical);
+      map.set(url, canonical);
     }
     return map;
   }, [coverUrls, coverHashOf, sealedCovers]);
@@ -357,10 +417,12 @@ function HomeContent() {
     setBrokenCovers(new Set());
   }, [urlQuery]);
 
-  // 跨源聚合：视觉指纹相同（同一张封面）合并为一张卡片，展开后可选择具体来源
+  // 跨源聚合：视觉指纹相同（同一张封面）合并为一张卡片，展开后可选择具体来源。
+  // maxHashDistance=0：聚类已经在上面用 sticky canonical 固定过，这里只做「同值并组」，
+  // 避免再算出一个会随新封面变化的分组代表（那会让卡片 key 变化 → 整卡重挂载 → 闪）。
   const groups = useMemo(
     () =>
-      aggregateResults(visibleList, { coverHashes: coverHashMap }).filter(
+      aggregateResults(visibleList, { coverHashes: coverHashMap, maxHashDistance: 0 }).filter(
         (group) => !brokenCovers.has(group.key)
       ),
     [visibleList, coverHashMap, brokenCovers]
