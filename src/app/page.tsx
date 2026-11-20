@@ -47,8 +47,11 @@ const RESULT_PAGE_SIZE = 24;
  * 首搜碰上坏图床/慢图时，不能把整页结果无限期扣在灰色骨架上（用户 2026-11-19
  * 反馈「一列灰色占位卡片卡住」）。超过这个时间后，还没算完的条目先按 URL/片名
  * 兜底渲染；指纹随后完成会再合并一次，卡片可能重排——这是有意的取舍。
+ *
+ * 2026-11-20 从 2500ms 压到 400ms：指纹命中 IndexedDB 缓存时 <50ms 就绪，
+ * 冷搜也不该干等 2.5 秒；通知已按 120ms 合并，后续合组的跳变比原来更平滑。
  */
-const COVER_HASH_WAIT_MS = 2500;
+const COVER_HASH_WAIT_MS = 400;
 
 export default function HomePage() {
   return (
@@ -104,18 +107,53 @@ function HomeContent() {
   const searchQuery = useQuery({
     queryKey: ['search', urlQuery, selectedKeys, yellowFilter, searchTimeoutMs],
     // 与 runSearch 的截断规则保持一致：顶栏搜索 / 手动构造长链接不会绕过上限
-    queryFn: ({ signal }) => {
+    queryFn: async ({ signal }) => {
       setStreamedOutcomes([]);
-      return api.search(urlQuery.slice(0, 100), selectedSources, yellowFilter, {
-        signal,
-        timeoutMs: searchTimeoutMs,
-        // 逐源结算即更新：结果边搜边渲染，同时滚动健康度
-        // （停用/超时不再在这里提示：源健康状况只在设置 → 点播源里看）
-        onSource: (outcome) => {
-          setStreamedOutcomes((prev) => [...prev, outcome]);
-          useAppStore.getState().recordSourceHealth([outcome]);
-        },
-      });
+      /**
+       * 流式源结算按 100ms 合并提交（2026-11-20）：
+       * 快源集中返回时，原来每个源事件都要触发一次全量 compareSearchResults +
+       * aggregateResults + buildFacets；合并后一屏只重算一两次。
+       * 首个有结果的源仍然立刻上屏，保证首屏速度。
+       */
+      const pending: SourceSearchOutcome[] = [];
+      let flushTimer: ReturnType<typeof setTimeout> | null = null;
+      let cancelled = false;
+      const flushOutcomes = () => {
+        if (flushTimer) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+        if (cancelled || pending.length === 0) return;
+        const batch = pending.splice(0, pending.length);
+        setStreamedOutcomes((prev) => [...prev, ...batch]);
+      };
+      signal?.addEventListener('abort', () => {
+        cancelled = true;
+        if (flushTimer) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+        pending.length = 0;
+      }, { once: true });
+      try {
+        return await api.search(urlQuery.slice(0, 100), selectedSources, yellowFilter, {
+          signal,
+          timeoutMs: searchTimeoutMs,
+          // 逐源结算即更新：结果边搜边渲染，同时滚动健康度
+          // （停用/超时不再在这里提示：源健康状况只在设置 → 点播源里看）
+          onSource: (outcome) => {
+            useAppStore.getState().recordSourceHealth([outcome]);
+            pending.push(outcome);
+            if (pending.length === 1 && outcome.list.length > 0) {
+              flushOutcomes();
+              return;
+            }
+            if (!flushTimer) flushTimer = setTimeout(flushOutcomes, 100);
+          },
+        });
+      } finally {
+        flushOutcomes();
+      }
     },
     enabled: Boolean(urlQuery) && selectedSources.length > 0,
     // 5 分钟内从播放页返回时直接使用缓存，不重新搜索（服务端另有 60s 结果缓存兜底）
@@ -149,19 +187,26 @@ function HomeContent() {
   /**
    * 点封面直达播放：不带集数，用 `index=last` 交给播放页决定——
    * 有本地进度就续播，没有则剧集取最新一集。搜索页不必先拉一次详情。
+   * useCallback 稳定引用：配合 AggregatedCard 的 React.memo，输入框每敲一个字
+   * 不会让整页卡片全部重渲染。
    */
-  const playBest = (item: SearchResultItem) => {
-    addSearchHistory(item.name).catch(() => {});
-    router.push(
-      buildWatchUrl({
-        sourceKey: item.sourceKey,
-        vodId: item.vodId,
-        title: item.name,
-        sourceUrl: item.sourceUrl,
-        index: 'last',
-      })
-    );
-  };
+  const playBest = useCallback(
+    (item: SearchResultItem) => {
+      addSearchHistory(item.name).catch(() => {});
+      router.push(
+        buildWatchUrl({
+          sourceKey: item.sourceKey,
+          vodId: item.vodId,
+          title: item.name,
+          sourceUrl: item.sourceUrl,
+          index: 'last',
+        })
+      );
+    },
+    [router]
+  );
+
+  const openDetail = useCallback((item: SearchResultItem) => setDetailItem(item), []);
 
   const isSearching = Boolean(urlQuery) && searchQuery.isFetching && !searchQuery.data;
   /**
@@ -182,18 +227,26 @@ function HomeContent() {
     () => searchQuery.data?.list ?? (isSearching ? streamedList : []),
     [searchQuery.data, isSearching, streamedList]
   );
+  // 分批渲染：新一次搜索（查询/源选择/过滤条件变化）时重置回首批。
+  // 不能依赖 groups：流式搜索每追加一个源就会重建数组，会把「加载更多」反复重置。
+  const [visibleCount, setVisibleCount] = useState(RESULT_PAGE_SIZE);
   // 封面视觉指纹：浏览器经 /api/cover 取图后算 dHash，用于「同一张封面」聚合。
   // 指纹还没算完的条目先不参与聚合，避免先按片名分组、随后又跳变。
-  const coverUrls = useMemo(
-    () =>
-      list
-        .map((item) => item.pic)
-        .filter(
-          (pic): pic is string =>
-            typeof pic === 'string' && pic.length > 0 && !pic.startsWith('data:') && !pic.startsWith('blob:')
-        ),
-    [list]
-  );
+  //
+  // 只为「当前展示窗口 + 预热 1 页」的封面算指纹（2026-11-20）：原来把 list 里
+  // 最多 120 张封面全部入队，屏幕外没翻到、用户可能永远不会看的封面也会触发
+  // /api/cover Worker 请求，白白消耗配额和带宽。
+  const coverUrls = useMemo(() => {
+    const limit = visibleCount + RESULT_PAGE_SIZE;
+    const urls: string[] = [];
+    for (let i = 0; i < list.length && urls.length < limit; i++) {
+      const pic = list[i]?.pic;
+      if (typeof pic === 'string' && pic.length > 0 && !pic.startsWith('data:') && !pic.startsWith('blob:')) {
+        urls.push(pic);
+      }
+    }
+    return urls;
+  }, [list, visibleCount]);
   const coverHashes = useCoverHashes(coverUrls);
   /**
    * 封面指纹等待兜底：到点后不再把 pending 条目从聚合输入里剔除。
@@ -276,10 +329,13 @@ function HomeContent() {
     () => filteredGroups.reduce((sum, group) => sum + group.items.length, 0),
     [filteredGroups]
   );
+  /**
+   * 本次搜索里被「成人内容过滤」隐藏的相关条数。
+   * 原来被过滤的结果静默消失，用户只看到空态，容易误判成「没有片源」。
+   */
+  const filteredAdultCount = searchQuery.data?.filteredAdultCount ?? 0;
 
-  // 分批渲染：新一次搜索（查询/源选择/过滤条件变化）时重置回首批。
-  // 不能依赖 groups：流式搜索每追加一个源就会重建数组，会把「加载更多」反复重置。
-  const [visibleCount, setVisibleCount] = useState(RESULT_PAGE_SIZE);
+  // 分批渲染的计数已在上方声明（封面指纹窗口要用到它）。
   /**
    * 翻过页之后冻结当前顺序。
    * 搜索结果是流式的：源陆续结算、`done` 时还会整体按相关性重排。用户已经翻到第二页时
@@ -493,6 +549,14 @@ function HomeContent() {
               )}
             </div>
 
+            {/* 过滤提示条：被隐藏的条数要说出来，否则用户只会看到「没找到」 */}
+            {yellowFilter && filteredAdultCount > 0 && (
+              <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-chip px-3 py-2 text-xs">
+                <span className="text-muted">已按「成人内容过滤」隐藏 {filteredAdultCount} 条相关结果</span>
+                <span className="text-faint">需要查看可在「设置 → 首页与内容过滤」中关闭</span>
+              </div>
+            )}
+
             {selectedSources.length === 0 ? (
               <NoSourceGuide hasSources={customAPIs.length > 0 || envSources.length > 0} />
             ) : list.length > 0 ? (
@@ -504,7 +568,7 @@ function HomeContent() {
                         key={group.key}
                         group={group}
                         sources={selectedSources}
-                        onOpen={(item) => setDetailItem(item)}
+                        onOpen={openDetail}
                         onPlay={playBest}
                         onCoverBroken={markCoverBroken}
                       />

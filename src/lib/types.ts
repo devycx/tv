@@ -103,12 +103,19 @@ export interface QualityProbeResult {
 export interface SearchResponse {
   list: SearchResultItem[];
   failures: { sourceKey: string; error: string; timedOut?: boolean }[];
+  /** 开启成人内容过滤时，与搜索词相关但被过滤掉的条数（>0 才下发，用于空态提示） */
+  filteredAdultCount?: number;
 }
 
 /** /api/search?stream=1 的 NDJSON 事件：逐源推送 + 最终聚合 */
 export type SearchStreamEvent =
   | ({ type: 'source' } & SourceSearchOutcome)
-  | { type: 'done'; list: SearchResultItem[]; failures: SearchResponse['failures'] };
+  | {
+      type: 'done';
+      list: SearchResultItem[];
+      failures: SearchResponse['failures'];
+      filteredAdultCount?: number;
+    };
 
 export interface DoubanResponse {
   items: DoubanItem[];

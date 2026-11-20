@@ -16,10 +16,13 @@
  *   如果立刻按「未缓存」排队，会把 120 张预算全花在已缓存的旧封面上，
  *   新封面排在 120 个请求之后——表现就是「刷新后第一次搜索一直灰屏，再搜一次才正常」；
  * - 单次搜索最多算 120 张，且只把预算花在没缓存的封面上；
- * - 并发 8；同 host 只放一个 CORS 直连探测，其余直接走代理（一个坏图床不能
- *   让 8 个并发一起等 6s）；同 host 连续失败 3 次后暂停 30s；
+ * - 并发 4；同 host 只放一个 CORS 直连探测，其余直接走代理（一个坏图床不能
+ *   让 4 个并发一起等 6s）；同 host 连续失败 3 次后暂停 30s；
+ * - 通知按 120ms 合并（队列清空时立即 flush）：不能让「每算完一张」都触发页面
+ *   全量重算分组/筛选，滚动时那是主要掉帧源；
+ * - 解码时让浏览器降采样到指纹够用的尺寸（保宽高比），避免全尺寸解码抢主线程；
  * - 单张封面有 15s 总预算：fetch 有 6s 超时，但 createImageBitmap / img.decode
- *   在少数坏图上可能永远不返回，没有总超时会让 8 个槽位全挂住、队列停摆；
+ *   在少数坏图上可能永远不返回，没有总超时会让 4 个槽位全挂住、队列停摆；
  * - 等待中的封面不会先按片名分组再跳变：调用方用 isPending 把条目暂缓渲染，
  *   但 page.tsx 有 2.5s 兜底，不会让坏图床无限期扣住整页结果；
  * - 取图/解码失败（isFailed）的条目没有指纹，但**照常展示**（URL/片名兜底）：
@@ -36,7 +39,18 @@ export type CoverHashState = { status: 'pending' } | { status: 'done'; hash: str
 /** 旧版 localStorage 缓存键：只用于一次性迁移，迁移后删除 */
 const LEGACY_CACHE_KEY = 'cover-visual-hashes-v3';
 const MAX_PER_SEARCH = 120;
-const MAX_ACTIVE = 8;
+/**
+ * 并发上限：从 8 降到 4（2026-11-20）。
+ * 指纹解码会占用主线程，8 个同时在飞的 createImageBitmap + canvas 绘制在滚动时
+ * 和渲染帧抢时间；降到 4 后单张稍慢一点，但滚动掉帧明显减少。
+ */
+const MAX_ACTIVE = 4;
+/**
+ * 合并通知窗口：单张封面完成/失败不再立刻 notify（那会让页面每算完一张就全量
+ * 重算 aggregateResults + buildFacets + filterGroups），120ms 内合并成一次；
+ * 队列清空时立即 flush，避免最后一张要等一个窗口才上屏。
+ */
+const NOTIFY_BATCH_MS = 120;
 const REQUEST_TIMEOUT_MS = 6000;
 /**
  * 单张封面的总预算（取图 + 解码 + 算 dHash）。
@@ -154,9 +168,32 @@ function schedulePersist(): void {
   }, 800);
 }
 
+let notifyTimer: ReturnType<typeof setTimeout> | undefined;
+
 function notify(): void {
+  if (notifyTimer) {
+    clearTimeout(notifyTimer);
+    notifyTimer = undefined;
+  }
   version += 1;
   for (const listener of listeners) listener();
+}
+
+/**
+ * 合并通知：一次搜索要算 60~120 张封面，每张都 notify 会让页面把
+ * aggregateResults / buildFacets / filterGroups 全量跑几十遍（滚动时就是掉帧源）。
+ * 进行中每 NOTIFY_BATCH_MS 合并一次；队列清空时传 immediate 立刻 flush。
+ */
+function scheduleNotify(immediate: boolean): void {
+  if (immediate) {
+    notify();
+    return;
+  }
+  if (notifyTimer) return;
+  notifyTimer = setTimeout(() => {
+    notifyTimer = undefined;
+    notify();
+  }, NOTIFY_BATCH_MS);
 }
 
 function subscribe(listener: () => void): () => void {
@@ -206,6 +243,25 @@ function recordHostSuccess(host: string): void {
 const HASH_MID_SCALE = 5;
 
 /**
+ * 解码封面并直接让浏览器降采样到指纹够用的尺寸。
+ *
+ * 这里不能像常见写法那样 resize 成 9×8：本函数产出的 bitmap 还要先按 4:5 中心裁切，
+ * 9×8 已经把画幅压变形了（见 hashCoverBlob）。只指定 resizeWidth、让浏览器保持
+ * 原始宽高比，裁切口径不变；95px 宽足够两段缩放（中间图 45×40）用，1~3MB 原图
+ * 不必再按全尺寸解到主线程（JPEG 可走降采样解码，收益最大）。
+ *
+ * Safari / 旧浏览器不支持 resize 选项时会直接抛错，退回整图解码。
+ */
+async function decodeCoverBitmap(blob: Blob): Promise<ImageBitmap> {
+  const options: ImageBitmapOptions = { resizeWidth: 95, resizeQuality: 'low' };
+  try {
+    return await createImageBitmap(blob, options);
+  } catch {
+    return await createImageBitmap(blob);
+  }
+}
+
+/**
  * 9×8 canvas 上画图取像素；优先 createImageBitmap，Safari 旧版退回 <img>。
  *
  * 必须两段缩放：把 540×770 的大图一步 drawImage 到 9×8 时，浏览器走的是快速滤波，
@@ -241,7 +297,7 @@ async function hashCoverBlob(blob: Blob): Promise<string> {
 
   if (typeof createImageBitmap === 'function') {
     try {
-      const bitmap = await createImageBitmap(blob);
+      const bitmap = await decodeCoverBitmap(blob);
       try {
         return draw(bitmap, bitmap.width, bitmap.height);
       } finally {
@@ -341,12 +397,14 @@ function pump(): void {
       // IndexedDB 在首帧排完队之后才 hydrate 完：已缓存的封面不再重新取图。
       // 否则预算会先花在 120 个旧封面上，新封面要等它们全部跑完才轮到。
       states.set(url, { status: 'done', hash: cached });
-      notify();
+      scheduleNotify(active === 0 && queue.length === 0);
       continue;
     }
 
     const host = hostOf(url);
     active += 1;
+    // 这一张做完后是否就空闲了：是则立刻通知，否则走 120ms 合并窗口
+    const lastOneInFlight = () => active === 1 && queue.length === 0;
     hashCoverWithDeadline(url)
       .then((hash) => {
         states.set(url, { status: 'done', hash });
@@ -355,12 +413,12 @@ function pump(): void {
         dirtyUpserts.set(url, hash);
         if (host) recordHostSuccess(host);
         schedulePersist();
-        notify();
+        scheduleNotify(lastOneInFlight());
       })
       .catch(() => {
         states.set(url, { status: 'failed' });
         if (host) recordHostFailure(host);
-        notify();
+        scheduleNotify(lastOneInFlight());
       })
       .finally(() => {
         active -= 1;

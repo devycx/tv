@@ -3,8 +3,11 @@
  * 从 live-channel-list 组件中抽出为可测试的纯逻辑：
  * - 搜索归一化：忽略分隔符差异（cctv1 可命中 CCTV-1 综合）；
  * - 可用性两档筛选：仅绿点（分片级验证）/ 含琥珀（弱验证或超时）；
- * - 排序：默认 / 名称 / 分组 / 可用性优先 / 最近观看。
+ * - 排序：默认 / 名称 / 分组 / 可用性优先 / 最近观看；
+ * - 成人内容过滤（与点播搜索共用 lib/cms-parser 的词表口径）。
  */
+
+import { isAdultType, isAdultTitle } from './cms-parser';
 
 /** 与 store 的 LiveProbeEntry 结构兼容的测活结果子集（避免 lib 依赖 client store 类型） */
 export interface ProbeLike {
@@ -90,6 +93,17 @@ export function probeRank(probe: ProbeLike | undefined): number {
     return isSlowSource(probe) ? 1 : 0;
   }
   return probe.timedOut ? 3 : 4;
+}
+
+/**
+ * 频道是否属于成人内容（best-effort）：分组名走分类词表，台名只认强特征词。
+ *
+ * 直播源的 M3U 没有 18+ 标记，只能靠分组名（「成人」「福利」「伦理」…）
+ * 和台名里的强特征词判断；用分类口径套台名会误伤「成人礼」这类正常节目名，
+ * 所以台名用片名口径（见 lib/cms-parser 的 isAdultTitle）。
+ */
+export function isAdultChannel(channel: KeywordMatchable): boolean {
+  return isAdultType(channel.group) || isAdultTitle(channel.name);
 }
 
 export interface SortContext {

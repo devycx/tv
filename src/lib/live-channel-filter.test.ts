@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  isAdultChannel,
   isSlowSource,
   matchesAlive,
   matchesKeyword,
@@ -163,5 +164,19 @@ describe('sortChannels', () => {
       ['u1', 1],
     ]);
     expect(sortChannels(list, 'recent', { recentOrder }).map((c) => c.url)).toEqual(['u3', 'u1', 'u2']);
+  });
+});
+
+describe('isAdultChannel', () => {
+  it('分组名命中成人分类词', () => {
+    expect(isAdultChannel(channel({ name: '某频道', group: '成人频道' }))).toBe(true);
+    expect(isAdultChannel(channel({ name: '某频道', group: '福利' }))).toBe(true);
+    expect(isAdultChannel(channel({ name: '某频道', group: '伦理片' }))).toBe(true);
+  });
+
+  it('台名只认强特征词，不误伤正常节目', () => {
+    expect(isAdultChannel(channel({ name: 'AV女优精选' }))).toBe(true);
+    expect(isAdultChannel(channel({ name: '成人礼' }))).toBe(false);
+    expect(isAdultChannel(channel({ name: 'CCTV-1 综合', group: '央视' }))).toBe(false);
   });
 });

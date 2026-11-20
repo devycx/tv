@@ -23,6 +23,7 @@ import { Spinner } from '@/components/states';
 import { useAuth } from '@/components/auth';
 import { allLiveSources, useAppStore, type LiveProbeEntry } from '@/lib/store';
 import { collectGroups } from '@/lib/m3u-parser';
+import { isAdultChannel } from '@/lib/live-channel-filter';
 import { cn } from '@/lib/utils';
 import { SmartImage } from '@/components/smart-image';
 import { useDocumentTitle } from '@/components/use-document-title';
@@ -54,6 +55,8 @@ function LiveContent() {
   const imageProxyMode = useAppStore((s) => s.imageProxyMode);
   const volumeBoost = useAppStore((s) => s.volumeBoost);
   const customImageProxy = useAppStore((s) => s.customImageProxy);
+  // 成人内容过滤是全局设置：点播搜索已按它过滤，直播页同样要尊重
+  const yellowFilter = useAppStore((s) => s.yellowFilter);
   const { verified } = useAuth();
   const [copied, setCopied] = useState(false);
   const [logoFailed, setLogoFailed] = useState(false);
@@ -121,8 +124,11 @@ function LiveContent() {
     }
     // 跨源按频道名/tvg-id 合并：一个频道一行，候选源列表供点选时按需探测
     const mergedList = mergeChannels(list);
-    return { channels: list, merged: mergedList, groups: collectGroups(mergedList), failedCount: failed };
-  }, [playlistsQuery.data]);
+    // 开启成人过滤时隐藏 18+ 频道（分组名/台名命中规则）；channels 保持全量，
+    // 正在播放的频道即使被过滤也还能继续播、还能从「最近观看」回到它
+    const visibleList = yellowFilter ? mergedList.filter((row) => !isAdultChannel(row)) : mergedList;
+    return { channels: list, merged: visibleList, groups: collectGroups(visibleList), failedCount: failed };
+  }, [playlistsQuery.data, yellowFilter]);
 
   // 当前频道：优先取列表内完整对象（含台标），否则由 URL 参数重建
   const currentUrl = searchParams.get('url') || '';

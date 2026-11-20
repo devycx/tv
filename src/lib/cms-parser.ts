@@ -47,9 +47,9 @@ export function parseSearchList(
       area: typeof vod.vod_area === 'string' ? vod.vod_area : undefined,
       remarks: typeof vod.vod_remarks === 'string' ? vod.vod_remarks : undefined,
       sourceUrl: source.url,
-      // 源级 18+ 标记之外，再按分类名识别成人/伦理内容：
+      // 源级 18+ 标记之外，再按分类名 / 片名强特征识别成人内容：
       // 这样即使源没标 isAdult，搜索结果也能打 18🈲 徽章，并参与「成人内容过滤」。
-      isAdult: Boolean(source.isAdult) || isAdultContent(typeName),
+      isAdult: Boolean(source.isAdult) || isAdultType(typeName) || isAdultTitle(String(vod.vod_name ?? '')),
     };
   });
 }
@@ -167,29 +167,75 @@ export function parseDetailPageHtml(
   };
 }
 
-/** 敏感分类过滤（成人内容过滤，关键词与旧版保持一致） */
-const ADULT_KEYWORDS = [
-  '伦理片', '福利', '倫理片', '福利片', '日本伦理', '日本福利', '日本福利片', '日本伦理片', '擦边短剧', '擦边', '韩国伦理','里番动漫', '门事件', '萝莉少女', '制服诱惑', '国产传媒',
-  'cosplay', '黑丝诱惑', '无码', '日本无码', '有码', '日本有码', 'SWAG',
-  '网红主播', '色情片', '同性片', '福利视频', '无码高清', '有码高清', '91视频', '自拍偷拍', 'mini传媒', '福利片',
+/**
+ * 敏感分类过滤（成人内容过滤）。
+ *
+ * 拆成「分类名规则」与「片名强特征规则」两套词表（2026-11-20）：
+ * 分类名可以宽（源站分类就叫「伦理片」「福利」「擦边」），但片名不能共用同一套——
+ * `'AV'` 之类的短词做子串匹配时会误杀 Avatar / Avengers / Gravity / Maverick 等
+ * 正常英文片名，`'成人'`「福利」「伦理」「三级」「自拍」「换脸」「cosplay」
+ * 也会吃掉《成人礼》这类中文片名。
+ */
+const ADULT_TYPE_KEYWORDS = [
+  '伦理片', '倫理片', '福利片', '福利视频', '日本伦理', '日本福利', '日本伦理片', '日本福利片',
+  '韩国伦理', '擦边短剧', '擦边', '里番动漫', '里番', '门事件',
+  '萝莉少女', '制服诱惑', '国产传媒', '黑丝诱惑', '无码', '日本无码', '有码', '日本有码',
+  '网红主播', '色情片', '同性片', '91视频', '自拍偷拍', 'mini传媒',
   // 用户反馈补充：成人 / 情色 / 三级 / 女优 / 换脸等分类也要能打 18🈲 并参与过滤
-  '成人', '色情', '情色', '三级', 'R18', '18禁', '女优', '换脸', '日本片商', '伦理', '无码', '有码',
-  '里番', 'H漫', '自拍', '偷拍', 'AV',
+  '成人', '色情', '情色', '三级', '18禁', '女优', '换脸', '日本片商',
+  '伦理', '福利', '自拍', '偷拍', 'cosplay',
 ];
 
-export function isAdultContent(text: string | undefined): boolean {
-  if (!text) return false;
+/** 片名匹配：只保留极低误杀率的强特征词（不通用于分类名的宽词） */
+const ADULT_TITLE_KEYWORDS = [
+  '无码', '有码', '色情', '情色', '18禁', '里番', '女优', '日本片商',
+  '自拍偷拍', '黑丝诱惑', '制服诱惑', '国产传媒', 'mini传媒', '91视频',
+];
+
+/**
+ * 英文 / 字母缩写必须做词边界匹配：否则 `av` 会命中 Avatar、Avengers、Gravity。
+ * 前后都不允许再跟字母数字，`AV` 本身/`AV-1`/`AV 女优` 仍然能命中。
+ */
+const ADULT_TOKEN_REGEX = /(?<![a-z0-9])(av|r18|swag|h漫)(?![a-z0-9])/i;
+
+function includesAdultKeyword(text: string, keywords: readonly string[]): boolean {
   const lower = text.toLowerCase();
-  return ADULT_KEYWORDS.some((k) => lower.includes(k.toLowerCase()));
+  return keywords.some((k) => lower.includes(k.toLowerCase()));
+}
+
+/** 分类名（type_name / 直播分组）判定：词表较宽，英文短词走边界正则 */
+export function isAdultType(typeName: string | undefined): boolean {
+  if (!typeName) return false;
+  if (ADULT_TOKEN_REGEX.test(typeName)) return true;
+  return includesAdultKeyword(typeName, ADULT_TYPE_KEYWORDS);
+}
+
+/** 片名判定：只认强特征词 + 英文短词边界，避免误杀正常影视 */
+export function isAdultTitle(title: string | undefined): boolean {
+  if (!title) return false;
+  if (ADULT_TOKEN_REGEX.test(title)) return true;
+  return includesAdultKeyword(title, ADULT_TITLE_KEYWORDS);
+}
+
+/** 统一判定入口：源标记 / 分类名 / 片名任一命中即视为成人内容 */
+export function isAdultItem(item: {
+  isAdult?: boolean;
+  typeName?: string;
+  name?: string;
+}): boolean {
+  return Boolean(item.isAdult) || isAdultType(item.typeName) || isAdultTitle(item.name);
+}
+
+/** 兼容旧导出名：只按分类名口径判断（历史调用方与单测用它检查分类词表） */
+export function isAdultContent(text: string | undefined): boolean {
+  return isAdultType(text);
 }
 
 export function filterAdultResults<
   T extends { typeName?: string; name?: string; isAdult?: boolean },
 >(items: T[], enabled: boolean): T[] {
   if (!enabled) return items;
-  return items.filter(
-    (item) => !item.isAdult && !isAdultContent(item.typeName) && !isAdultContent(item.name)
-  );
+  return items.filter((item) => !isAdultItem(item));
 }
 
 /**

@@ -216,6 +216,44 @@ describe('成人内容过滤', () => {
     ];
     expect(filterAdultResults(items, true)).toEqual([{ typeName: '剧情片', name: '普通剧' }]);
   });
+
+  it('英文短词按词边界匹配，不误杀正常片名', () => {
+    const items = [
+      { typeName: '动作片', name: 'Avatar' },
+      { typeName: '科幻片', name: 'Avengers: Endgame' },
+      { typeName: '科幻片', name: 'Gravity' },
+      { typeName: '动作片', name: 'Top Gun: Maverick' },
+      { typeName: '剧情片', name: '成人礼' },
+      { typeName: '剧情片', name: '福利院的孩子' },
+    ];
+    expect(filterAdultResults(items, true)).toEqual(items);
+  });
+
+  it('独立的 AV / R18 缩写仍然判为成人内容', () => {
+    expect(filterAdultResults([{ name: 'AV女优精选' }], true)).toEqual([]);
+    expect(filterAdultResults([{ name: 'R18 限定' }], true)).toEqual([]);
+    // 词内包含不算命中
+    expect(filterAdultResults([{ name: 'Braveheart' }], true)).toHaveLength(1);
+  });
+
+  it('片名强特征词仍然参与过滤', () => {
+    expect(filterAdultResults([{ name: '某剧无码流出' }], true)).toEqual([]);
+    expect(filterAdultResults([{ name: '91视频合集' }], true)).toEqual([]);
+  });
+
+  it('parseSearchList 也按片名强特征打 isAdult（不只按分类名）', () => {
+    const items = parseSearchList(
+      {
+        list: [
+          { vod_id: 1, vod_name: '某剧无码流出', type_name: '剧情片' },
+          { vod_id: 2, vod_name: 'Avatar', type_name: '科幻片' },
+        ],
+      },
+      source
+    );
+    expect(items[0].isAdult).toBe(true);
+    expect(items[1].isAdult).toBe(false);
+  });
 });
 
 describe('normalizeTitle', () => {

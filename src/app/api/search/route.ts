@@ -262,16 +262,20 @@ async function searchSource(
 /** 合并 + 去重 + 过滤 + 排序，stream 与非 stream 两种模式共用 */
 function aggregateOutcomes(outcomes: SourceSearchOutcome[], wd: string, filterAdult: boolean): SearchResponse {
   const seen = new Set<string>();
-  let list = outcomes.flatMap((o) => o.list).filter((item) => {
+  const deduped = outcomes.flatMap((o) => o.list).filter((item) => {
     const key = `${item.sourceKey}_${item.vodId}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 
-  list = filterAdultResults(list, filterAdult);
   // 部分源站做分词/OR 模糊搜索（搜「摔跤吧！爸爸」返回一堆「爸爸XXX」），按关键词过滤
-  list = filterRelevantResults(list, wd);
+  const relevant = filterRelevantResults(deduped, wd);
+
+  // 先按相关性过滤再统计成人过滤条数：统计口径是「真正与搜索词相关、但被过滤掉的条数」，
+  // 不相关垃圾结果不该算进「已隐藏 N 条」里让用户误以为被误杀。
+  const list = filterAdultResults(relevant, filterAdult);
+  const filteredAdultCount = relevant.length - list.length;
 
   // 相关性分档（精确 > 前缀 > 全词 > 包含 > 近似）→ 原始写法 → 年份由近及远 → 名称 → 源名。
   // 旧的「精确优先 + 拼音序」会把「戒色」排到「色戒」前面，见 lib/relevance.ts
@@ -281,7 +285,8 @@ function aggregateOutcomes(outcomes: SourceSearchOutcome[], wd: string, filterAd
     .filter((o) => !o.ok)
     .map((o) => ({ sourceKey: o.sourceKey, error: o.error || '请求失败', timedOut: o.timedOut }));
 
-  return { list, failures };
+  // 为 0 时不写字段：保持既有响应结构（缓存/单测按 { list, failures } 比对）
+  return filteredAdultCount > 0 ? { list, failures, filteredAdultCount } : { list, failures };
 }
 
 /**
@@ -308,10 +313,22 @@ export async function POST(req: Request) {
   if (!Array.isArray(body.sources) || body.sources.length === 0) {
     return NextResponse.json({ error: '请至少选择一个点播源' }, { status: 400 });
   }
-  const sources = body.sources.slice(0, 50);
+  const rawSources = body.sources.slice(0, 50);
+  const filterAdult = body.filterAdult !== false;
+  // 开启成人过滤时直接跳过 isAdult 源：前端默认不勾选它们，但旧链接/旧缓存/外部调用
+  // 仍可能把它们传进来——照抓一遍只会白吃 Workers 子请求预算、拉长搜索等待，
+  // 结果最后还要被过滤掉。
+  const sources = filterAdult ? rawSources.filter((s) => !s.isAdult) : rawSources;
+  if (sources.length === 0) {
+    const empty: SearchResponse = { list: [], failures: [] };
+    return new URL(req.url).searchParams.get('stream') === '1'
+      ? new Response(JSON.stringify({ type: 'done', ...empty }) + '\n', {
+          headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store' },
+        })
+      : NextResponse.json(empty);
+  }
   // 源越多，单源翻页预算越小，保证总上游请求数不超过 Workers 免费版子请求上限
   const maxPages = resolveMaxPages(sources.length);
-  const filterAdult = body.filterAdult !== false;
   // 用户设置优先，其次是部署配置；两者都收敛在 1s–60s
   const timeoutMs = normalizeSourceTimeoutMs(body.timeoutMs) ?? SEARCH_SOURCE_TIMEOUT_MS;
 
@@ -320,7 +337,12 @@ export async function POST(req: Request) {
   if (cached) {
     // 流式模式下缓存命中也要走 done 事件，客户端解析逻辑保持单一
     if (new URL(req.url).searchParams.get('stream') === '1') {
-      const event: SearchStreamEvent = { type: 'done', list: cached.list, failures: cached.failures };
+      const event: SearchStreamEvent = {
+        type: 'done',
+        list: cached.list,
+        failures: cached.failures,
+        filteredAdultCount: cached.filteredAdultCount,
+      };
       return new Response(JSON.stringify(event) + '\n', {
         headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store' },
       });
@@ -363,7 +385,12 @@ export async function POST(req: Request) {
 
       const payload = aggregateOutcomes(outcomes, wd, filterAdult);
       setCache(cacheKey, payload, SEARCH_CACHE_TTL);
-      send({ type: 'done', list: payload.list, failures: payload.failures });
+      send({
+        type: 'done',
+        list: payload.list,
+        failures: payload.failures,
+        filteredAdultCount: payload.filteredAdultCount,
+      });
       closed = true;
       try {
         controller.close();

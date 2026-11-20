@@ -94,8 +94,36 @@ describe('POST /api/search', () => {
     expect(data.failures[0].error).toContain('500');
   });
 
-  it('精确命中（忽略标点差异）排在最前', async () => {
-    mockUpstream();
+  it('开启成人过滤时跳过 isAdult 源（不占子请求预算）并返回被过滤条数', async () => {
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          cmsList([
+            { vod_id: 1, vod_name: '测试剧', type_name: '国产剧' },
+            { vod_id: 2, vod_name: '测试剧 伦理版', type_name: '伦理片' },
+          ]),
+          { headers: { 'content-type': 'application/json' } }
+        )
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const sources: SourceConfig[] = [
+      { key: 'normal', name: '正常源', url: 'https://normal-cms.example.com/api.php' },
+      { key: 'adult', name: '成人源', url: 'https://adult-cms.example.com/api.php', isAdult: true },
+    ];
+    const res = await POST(makeRequest({ wd: '测试剧', sources, filterAdult: true }));
+    const data = (await res.json()) as SearchResponse;
+
+    // 成人源一个上游请求都不该发
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const calledUrl = String((fetchSpy.mock.calls as unknown as Array<[RequestInfo | URL]>)[0]?.[0] ?? '');
+    expect(calledUrl).toContain('normal-cms.example.com');
+    // 成人分类条目被过滤，并把条数回传给前端做提示
+    expect(data.list.map((item) => item.vodId)).toEqual(['1']);
+    expect(data.filteredAdultCount).toBe(1);
+  });
+
+  it('精确命中（忽略标点差异）排在最前', async () => {    mockUpstream();
     const res = await POST(makeRequest({ wd: '测试剧', sources: [SOURCES[0]], filterAdult: true }));
     const data = (await res.json()) as { list: Array<{ name: string }> };
     expect(data.list[0]?.name).toBe('测试剧');

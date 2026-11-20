@@ -434,7 +434,11 @@ function mergeSearchResponses(parts: SearchResponse[], wd: string): SearchRespon
     }
   }
   list.sort((a, b) => compareSearchResults(a, b, wd));
-  return { list, failures: parts.flatMap((part) => part.failures) };
+  // 分片各自统计，合并后求和；都为 0 时不下发（与服务端「>0 才带字段」一致）
+  const filteredAdultCount = parts.reduce((sum, part) => sum + (part.filteredAdultCount ?? 0), 0);
+  return filteredAdultCount > 0
+    ? { list, failures: parts.flatMap((part) => part.failures), filteredAdultCount }
+    : { list, failures: parts.flatMap((part) => part.failures) };
 }
 
 /** 聚合搜索流式消费：逐源回调 + 最终聚合结果（NDJSON 行协议） */
@@ -461,7 +465,11 @@ async function searchStream(
       if (event.type === 'source') {
         onSource(event);
       } else if (event.type === 'done') {
-        final = { list: event.list, failures: event.failures };
+        final = {
+          list: event.list,
+          failures: event.failures,
+          filteredAdultCount: event.filteredAdultCount,
+        };
       }
     });
     return final;

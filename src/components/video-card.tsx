@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { memo, useEffect, useMemo, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import type { SearchResultItem, SourceConfig } from '@/lib/types';
 import { readQuality, useAppStore } from '@/lib/store';
 import { qualityKey } from '@/lib/quality';
@@ -28,13 +28,7 @@ const COVER_LOAD_TIMEOUT_MS = 7000;
  * - 封面不压暗、不叠「N 源」角标：海报本身就是要看的内容，图上的角标还会挡住
  *   源站海报自带的片名/阵容；来源数量在底部文字区已经写清楚了。
  */
-export function AggregatedCard({
-  group,
-  onOpen,
-  onPlay,
-  sources,
-  onCoverBroken,
-}: {
+interface AggregatedCardProps {
   group: AggregatedGroup;
   onOpen: (item: SearchResultItem) => void;
   /** 点封面直达播放：由页面负责拼播放页 URL */
@@ -46,7 +40,26 @@ export function AggregatedCard({
    * 交由页面整卡隐藏——搜索页只展示能看见封面的影片（用户 2026-11-15 要求）。
    */
   onCoverBroken?: (key: string) => void;
-}) {
+}
+
+/**
+ * 聚合影片卡片：
+ * - 点击封面图 → 立即播放（播放页会挑画质最好的源、剧集默认最新一集）；
+ * - 点击文字区 → 打开详情（看简介 / 选集）；
+ * - 多源：底部显示「N 个来源」，展开后可选择具体源；
+ * - 封面不压暗、不叠「N 源」角标：海报本身就是要看的内容，图上的角标还会挡住
+ *   源站海报自带的片名/阵容；来源数量在底部文字区已经写清楚了。
+ *
+ * memo 包一层：首页在输入框每敲一个字、标签筛选变化时都会整树重渲染，
+ * 卡片（含画质订阅、封面候选链）没必要跟着重算；页面侧的回调已用 useCallback 固定引用。
+ */
+export const AggregatedCard = memo(function AggregatedCard({
+  group,
+  onOpen,
+  onPlay,
+  sources,
+  onCoverBroken,
+}: AggregatedCardProps) {
   const imageProxyMode = useAppStore((s) => s.imageProxyMode);
   const customImageProxy = useAppStore((s) => s.customImageProxy);
   const [expanded, setExpanded] = useState(false);
@@ -367,7 +380,7 @@ export function AggregatedCard({
       )}
     </div>
   );
-}
+});
 
 /** 豆瓣推荐卡片（无来源徽章，点击直接搜索） */
 export function DoubanCard({ item, onClick }: { item: { title: string; cover: string; rating?: string }; onClick: () => void }) {
