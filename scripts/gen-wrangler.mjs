@@ -27,18 +27,28 @@ import fs from 'node:fs';
  * 口径：228 个去重采集接口 → 5 关键词检索 → 片库规模 → 3 轮延迟中位数 →
  * 线路感知的真播（master → variant → 首分片，2xx 且 >1KB，不看 manifest 就算过）。
  * 排序依据是「检索覆盖 100 分制 + 片库 + 延迟」，明细见 libretv-source-audit/README.md。
+ *
+ * 上线后又按**线上出口**复验了一轮（同一组关键词 庆余年/哪吒/狂飙，走部署好的
+ * Worker 的 /api/search）。这一步筛掉了本地测得了、线上却拿不到的源：
+ * Cloudflare 的 525「SSL handshake failed」出现在一批源站本身也挂在 Cloudflare
+ * 后面的接口上（量子、如意、红牛、360、1080、爱奇艺、新狼、鲨鱼、废柴、精品下）。
+ * 这些站**换成 http 入口就能通**（Worker → 源站不再走 TLS），所以下面保留的
+ * http 源不是笔误。360 / 最大资源 / 茅台 / 玉兔 同协议也不通（525 或 0 条），已剔除。
  */
 const sources = [
+  // 线上 3 词合计 52 / 63ms，片库 190,116（本地测延迟高是因为香港出口，Cloudflare 边缘很快）
+  { name: '艾旦影视', url: 'https://lovedan.net/api.php/provide/vod', isAdult: false, tier: 1 },
   { name: '暴风资源', url: 'https://bfzyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
-  { name: '最大资源', url: 'https://api.zuidapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
-  { name: '量子资源', url: 'https://cj.lziapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
-  { name: '金鹰资源', url: 'https://jyzyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
-  { name: '如意资源', url: 'https://cj.rycjapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
   { name: '无尽资源', url: 'https://api.wujinapi.me/api.php/provide/vod', isAdult: false, tier: 1 },
-  { name: '爱坤资源', url: 'https://ikunzyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
-  { name: '红牛资源', url: 'https://www.hongniuzy2.com/api.php/provide/vod', isAdult: false, tier: 1 },
-  { name: '360资源', url: 'https://360zy.com/api.php/provide/vod', isAdult: false },
-  { name: '1080资源库', url: 'https://api.1080zyku.com/inc/apijson.php', isAdult: false },
+  { name: '豪华资源', url: 'https://hhzyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
+  { name: '速博资源', url: 'https://subocaiji.com/api.php/provide/vod', isAdult: false, tier: 1 },
+  // 红牛 14 个候选里唯一 525 的 https 入口，改 http 后 3/3 命中
+  { name: '红牛资源', url: 'http://www.hongniuzy2.com/api.php/provide/vod', isAdult: false, tier: 1 },
+  { name: '极速资源', url: 'https://jszyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
+  { name: '如意资源', url: 'http://cj.rycjapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
+  // 量子线上用 cj.lziapi.com 拿不到（525），lzizy1 是同一后端（片库都是 164,649）
+  { name: '量子资源', url: 'https://lzizy1.com/api.php/provide/vod', isAdult: false },
+  { name: '非凡资源', url: 'http://ffzy.tv/api.php/provide/vod', isAdult: false },
 
   /**
    * 点播源 · 18+（2026-11-20 实测 top10）
@@ -49,18 +59,19 @@ const sources = [
    * 并要求播放链带 Access-Control-Allow-Origin（播放器是浏览器直连，没有代理）。
    * 明细见 libretv-source-audit/README-adult.md。
    *
-   * 注：辣椒只有 http 入口（https 不可达），服务端代理拉取不受影响。
+   * 同上的线上复验：鲨鱼 / 废柴 / 精品下 / 辣椒 的 https 入口是 525，换 http 后
+   * 每个都 3/3 命中 20 条；玉兔两个协议都 >3s 超时，移出替换名单（麻豆 / 滴滴 替补）。
    */
   { name: '乐播', url: 'https://lbapi9.com/api.php/provide/vod', isAdult: true },
-  { name: '鲨鱼', url: 'https://shayuapi.com/api.php/provide/vod', isAdult: true },
+  { name: '鲨鱼', url: 'http://shayuapi.com/api.php/provide/vod', isAdult: true },
   { name: '大地', url: 'https://dadiapi.com/api.php/provide/vod', isAdult: true },
   { name: '森林', url: 'https://slapibf.com/api.php/provide/vod', isAdult: true },
-  { name: '废柴', url: 'https://fhapi9.com/api.php/provide/vod', isAdult: true },
+  { name: '废柴', url: 'http://fhapi9.com/api.php/provide/vod', isAdult: true },
   { name: '辣椒', url: 'http://api.11bat.com/api.php/provide/vod', isAdult: true },
-  { name: '玉兔资源', url: 'https://apiyutu.com/api.php/provide/vod', isAdult: true },
   { name: '155', url: 'https://155api.com/api.php/provide/vod', isAdult: true },
   { name: '魔法', url: 'https://madouse.la/api.php/provide/vod', isAdult: true },
-  { name: '精品下', url: 'https://www.jingpinx.com/api.php/provide/vod', isAdult: true },
+  { name: '精品下', url: 'http://www.jingpinx.com/api.php/provide/vod', isAdult: true },
+  { name: '滴滴', url: 'https://api.ddapi.cc/api.php/provide/vod', isAdult: true },
 ];
 
 /**
