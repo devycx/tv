@@ -46,6 +46,11 @@ Cloudflare 明确限制「站外托管的视频/大文件经其 CDN 分发给访
 - 综合 10 源的口径：228 个去重接口 → 5 关键词检索覆盖 → 片库规模 → 3 轮延迟中位数 →
   线路感知真播（master → variant → 首分片 2xx 且 >1KB，只看 manifest 不算过）。
   明细见 `libretv-source-audit/README.md`。
+- **上线后还要按线上出口复验**：Cloudflare 的 `525 SSL handshake failed` 会把一批
+  「源站自己也在 Cloudflare 后面」的源打成 0 结果（`cj.lziapi.com`、`cj.rycjapi.com`、
+  `www.hongniuzy2.com`、`shayuapi.com`、`fhapi9.com`、`www.jingpinx.com` …）。
+  这些站换 `http://` 入口即可（Worker → 源站不再握手），所以 `DEFAULT_SOURCES` 里的
+  http 条目是刻意保留的，不要「顺手升级成 https」。验证脚本：`tv/.tmp/verify-final.mjs`。
 - 18+ 10 源：60 条最新片名 + 分类表判定成人占比 ≥ 50%，再要 search → detail → 分片全通、
   播放链带 `ACAO`。明细见 `libretv-source-audit/README-adult.md`。
 - 直播源：10 个列表 17,241 条频道条目，抽样 1,258 个实测「可直连」占 30%（https + `ACAO`），
