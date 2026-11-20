@@ -51,7 +51,15 @@ const MAX_ACTIVE = 8;
  * 队列清空时立即 flush，避免最后一张要等一个窗口才上屏。
  */
 const NOTIFY_BATCH_MS = 120;
-const REQUEST_TIMEOUT_MS = 6000;
+/**
+ * 单张封面的取图超时。
+ *
+ * 2026-11-20 从 6s 收到 3s：指纹现在是首页首屏的闸门（等齐再画），冷搜实测
+ * 每张 /api/cover 的 p50 ≈ 1.2s、p90 ≈ 2s，只有坏图床/黑洞请求才会拖到 6s；
+ * 这类请求白占并发槽位，把首屏拖过 3s 上限。3s 还没拿到就当失败——失败也是
+ * 结论，条目照常展示（按 URL/片名兜底），下次搜索会重新尝试。
+ */
+const REQUEST_TIMEOUT_MS = 3000;
 /**
  * 单张封面的总预算（取图 + 解码 + 算 dHash）。
  * fetch 自身有 6s 超时，但 createImageBitmap / img.decode 在少数坏图上可能永远
