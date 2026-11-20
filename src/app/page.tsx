@@ -42,16 +42,13 @@ import { Icon } from '@/components/icon';
 const RESULT_PAGE_SIZE = 24;
 
 /**
- * 封面指纹等待上限：搜索数据到手后最多等这么久。
+ * 「等齐再画」的兜底上限：从第一条结果出现开始计时。
  *
- * 首搜碰上坏图床/慢图时，不能把整页结果无限期扣在灰色骨架上（用户 2026-11-19
- * 反馈「一列灰色占位卡片卡住」）。超过这个时间后，还没算完的条目先按 URL/片名
- * 兜底渲染；指纹随后完成会再合并一次，卡片可能重排——这是有意的取舍。
- *
- * 2026-11-20 从 2500ms 压到 400ms：指纹命中 IndexedDB 缓存时 <50ms 就绪，
- * 冷搜也不该干等 2.5 秒；通知已按 120ms 合并，后续合组的跳变比原来更平滑。
+ * 正常情况下封面指纹（命中 IndexedDB 的 <50ms，冷搜一轮 48 张）会很快全部有结论，
+ * 到点还没结论的封面被「封印」——本屏按 URL/片名兜底分组，晚到的指纹只写缓存、
+ * 不再改动这一屏，坏图床不能把页面无限期扣在骨架上。
  */
-const COVER_HASH_WAIT_MS = 400;
+const COVER_HASH_SETTLE_TIMEOUT_MS = 3000;
 
 export default function HomePage() {
   return (
@@ -248,47 +245,99 @@ function HomeContent() {
     return urls;
   }, [list, visibleCount]);
   const coverHashes = useCoverHashes(coverUrls);
-  /**
-   * 封面指纹等待兜底：到点后不再把 pending 条目从聚合输入里剔除。
-   * 首搜遇到坏图床时，至少先把结果按 URL/片名兜底展示出来。
-   * 从「有第一条结果」开始计时，不是从输入关键词开始：搜索本身慢的时候
-   * 指纹可能已经算完大半，没必要提前降级。
-   */
-  const [coverWaitOver, setCoverWaitOver] = useState(false);
+  const { pending: pendingCovers, hashOf: coverHashOf, isPending: coverIsPending } = coverHashes;
   const hasResults = list.length > 0;
+  /**
+   * 首批结果「等齐再画」：当前窗口的封面指纹全部有结论（算完/失败）后再整屏上屏，
+   * 等待期间只显示骨架。
+   *
+   * 这样每张卡片的分组 key 在第一次出现时就已定稿，不会出现「先按片名分组、
+   * 指纹到了再合组」的跳变（用户 2026-11-20 明确要求：不要合组跳变）。
+   * 之后的流式追加只会新增卡片或给已有卡片加来源，不会改动已上屏的分组。
+   */
+  const [coverReady, setCoverReady] = useState(false);
+  /** 被封印的封面：本屏不再等它，也不接受它晚到的指纹参与分组 */
+  const [sealedCovers, setSealedCovers] = useState<ReadonlySet<string>>(() => new Set());
+  /** 本轮搜索的等待截止时间（从第一条结果出现起算，避免搜索本身慢导致提前放弃） */
+  const [coverDeadline, setCoverDeadline] = useState<number | null>(null);
+  // 定时器回调要读最新的窗口与 pending 判断，用 ref 兜住闭包
+  const coverWindowRef = useRef(coverUrls);
+  coverWindowRef.current = coverUrls;
+  const coverIsPendingRef = useRef(coverIsPending);
+  coverIsPendingRef.current = coverIsPending;
+
+  /** 封印当前窗口里还没结论的封面，然后放行渲染 */
+  const sealPendingCovers = useCallback(() => {
+    setSealedCovers((prev) => {
+      const next = new Set(prev);
+      for (const url of coverWindowRef.current) {
+        if (coverIsPendingRef.current(url)) next.add(url);
+      }
+      return next;
+    });
+    setCoverReady(true);
+  }, []);
+
   useEffect(() => {
-    setCoverWaitOver(false);
+    setCoverReady(false);
+    setSealedCovers(new Set());
+    setCoverDeadline(null);
+  }, [urlQuery]);
+
+  useEffect(() => {
     if (!urlQuery || !hasResults) return;
-    const timer = window.setTimeout(() => setCoverWaitOver(true), COVER_HASH_WAIT_MS);
-    return () => window.clearTimeout(timer);
+    setCoverDeadline((prev) => prev ?? Date.now() + COVER_HASH_SETTLE_TIMEOUT_MS);
   }, [urlQuery, hasResults]);
-  const settledList = useMemo(
-    () => list.filter((item) => !coverHashes.isPending(item.pic)),
-    [list, coverHashes]
+
+  useEffect(() => {
+    if (!urlQuery || !hasResults || coverReady) return;
+    // 全部有结论：直接放行，不用等满上限
+    if (pendingCovers === 0) {
+      setCoverReady(true);
+      return;
+    }
+    if (coverDeadline === null) return;
+    const remain = coverDeadline - Date.now();
+    if (remain <= 0) {
+      sealPendingCovers();
+      return;
+    }
+    const timer = window.setTimeout(sealPendingCovers, remain);
+    return () => window.clearTimeout(timer);
+  }, [urlQuery, hasResults, coverReady, pendingCovers, coverDeadline, sealPendingCovers]);
+  /** 该封面是否已有最终结论（算完 / 失败 / 被封印）——没结论的条目不上屏 */
+  const coverSettled = useCallback(
+    (url?: string) => {
+      if (!url) return false;
+      if (sealedCovers.has(url)) return true;
+      return !coverIsPending(url);
+    },
+    [sealedCovers, coverIsPending]
   );
   /**
-   * 展示用的条目：指纹算完的、且**确实有封面图**的。
+   * 展示用的条目：分组结论已定稿、且**确实有封面图**的。
    *
-   * - 取图/解码失败的条目**不再隐藏**：代理拿不到图不代表浏览器显示不出来
-   *   （很多图床直连正常、Worker 出网 525），隐藏等于吞掉真实来源；现在按
-   *   URL/片名兜底正常展示，真显示不出来由卡片的 onCoverBroken 整卡处理。
-   * - 源站根本没给封面（没有 pic）的条目仍然隐藏：没有指纹也渲染不出封面，
-   *   只会多一张胶片占位卡。
-   * - 超过 COVER_HASH_WAIT_MS 还没算完的条目也先展示：不能让坏图床把整页扣住。
+   * - 「等齐再画」期间返回空数组，页面显示骨架（不先画一批再重组）；
+   * - 取图/解码失败的条目照常展示（失败也是结论）：代理拿不到图不代表浏览器显示不出来
+   *   （很多图床直连正常、Worker 出网 525），隐藏等于吞掉真实来源；真显示不出来由卡片的
+   *   onCoverBroken 整卡处理；
+   * - 源站根本没给封面（没有 pic）的条目仍然隐藏：渲染不出封面，只会多一张胶片占位卡。
    */
   const visibleList = useMemo(
-    () => (coverWaitOver ? list : settledList).filter((item) => Boolean(item.pic?.trim())),
-    [coverWaitOver, list, settledList]
+    () =>
+      coverReady ? list.filter((item) => Boolean(item.pic?.trim()) && coverSettled(item.pic)) : [],
+    [coverReady, list, coverSettled]
   );
   const coverHashMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const url of coverUrls) {
-      const hash = coverHashes.hashOf(url);
+      // 封印的封面不参与分组：晚到的指纹只写缓存，否则整屏会重新合组
+      if (sealedCovers.has(url)) continue;
+      const hash = coverHashOf(url);
       if (hash) map.set(url, hash);
     }
     return map;
-  }, [coverUrls, coverHashes]);
-  const pendingCovers = coverHashes.pending;
+  }, [coverUrls, coverHashOf, sealedCovers]);
 
   /**
    * 封面在浏览器里根本显示不出来的组（图床不可达 / 防盗链 / 混合内容）：
@@ -529,7 +578,7 @@ function HomeContent() {
                 ) : (
                   searchQuery.data && (
                     <span className="text-faint">
-                      {pendingCovers > 0 && groups.length === 0
+                      {hasResults && !coverReady
                         ? '（加载中…）'
                         : filtersActive
                           ? `（筛选出 ${filteredGroups.length} 部 · ${filteredSourceCount} 条 / 共 ${groups.length} 部 · ${visibleList.length} 条）`
@@ -560,7 +609,10 @@ function HomeContent() {
             {selectedSources.length === 0 ? (
               <NoSourceGuide hasSources={customAPIs.length > 0 || envSources.length > 0} />
             ) : list.length > 0 ? (
-              filteredGroups.length > 0 ? (
+              // 指纹没齐之前只显示骨架：先画一批再合组就是「跳变」的来源
+              !coverReady ? (
+                <ResultsSkeleton />
+              ) : filteredGroups.length > 0 ? (
                 <>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 items-start">
                     {visibleGroups.map((group) => (
@@ -591,8 +643,6 @@ function HomeContent() {
                     </div>
                   )}
                 </>
-              ) : groups.length === 0 && pendingCovers > 0 ? (
-                <ResultsSkeleton />
               ) : (
                 <EmptyState
                   icon="search"
