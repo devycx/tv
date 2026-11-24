@@ -14,7 +14,7 @@ import { SearchHistoryDropdown, useSearchHistory } from '@/components/search-his
 import { cn, buildWatchUrl, validateSourceUrl } from '@/lib/utils';
 import { addSearchHistory } from '@/lib/db';
 import { applyFrozenOrder, orderDiffers } from '@/lib/result-paging';
-import { aggregateResults, mergeExpandedGroups } from '@/lib/search-groups';
+import { aggregateResults, mergeExpandedGroups, type AggregatedGroup } from '@/lib/search-groups';
 import { planSearchSourceTiers } from '@/lib/source-tiers';
 import {
   EMPTY_FILTERS,
@@ -39,6 +39,8 @@ import { Icon } from '@/components/icon';
  * 所以 24 足够覆盖绝大多数查询；一次挂太多卡片会让流式阶段每个源结算都整页重渲染。
  */
 const RESULT_PAGE_SIZE = 24;
+/** 查询身份不匹配时的稳定空快照引用，避免 useMemo 因新 [] 每次重算。 */
+const EMPTY_GROUPS: AggregatedGroup[] = [];
 
 export default function HomePage() {
   return (
@@ -69,6 +71,14 @@ function HomeContent() {
   const [expandScope, setExpandScope] = useState<string | null>(null);
   /** 结果标签筛选（类型 / 年份 / 18禁）；查询变化时清空 */
   const [filters, setFilters] = useState<SearchFilters>(EMPTY_FILTERS);
+  /**
+   * 首屏逐源快照：每个 source 事件做「分组级」并入，旧组身份/顺序冻结，只增加来源或追加新组。
+   * 绑定查询身份而不是另设清空 effect，避免换关键词那一帧旧快照残留。
+   */
+  const [liveSnapshot, setLiveSnapshot] = useState<{ scope: string; groups: AggregatedGroup[] }>({
+    scope: '',
+    groups: [],
+  });
   const inputRef = useRef<HTMLInputElement>(null);
 
   // URL 驱动搜索：?s= 变化时回填输入框
@@ -122,12 +132,22 @@ function HomeContent() {
 
   const searchQuery = useQuery({
     queryKey: ['search', expansionScope],
-    // 首轮 Tier 1 整批结算后一次上屏；逐源事件只更新健康度，不再驱动整页重排。
+    // 逐源结算即上屏：快源不必等最慢的源到死线才显示。
+    // 合并走 mergeExpandedGroups（分组级），不重跑全局并查集——否则一个新源可能
+    // 把两张已上屏的旧卡桥接成一张，卡片塌陷/重挂载。
     queryFn: async ({ signal }) =>
       api.search(urlQuery.slice(0, 100), sourceTiers.tier1, yellowFilter, {
         signal,
         timeoutMs: searchTimeoutMs,
-        onSource: (outcome) => useAppStore.getState().recordSourceHealth([outcome]),
+        onSource: (outcome) => {
+          useAppStore.getState().recordSourceHealth([outcome]);
+          // 空 list 的源（失败/无结果）不触发重渲染；其余并入当前查询的快照。
+          if (outcome.list.length === 0) return;
+          setLiveSnapshot((prev) => {
+            const base = prev.scope === expansionScope ? prev.groups : [];
+            return { scope: expansionScope, groups: mergeExpandedGroups(base, outcome.list) };
+          });
+        },
       }),
     enabled: Boolean(urlQuery) && sourceTiers.tier1.length > 0,
     // 5 分钟内从播放页返回时直接使用缓存，不重新搜索（服务端另有 60s 结果缓存兜底）
@@ -194,11 +214,20 @@ function HomeContent() {
 
   const openDetail = useCallback((item: SearchResultItem) => setDetailItem(item), []);
 
-  const isSearching = Boolean(urlQuery) && searchQuery.isFetching && !searchQuery.data;
   const list = useMemo(() => searchQuery.data?.list ?? [], [searchQuery.data]);
+  const liveGroups = liveSnapshot.scope === expansionScope ? liveSnapshot.groups : EMPTY_GROUPS;
+  /** 渐进期：已有逐源快照、但 done 未到；照常渲染卡片，不再亮骨架屏。 */
+  const showingProgressive = liveGroups.length > 0 && !searchQuery.data;
+  const isSearching =
+    Boolean(urlQuery) && searchQuery.isFetching && !searchQuery.data && !showingProgressive;
   // 分批渲染：新一次搜索（查询/源选择/过滤条件变化）时重置回首批。
   const [visibleCount, setVisibleCount] = useState(RESULT_PAGE_SIZE);
-  const primaryGroups = useMemo(() => aggregateResults(list), [list]);
+  const primaryGroups = useMemo(() => {
+    if (liveGroups.length === 0) return aggregateResults(list);
+    // done 到达后把尚未收录的条目并入快照（按 sourceKey+vodId 去重），
+    // 旧组身份与顺序保持冻结，慢源结果作为新来源/新组追加。
+    return list.length > 0 ? mergeExpandedGroups(liveGroups, list) : liveGroups;
+  }, [liveGroups, list]);
   const groups = useMemo(
     () =>
       expandedQuery.data
@@ -434,7 +463,9 @@ function HomeContent() {
             <div className="mb-3 flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
               <h2 className="w-full text-sm text-muted sm:w-auto">
                 “<span className="text-content">{urlQuery}</span>” 的搜索结果
-                {isSearching ? (
+                {showingProgressive ? (
+                  <span className="text-faint">（搜索中… 已显示 {groups.length} 部）</span>
+                ) : isSearching ? (
                   <span className="text-faint">（搜索中…）</span>
                 ) : (
                   searchQuery.data && (
@@ -469,7 +500,7 @@ function HomeContent() {
 
             {selectedSources.length === 0 ? (
               <NoSourceGuide hasSources={customAPIs.length > 0 || envSources.length > 0} />
-            ) : isSearching || (expandBusy && groups.length === 0) ? (
+            ) : (isSearching || expandBusy) && groups.length === 0 ? (
               <ResultsSkeleton />
             ) : groups.length > 0 ? (
               filteredGroups.length > 0 ? (

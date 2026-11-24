@@ -168,4 +168,31 @@ describe('mergeExpandedGroups（扩搜稳定合并）', () => {
     expect(JSON.stringify(base)).toBe(before);
     expect(result[0]).not.toBe(base[0]);
   });
+
+  it('首屏逐源增量并入：旧卡身份/顺序冻结，慢源不桥接也不顶走已上屏卡片', () => {
+    // 快源先到：甲、乙两组
+    let groups = mergeExpandedGroups([], [
+      item({ name: '甲', year: '2024', pic: COVER_A, sourceKey: 's1' }),
+      item({ name: '乙', year: '2025', pic: COVER_B, sourceKey: 's1' }),
+    ]);
+    const firstKeys = groups.map((g) => g.key);
+    const firstNames = groups.map((g) => g.name);
+
+    // 第二个源：甲的镜像封面 + 新作品丙
+    groups = mergeExpandedGroups(groups, [
+      item({ name: '甲 4K', year: '2024', pic: COVER_A_MIRROR, sourceKey: 's2' }),
+      item({ name: '丙', year: '2026', pic: COVER_D, sourceKey: 's2' }),
+    ]);
+    // 慢源：一条同时撞「乙」封面和「甲」片名——只能按封面归入一个旧组，不能桥接
+    groups = mergeExpandedGroups(groups, [
+      item({ name: '甲', year: '2024', pic: COVER_B, sourceKey: 's3' }),
+    ]);
+
+    expect(groups).toHaveLength(3);
+    expect(groups.map((g) => g.key).slice(0, 2)).toEqual(firstKeys);
+    expect(groups.map((g) => g.name).slice(0, 2)).toEqual(firstNames);
+    expect(groups[0].items).toHaveLength(2);
+    expect(groups[1].items).toHaveLength(2);
+    expect(groups[2].name).toBe('丙');
+  });
 });
