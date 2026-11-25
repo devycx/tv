@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { SESSION_COOKIE, checkRateLimit, sessionFromCookieHeader, signSession, checkPassword, clearRateLimit, isPasswordConfigured } from '@/lib/auth';
+import { SESSION_COOKIE, checkRateLimit, checkGateEmail, sessionFromCookieHeader, signSession, checkPassword, clearRateLimit, isPasswordConfigured } from '@/lib/auth';
 
 export const runtime = 'nodejs';
 
@@ -47,13 +47,34 @@ export async function POST(req: Request) {
     );
   }
 
-  let password = '';
+  let body: { password?: string; email?: string } = {};
   try {
-    const body = (await req.json()) as { password?: string };
-    password = String(body.password ?? '');
+    body = (await req.json()) as { password?: string; email?: string };
   } catch {
     return NextResponse.json({ success: false, error: '请求格式错误' }, { status: 400 });
   }
+
+  // 邮箱白名单通道：命中 GATE_EMAILS 直接签发会话（无验证码、不校验密码）。
+  // 会话与密码通道完全同一套（ltv_session / signSession），middleware 无感知。
+  const email = String(body.email ?? '').trim();
+  if (email) {
+    if (!checkGateEmail(email)) {
+      return NextResponse.json({ success: false, error: '该邮箱无权访问' }, { status: 401 });
+    }
+    clearRateLimit(ip);
+    const { token, expiresAt } = signSession();
+    const res = NextResponse.json({ success: true });
+    res.cookies.set(SESSION_COOKIE, token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isSecureRequest(req),
+      maxAge: Math.floor((expiresAt - Date.now()) / 1000),
+      path: '/',
+    });
+    return res;
+  }
+
+  const password = String(body.password ?? '');
 
   if (!checkPassword(password)) {
     return NextResponse.json({ success: false, error: '密码错误' }, { status: 401 });

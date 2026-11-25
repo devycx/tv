@@ -134,6 +134,9 @@ const config = {
     // 注意：Node / Docker + 可信反代部署不要照抄这一条，否则客户端可伪造 cf-connecting-ip
     // 绕过限流（那里应改用反代覆写的 x-real-ip / x-forwarded-for）。
     TRUST_CF_IP: '1',
+    // 邮箱白名单通道（2026-11-25）：登录页输入命中名单的邮箱直接进站，不发验证码、
+    // 不需要密码。门票是「知道邮箱」这个知识，放 vars（非 secret）便于随时增删。
+    GATE_EMAILS: 'test@ycxdev.com',
   },
 };
 

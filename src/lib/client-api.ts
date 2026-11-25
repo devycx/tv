@@ -111,11 +111,16 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  login: (password: string) =>
+  /**
+   * 登录：单个输入框兼容两种凭证——
+   * 含 @ 的输入走邮箱白名单通道（GATE_EMAILS，免密码免验证码），
+   * 其余按访问密码走。判定在前端做，后端按 body 字段分发。
+   */
+  login: (value: string) =>
     request<{ success: boolean }>('/api/auth', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password }),
+      body: JSON.stringify(value.includes('@') ? { email: value.trim() } : { password: value }),
     }),
 
   logout: () => request<{ success: boolean }>('/api/auth', { method: 'DELETE' }),

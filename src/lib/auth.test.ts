@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
-import { SESSION_COOKIE, checkPassword, checkRateLimit, clearRateLimit, sessionFromCookieHeader, signSession, verifySession } from './auth';
+import { SESSION_COOKIE, checkGateEmail, getGateEmails, checkPassword, checkRateLimit, clearRateLimit, sessionFromCookieHeader, signSession, verifySession } from './auth';
 
 /**
  * 会话鉴权单测：HMAC 签名/校验、过期、防篡改、密码恒定时间比较、登录限流。
@@ -93,6 +93,46 @@ describe('sessionFromCookieHeader', () => {
     expect(sessionFromCookieHeader('')).toBe(false);
     expect(sessionFromCookieHeader(`other=1`)).toBe(false);
     expect(sessionFromCookieHeader(`${SESSION_COOKIE}=${token}x`)).toBe(false);
+  });
+});
+
+describe('checkGateEmail（邮箱白名单通道）', () => {
+  const saved = process.env.GATE_EMAILS;
+  beforeAll(() => {
+    process.env.GATE_EMAILS = 'Test@Ycxdev.com; friend@example.org ,other@x.io';
+  });
+  afterAll(() => {
+    if (saved === undefined) delete process.env.GATE_EMAILS;
+    else process.env.GATE_EMAILS = saved;
+  });
+
+  it('命中白名单（大小写 / 首尾空白不敏感）', () => {
+    expect(checkGateEmail('test@ycxdev.com')).toBe(true);
+    expect(checkGateEmail('Test@Ycxdev.com')).toBe(true);
+    expect(checkGateEmail('  TEST@YCXDEV.COM  ')).toBe(true);
+    expect(checkGateEmail('friend@example.org')).toBe(true);
+  });
+
+  it('不在名单 / 空 / 伪造域拒绝', () => {
+    expect(checkGateEmail('nope@ycxdev.com')).toBe(false);
+    expect(checkGateEmail('test@ycxdev.com.evil.io')).toBe(false);
+    expect(checkGateEmail('')).toBe(false);
+    expect(checkGateEmail('   ')).toBe(false);
+  });
+
+  it('getGateEmails 归一化：拆分 + 小写 + 去空项', () => {
+    expect(getGateEmails()).toEqual(['test@ycxdev.com', 'friend@example.org', 'other@x.io']);
+  });
+
+  it('未配置 GATE_EMAILS 时名单为空、一律拒绝', () => {
+    const cur = process.env.GATE_EMAILS;
+    delete process.env.GATE_EMAILS;
+    try {
+      expect(getGateEmails()).toEqual([]);
+      expect(checkGateEmail('test@ycxdev.com')).toBe(false);
+    } finally {
+      process.env.GATE_EMAILS = cur;
+    }
   });
 });
 

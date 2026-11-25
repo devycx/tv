@@ -61,10 +61,12 @@ export default function LoginPage() {
         return;
       }
 
-      let message = res.status === 401 ? '密码错误' : `验证失败（${res.status}）`;
+      let message = `验证失败（${res.status}）`;
       try {
         const data = (await res.json()) as { error?: string };
-        if (data?.error) message = res.status === 401 ? '密码错误' : data.error;
+        // 后端对密码错误 / 邮箱无权访问都有明确文案，401 优先透传
+        if (data?.error) message = data.error;
+        else if (res.status === 401) message = '邮箱或密码错误';
       } catch {
         // 非 JSON 响应时用状态码兜底
       }
@@ -88,13 +90,13 @@ export default function LoginPage() {
         </div>
 
         <form onSubmit={submit} className="card p-6 space-y-3">
-          <label htmlFor="login-password" className="block text-sm font-medium text-content">
-            访问密码
+          <label htmlFor="login-credential" className="block text-sm font-medium text-content">
+            邮箱或访问密码
           </label>
           <input
             ref={inputRef}
-            id="login-password"
-            type="password"
+            id="login-credential"
+            type="text"
             className="input w-full"
             value={password}
             onChange={(e) => {
@@ -102,7 +104,8 @@ export default function LoginPage() {
               if (error) setError('');
             }}
             maxLength={128}
-            autoComplete="current-password"
+            placeholder="输入邮箱直接进入，或输入访问密码"
+            autoComplete="username"
             autoFocus
             disabled={loading}
             aria-invalid={error ? true : undefined}

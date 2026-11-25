@@ -76,6 +76,27 @@ export function sessionFromCookieHeader(cookieHeader: string | null): boolean {
   return false;
 }
 
+// —— 邮箱白名单通道（2026-11-25）——
+//
+// 整站从 Cloudflare Access 切回站内门禁后，除密码外新增一条「邮箱直进」通道：
+// 输入的邮箱命中 GATE_EMAILS 白名单即直接签发会话，不发验证码、不需要密码。
+// 门票是「知道这个邮箱」这个知识本身，名单放 vars（非 secret）便于随时增删。
+
+/** 读取 GATE_EMAILS：逗号/分号/空白分隔，统一小写去空 */
+export function getGateEmails(): string[] {
+  return (process.env.GATE_EMAILS || '')
+    .split(/[,;\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+/** 邮箱是否命中白名单（大小写不敏感） */
+export function checkGateEmail(input: string): boolean {
+  const email = input.trim().toLowerCase();
+  if (!email) return false;
+  return getGateEmails().includes(email);
+}
+
 // —— 登录速率限制（内存实现，单实例部署足够；多实例可换 Redis） ——
 
 const attemptMap = new Map<string, { count: number; resetAt: number }>();

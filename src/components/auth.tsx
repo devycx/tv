@@ -156,7 +156,7 @@ function LoginModal({
       onSuccess();
     } catch (err) {
       const msg = err instanceof Error ? err.message : '验证失败';
-      setError(msg === '需要登录' ? '密码错误' : msg);
+      setError(msg === '需要登录' ? '邮箱或密码错误' : msg);
       setPassword('');
       inputRef.current?.focus();
     } finally {
@@ -195,12 +195,12 @@ function LoginModal({
             >
               <input
                 ref={inputRef}
-                type="password"
+                type="text"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="input w-full"
-                placeholder="密码"
-                autoComplete="current-password"
+                placeholder="邮箱或访问密码"
+                autoComplete="username"
               />
               {error && <p className="mt-2 text-sm text-danger">{error}</p>}
               <button type="submit" className="btn-primary w-full mt-4" disabled={loading || !password.trim()}>
