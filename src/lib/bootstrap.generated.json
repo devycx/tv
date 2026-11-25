@@ -13,8 +13,7 @@
       "key": "env_1",
       "name": "暴风资源",
       "url": "https://bfzyapi.com/api.php/provide/vod",
-      "isAdult": false,
-      "tier": 1
+      "isAdult": false
     },
     {
       "key": "env_2",
@@ -62,7 +61,8 @@
       "key": "env_8",
       "name": "量子资源",
       "url": "https://lzizy1.com/api.php/provide/vod",
-      "isAdult": false
+      "isAdult": false,
+      "tier": 1
     },
     {
       "key": "env_9",

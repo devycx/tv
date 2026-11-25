@@ -19,6 +19,12 @@ import fs from 'node:fs';
  * tier: 1 是默认首轮搜索的 8 个综合主力源；其余源只在用户点击「搜索更多源」后
  * 查询。用户手动改过选源时不启用分层。18+ 源一律不标 tier：它们在站内「成人内容
  * 过滤」关闭时才参与搜索，不该出现在首屏的固定 8 源里。
+ *
+ * 2026-11-26 大陆口径复测（tv/.tmp/mainland-playback-probe.mjs，深圳移动直连，
+ * 并发打真实 m3u8）：暴风播放域名中位 4.3s 降到 Tier 2，量子 672ms 升到 Tier 1。
+ * 注意源顺序不能改：env_N 的 key 由数组下标生成，重排会让老用户的勾选错位。
+ * 另外大陆 API 域名被阻断（红牛/速博/如意等）不影响搜索——取数走 CF Worker；
+ * 只影响浏览器直连的播放，所以分层依据是播放延迟而非 API 可达性。
  */
 
 /**
@@ -38,7 +44,8 @@ import fs from 'node:fs';
 const sources = [
   // 线上 3 词合计 52 / 63ms，片库 190,116（本地测延迟高是因为香港出口，Cloudflare 边缘很快）
   { name: '艾旦影视', url: 'https://lovedan.net/api.php/provide/vod', isAdult: false, tier: 1 },
-  { name: '暴风资源', url: 'https://bfzyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
+  // 2026-11-26 大陆直连复测：播放域名 s3.bfllvip.com 中位 4.3s（全表最慢），降 Tier 2
+  { name: '暴风资源', url: 'https://bfzyapi.com/api.php/provide/vod', isAdult: false },
   { name: '无尽资源', url: 'https://api.wujinapi.me/api.php/provide/vod', isAdult: false, tier: 1 },
   { name: '豪华资源', url: 'https://hhzyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
   { name: '速博资源', url: 'https://subocaiji.com/api.php/provide/vod', isAdult: false, tier: 1 },
@@ -47,7 +54,8 @@ const sources = [
   { name: '极速资源', url: 'https://jszyapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
   { name: '如意资源', url: 'http://cj.rycjapi.com/api.php/provide/vod', isAdult: false, tier: 1 },
   // 量子线上用 cj.lziapi.com 拿不到（525），lzizy1 是同一后端（片库都是 164,649）
-  { name: '量子资源', url: 'https://lzizy1.com/api.php/provide/vod', isAdult: false },
+  // 2026-11-26 大陆直连复测：播放域名 v.cdnlz28.com 中位 672ms、片库 164k，升 Tier 1
+  { name: '量子资源', url: 'https://lzizy1.com/api.php/provide/vod', isAdult: false, tier: 1 },
   { name: '非凡资源', url: 'http://ffzy.tv/api.php/provide/vod', isAdult: false },
 
   /**
