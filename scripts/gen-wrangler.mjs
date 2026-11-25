@@ -137,6 +137,9 @@ const config = {
     // 邮箱白名单通道（2026-11-25）：登录页输入命中名单的邮箱直接进站，不发验证码、
     // 不需要密码。门票是「知道邮箱」这个知识，放 vars（非 secret）便于随时增删。
     GATE_EMAILS: 'test@ycxdev.com',
+    // 临时公开开关（2026-11-25，给朋友分享）：middleware 与 api-guard 见此值完全旁路鉴权。
+    // 恢复门禁：删掉这一行重跑脚本再部署（PASSWORD secret 未动，门禁立即恢复）。
+    PUBLIC_MODE: '1',
   },
 };
 
@@ -151,7 +154,8 @@ const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
 const bootstrap = {
   version: pkg.version || '0.0.0',
   // 本部署始终配置了 PASSWORD secret；未配置时登录接口会 503 并显示错误。
-  passwordRequired: true,
+  // PUBLIC_MODE（临时公开）下前端无 401 路径，标记为不需要密码。
+  passwordRequired: process.env.PUBLIC_MODE !== '1',
   defaultSources: sources.map((s, i) => ({
     key: `env_${i}`,
     name: s.name,

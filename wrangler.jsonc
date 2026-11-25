@@ -31,6 +31,7 @@
     "SEARCH_SOURCE_TIMEOUT_MS": "3000",
     "MAX_RETRIES": "0",
     "TRUST_CF_IP": "1",
-    "GATE_EMAILS": "test@ycxdev.com"
+    "GATE_EMAILS": "test@ycxdev.com",
+    "PUBLIC_MODE": "1"
   }
 }

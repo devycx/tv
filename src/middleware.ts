@@ -114,6 +114,10 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
 
   if (isStaticPath(pathname)) return NextResponse.next();
 
+  // PUBLIC_MODE=1（2026-11-25 临时公开）：完全旁路密码门禁，公网直进。
+  // 与 api-guard 的同名开关配套；恢复门禁 = 删掉 wrangler vars 里的 PUBLIC_MODE 重新部署。
+  if (process.env.PUBLIC_MODE === '1') return NextResponse.next();
+
   const verifier = getSessionVerifier();
   const verified = verifier ? await verifier.verify(readSessionCookie(request.headers.get('cookie'))) : false;
 
