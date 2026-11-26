@@ -24,7 +24,8 @@ import { brandTitle } from '@/lib/site';
 import { skipMarkKey, validateSegment, type SkipSegment } from '@/lib/skip-marks';
 import type { PlayerSkipApi } from '@/components/player-shell';
 import { useToast } from '@/components/toast';
-import { enqueueDownload } from '@/components/download-manager';
+import { enqueueDownload, enqueueDownloads } from '@/components/download-manager';
+import { buildEpisodeDownloadPayloads } from '@/lib/download-batch';
 import { Icon } from '@/components/icon';
 import { useAuth } from '@/components/auth';
 import { Header } from '@/components/header';
@@ -270,6 +271,12 @@ function WatchContent() {
     // 这里先提示的话，用户随后取消保存位置会出现「已加入→已取消」的矛盾
   }, [currentUrl, videoTitle, episodes.length, currentIndex]);
 
+  // 下载全部：剧集侧栏入口；按源站原始顺序入队，不受「倒序排列」影响
+  const handleDownloadAll = useCallback(() => {
+    if (episodes.length === 0) return;
+    enqueueDownloads(buildEpisodeDownloadPayloads(videoTitle, episodes, 'MP4'));
+  }, [episodes, videoTitle]);
+
   // 自动连播的 800ms 延迟切集要在卸载时取消，避免离开页面后跳转
   const autoNextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
@@ -484,20 +491,27 @@ function WatchContent() {
           <aside className="bg-surface-raised rounded-lg p-3 h-fit">
             <div className="flex items-center justify-between gap-2 mb-2.5">
               <h2 className="text-sm font-semibold text-content">剧集列表</h2>
-              {/* 排列开关紧贴它所作用的列表：放在这里才看得出它管的是这一栏的顺序 */}
-              {episodes.length > 1 && (
-                <button
-                  className="btn-ghost btn-sm shrink-0"
-                  onClick={() => setReversed((v) => !v)}
-                  aria-label={reversed ? '切换为正序排列' : '切换为倒序排列'}
-                >
-                  <Icon
-                    name="arrowDown"
-                    className={cn('w-3.5 h-3.5 transition-transform', reversed && 'rotate-180')}
-                  />
-                  {reversed ? '正序排列' : '倒序排列'}
-                </button>
-              )}
+              <div className="flex flex-wrap items-center justify-end gap-1.5">
+                {/* 排列开关紧贴它所作用的列表：放在这里才看得出它管的是这一栏的顺序 */}
+                {episodes.length > 1 && (
+                  <button
+                    className="btn-ghost btn-sm"
+                    onClick={() => setReversed((v) => !v)}
+                    aria-label={reversed ? '切换为正序排列' : '切换为倒序排列'}
+                  >
+                    <Icon
+                      name="arrowDown"
+                      className={cn('w-3.5 h-3.5 transition-transform', reversed && 'rotate-180')}
+                    />
+                    {reversed ? '正序排列' : '倒序排列'}
+                  </button>
+                )}
+                {episodes.length > 0 && (
+                  <button className="btn-ghost btn-sm" onClick={handleDownloadAll}>
+                    下载全部（{episodes.length} 集）
+                  </button>
+                )}
+              </div>
             </div>
             {episodes.length === 0 ? (
               detailQuery.isLoading ? (
