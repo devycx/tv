@@ -14,6 +14,9 @@ import { DEFAULT_SOURCE_TIMEOUT_MS } from './search-timeout';
  * 旧版把 10+ 个零散 localStorage key 当作跨页面状态总线，这里统一为单一 store。
  */
 
+/** 出厂默认推荐数据源。与 subscription-sync 的预置覆盖判断共用，避免两处写死不一致。 */
+export const FACTORY_RECOMMEND_SOURCE: 'douban' | 'bangumi' | 'hot-list' = 'douban';
+
 export interface AppSettings {
   customAPIs: SourceConfig[];
   selectedKeys: string[];
@@ -353,7 +356,7 @@ export const useAppStore = create<AppState>()(
       adFilter: true,
       searchTimeoutMs: DEFAULT_SOURCE_TIMEOUT_MS,
       doubanEnabled: true,
-      recommendSource: 'hot-list',
+      recommendSource: FACTORY_RECOMMEND_SOURCE,
       recommendSourceTouched: false,
       autoplayNext: true,
       // 音量放大默认关闭：开启后对所有音量档位整体抬高约 1.8 倍，交给用户显式选择

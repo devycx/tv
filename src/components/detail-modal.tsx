@@ -12,13 +12,15 @@ import { useToast } from './toast';
 import { cn } from '@/lib/utils';
 import { addSearchHistory } from '@/lib/db';
 import { copyToClipboard } from '@/lib/clipboard';
+import { buildEpisodeDownloadPayloads } from '@/lib/download-batch';
+import { enqueueDownloads } from './download-manager';
 import { EmptyState, ErrorState, LoadingState } from './states';
 import { ExpandableText } from './expandable-text';
 import { useFocusTrap } from './use-focus-trap';
 import { Icon } from './icon';
 
 /**
- * 详情弹窗：剧集列表 + 排序 + 复制链接。
+ * 详情弹窗：剧集列表 + 排序 + 复制链接 + 一键全部下载。
  * 剧集点击 → /watch 路由（URL 携带定位参数，可分享、可后退）。
  */
 
@@ -106,6 +108,11 @@ export function DetailModal({ item, onClose }: { item: SearchResultItem | null; 
         sourceUrl: item.sourceUrl,
       })
     );
+  };
+
+  const downloadAll = () => {
+    if (!detail || detail.episodes.length === 0) return;
+    enqueueDownloads(buildEpisodeDownloadPayloads(item.name, detail.episodes, 'MP4'));
   };
 
   const copyLinks = async () => {
@@ -217,9 +224,14 @@ export function DetailModal({ item, onClose }: { item: SearchResultItem | null; 
                       </button>
                       <span className="text-sm text-faint">共 {episodes.length} 集</span>
                     </div>
-                    <button className="btn-primary btn-sm" onClick={copyLinks}>
-                      复制链接
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button className="btn-ghost btn-sm" onClick={downloadAll}>
+                        下载全部（{detail.episodes.length} 集）
+                      </button>
+                      <button className="btn-primary btn-sm" onClick={copyLinks}>
+                        复制链接
+                      </button>
+                    </div>
                   </div>
                   <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-7 gap-2 max-h-[40vh] overflow-y-auto scrollbar-thin pr-1">
                     {episodes.map((_, i) => {

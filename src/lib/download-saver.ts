@@ -69,6 +69,59 @@ function memoryTarget(filename: string, confirmOverBytes = 500 * 1024 * 1024): S
   };
 }
 
+/** 文件名中 Windows / macOS 都不允许的字符统一替换，避免批量下载建文件失败 */
+function safeFilename(name: string): string {
+  return (name.trim() || 'download').replace(/[\\/:*?"<>|]/g, '_').slice(0, 180);
+}
+
+/**
+ * 批量下载：一次目录选择器拿多个写入流，避免逐集调用 showSaveFilePicker
+ * （浏览器只允许在用户手势的同步栈里弹窗，循环调用只有第一次能成功）。
+ * 不支持 FS Access 的环境退化为多份内存目标，由浏览器逐个触发下载。
+ */
+export async function pickSaveTargets(filenames: string[]): Promise<SaveTarget[]> {
+  const win = window as Window & {
+    showDirectoryPicker?: (opts?: { mode?: 'readwrite' | 'read' }) => Promise<{
+      getFileHandle: (name: string, opts: { create: boolean }) => Promise<{
+        createWritable: () => Promise<WritableStream>;
+      }>;
+    }>;
+  };
+  if (typeof win.showDirectoryPicker === 'function') {
+    const opened: SaveTarget[] = [];
+    try {
+      const dir = await win.showDirectoryPicker({ mode: 'readwrite' });
+      for (const filename of filenames) {
+        const handle = await dir.getFileHandle(safeFilename(filename), { create: true });
+        const writer = (await handle.createWritable()).getWriter();
+        opened.push({
+          kind: 'fs',
+          async write(data) {
+            await writer.write(data);
+          },
+          async close() {
+            await writer.close();
+          },
+          async abort() {
+            try {
+              await writer.abort();
+            } catch { /* 已关闭则忽略 */ }
+          },
+        });
+      }
+      return opened;
+    } catch (err) {
+      // 中途失败要释放已打开的流，否则目录里的文件会一直被锁住
+      await Promise.all(opened.map((t) => t.abort().catch(() => {})));
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        throw new UserCancelledError();
+      }
+      // 权限/旧实现失败 → 落到内存聚合
+    }
+  }
+  return filenames.map((f) => memoryTarget(safeFilename(f)));
+}
+
 /**
  * 选择保存目标并打开写入流。showSaveFilePicker 必须在用户手势内调用，
  * 因此本函数应在点击处理器里被 await（调用方负责）。

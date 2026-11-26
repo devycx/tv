@@ -47,11 +47,11 @@ export function RecommendSection({ onPick }: { onPick: (title: string) => void }
  * 首批 50 条，滚动接近列表末尾时获取下一批真实数据；分类之间隔离缓存。
  * 空页/完全重复页停止；下一页失败时保留现有卡片，用户可以重试。
  *
- * 默认不选中任何标签（首页推荐区收起）：点标签才拉数据/展示封面，再次点击当前标签收起。
+ * 默认展开「电影 / 热门」；再次点击当前标签可收起。
  */
 function DoubanView({ onPick }: { onPick: (title: string) => void }) {
   const [type, setType] = useState<'movie' | 'tv'>('movie');
-  const [tag, setTag] = useState<string | null>(null);
+  const [tag, setTag] = useState<string | null>(MOVIE_TAGS[0]);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
 
@@ -98,9 +98,11 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
   useEffect(() => {
     const target = loadMoreRef.current;
     if (!target || !hasNextPage || isFetching || isFetchNextPageError || typeof IntersectionObserver === 'undefined') return;
+    // 提前一屏多触发下一页：封面是懒加载的，600px 余量在快速滚动时来不及解码，
+    // 会先露出大片灰底/胶片兜底。1600px 让封面有足够时间进入浏览器懒加载距离。
     const observer = new IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) void fetchNextPage({ cancelRefetch: false });
-    }, { rootMargin: '600px 0px' });
+    }, { rootMargin: '1600px 0px' });
     observer.observe(target);
     return () => observer.disconnect();
   }, [hasNextPage, isFetching, isFetchNextPageError, fetchNextPage, type, tag]);
@@ -108,8 +110,8 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
   const switchType = (t: 'movie' | 'tv') => {
     if (t === type) return;
     setType(t);
-    // 换类型后回到收起态：旧标签在新类型下可能不存在，也让推荐区保持「点开才看」的交互
-    setTag(null);
+    // 换类型后默认展开新类型的「热门」：旧标签在新类型下可能不存在
+    setTag((t === 'movie' ? MOVIE_TAGS : TV_TAGS)[0]);
   };
 
   return (

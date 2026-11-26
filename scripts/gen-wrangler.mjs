@@ -179,7 +179,12 @@ const bootstrap = {
     ...(s.epg ? { epg: s.epg } : {}),
   })),
   defaultSubscriptions: [],
-  defaultRecommendSource: null,
+  // 首页推荐默认豆瓣（未显式配置 DEFAULT_RECOMMEND_SOURCE 时）
+  defaultRecommendSource: ['douban', 'bangumi', 'hot-list'].includes(
+    process.env.DEFAULT_RECOMMEND_SOURCE?.trim().toLowerCase() ?? ''
+  )
+    ? process.env.DEFAULT_RECOMMEND_SOURCE.trim().toLowerCase()
+    : 'douban',
   defaultImageMode: null,
 };
 fs.writeFileSync(

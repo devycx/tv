@@ -12,7 +12,7 @@ import {
   supportsChunkCache,
   type DownloadProgress,
 } from '@/lib/m3u8-downloader';
-import { pickSaveTarget, type SaveTarget, UserCancelledError } from '@/lib/download-saver';
+import { pickSaveTarget, pickSaveTargets, type SaveTarget, UserCancelledError } from '@/lib/download-saver';
 
 /**
  * 全局下载管理器（UI 采用本站 Drawer 模式）：
@@ -26,6 +26,8 @@ const MAX_CONCURRENT_DOWNLOADS = 3;
 /** 进度落库节流间隔：整集动辄上千分片，逐片「写库 + 全量查询 + setState」会把长任务页面拖垮 */
 const PROGRESS_PERSIST_INTERVAL_MS = 1000;
 const ADD_TASK_EVENT = 'libretv:add-download';
+/** 一键全部下载：一次事件携带整部剧的分集，保存位置只选一次（目录） */
+const ADD_BATCH_EVENT = 'libretv:add-download-batch';
 const SHOW_MANAGER_EVENT = 'libretv:show-download-manager';
 
 export interface AddDownloadPayload {
@@ -247,6 +249,65 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
     };
   }, [discardPendingTarget, refresh, scheduleNext, toast]);
 
+  // —— 事件：一键下载整部剧（用户手势内触发，目录选择器只弹一次） ——
+  useEffect(() => {
+    const onAddBatch = (e: Event) => {
+      const detail = (e as CustomEvent<{ items: AddDownloadPayload[] }>).detail;
+      const items = detail?.items?.filter((it) => it?.url && it?.title);
+      if (!items?.length) return;
+      if (!supportsChunkCache()) {
+        toast('当前环境不支持下载缓存（需通过 HTTPS 访问），无法下载', 'error');
+        return;
+      }
+      void (async () => {
+        let picked: SaveTarget[];
+        try {
+          picked = await pickSaveTargets(items.map((it) => `${it.title}.${(it.format ?? 'MP4').toLowerCase()}`));
+        } catch (err) {
+          if (isUserCancelled(err)) {
+            toast('已取消下载', 'info');
+            return;
+          }
+          toast(`选择保存位置失败：${err instanceof Error ? err.message : '未知错误'}`, 'error');
+          return;
+        }
+        const now = Date.now();
+        const entries: DownloadTaskEntry[] = items.map((it, i) => {
+          const id = `dl_${now}_${i}_${Math.random().toString(36).slice(2, 8)}`;
+          const format = it.format ?? 'MP4';
+          pendingTargets.current.set(id, picked[i]);
+          return {
+            id,
+            url: it.url,
+            title: it.title,
+            format,
+            status: 'waiting',
+            finished: 0,
+            total: 0,
+            errorNum: 0,
+            createdAt: now + i,
+            updatedAt: now + i,
+          };
+        });
+        try {
+          await db.downloads.bulkPut(entries);
+        } catch (err) {
+          await Promise.all(entries.map((entry) => discardPendingTarget(entry.id)));
+          toast(`创建下载任务失败：${err instanceof Error ? err.message : '未知错误'}`, 'error');
+          return;
+        }
+        refresh();
+        scheduleNext();
+        toast(`已加入 ${entries.length} 集到下载队列`, 'success');
+      })();
+    };
+
+    window.addEventListener(ADD_BATCH_EVENT, onAddBatch);
+    return () => {
+      window.removeEventListener(ADD_BATCH_EVENT, onAddBatch);
+    };
+  }, [discardPendingTarget, refresh, scheduleNext, toast]);
+
   // 抽屉打开时：刷新任务列表，并启动排队中的任务
   useEffect(() => {
     if (!isOpen) return;
@@ -394,6 +455,12 @@ export function DownloadManager({ isOpen, onClose }: { isOpen: boolean; onClose:
 /** 播放页等处调用：把一集加入下载队列（必须在用户手势内调用） */
 export function enqueueDownload(payload: AddDownloadPayload): void {
   window.dispatchEvent(new CustomEvent(ADD_TASK_EVENT, { detail: payload }));
+}
+
+/** 详情页「下载全部」调用：一次入队整部剧（必须在用户手势内调用） */
+export function enqueueDownloads(items: AddDownloadPayload[]): void {
+  if (items.length === 0) return;
+  window.dispatchEvent(new CustomEvent(ADD_BATCH_EVENT, { detail: { items } }));
 }
 
 /** header 等处调用：打开下载管理器 */
