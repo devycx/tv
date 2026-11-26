@@ -7,11 +7,17 @@ import { useAppStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
 import type { DoubanItem, DoubanResponse } from '@/lib/types';
 import { mergeRecommendationPages, nextRecommendationOffset, RECOMMEND_PAGE_SIZE } from '@/lib/recommendation-pages';
+import generatedBootstrap from '@/lib/bootstrap.generated.json';
+import type { BootstrapConfig } from '@/lib/bootstrap';
 import { DoubanCard } from './video-card';
 
 const MOVIE_TAGS = ['热门', '最新', '经典', '豆瓣高分', '冷门佳片', '华语', '欧美', '韩国', '日本', '动画'];
 const TV_TAGS = ['热门', '美剧', '英剧', '韩剧', '日剧', '国产剧', '港剧', '日本动画', '综艺', '纪录片'];
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+/** 构建期内联的首屏种子：首屏 0 请求出真实封面，过期后由 React Query 后台刷新 */
+const bootstrap = generatedBootstrap as BootstrapConfig;
+const SEED_STALE_MS = 90 * 1000;
 
 /** 推荐数据缓存时间：预热后 5 分钟内点击标签直接命中，避免重复请求 */
 const RECOMMEND_STALE_MS = 5 * 60_000;
@@ -55,6 +61,7 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
 
+  const seeded = tag !== null ? bootstrap.recommendSeed?.[`${type}:${tag}`] ?? null : null;
   const query = useInfiniteQuery({
     queryKey: ['douban-scroll', type, tag, RECOMMEND_PAGE_SIZE],
     enabled: tag !== null,
@@ -64,7 +71,12 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
       return api.douban(type, tag, pageParam, RECOMMEND_PAGE_SIZE, signal);
     },
     getNextPageParam: (last, pages, offset) => nextRecommendationOffset(last, pages, offset),
-    staleTime: RECOMMEND_STALE_MS,
+    // 切换标签/影视时保留上一份数据，不再闪骨架屏
+    placeholderData: (prev) => prev,
+    // 有种子时首帧直接出卡片；超时后后台静默刷新，用户无感
+    initialData: seeded?.length ? { pages: [{ items: seeded }], pageParams: [0] } : undefined,
+    initialDataUpdatedAt: seeded?.length ? Date.parse(bootstrap.recommendSeedAt) || undefined : undefined,
+    staleTime: seeded?.length ? SEED_STALE_MS : RECOMMEND_STALE_MS,
     retry: false,
   });
 
@@ -86,8 +98,14 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
     [queryClient, type]
   );
 
-  // 首页推荐区挂载后就把当前类型的标签页全部预热，点击标签直接出封面
-  useEffect(() => runWhenIdle(() => tags.forEach(prefetchTag)), [tags, prefetchTag]);
+  // 首页推荐区挂载后预热当前类型的标签页；已有种子的热门标签跳过，避免覆盖首屏数据
+  useEffect(
+    () =>
+      runWhenIdle(() =>
+        tags.filter((t) => !bootstrap.recommendSeed?.[`${type}:${t}`]?.length).forEach(prefetchTag)
+      ),
+    [tags, prefetchTag, type]
+  );
 
   const items = useMemo(
     () => (tag === null ? [] : mergeRecommendationPages(query.data?.pages ?? [])),
@@ -158,8 +176,8 @@ function DoubanView({ onPick }: { onPick: (title: string) => void }) {
         <p className="text-center text-sm text-faint py-8">暂无推荐</p>
       ) : (
         <div data-recommendation-grid className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2.5">
-          {items.map((item) => (
-            <DoubanCard key={item.id} item={item} onClick={() => onPick(item.title)} />
+          {items.map((item, i) => (
+            <DoubanCard key={item.id} item={item} priority={i < 16} onClick={() => onPick(item.title)} />
           ))}
         </div>
       )}

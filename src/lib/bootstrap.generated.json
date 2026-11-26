@@ -184,6 +184,702 @@
     }
   ],
   "defaultSubscriptions": [],
+  "recommendSeedAt": "2026-11-26T04:27:48.669Z",
+  "recommendSeed": {
+    "movie:热门": [
+      {
+        "id": "36847425",
+        "title": "可能的爱",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2935488630.jpg",
+        "rating": "8.6",
+        "isTv": false
+      },
+      {
+        "id": "37215318",
+        "title": "黑球",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2936994837.jpg",
+        "rating": "8.7",
+        "isTv": false
+      },
+      {
+        "id": "38586131",
+        "title": "多萝西",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2937056009.jpg",
+        "rating": "8.0",
+        "isTv": false
+      },
+      {
+        "id": "38520799",
+        "title": "忘年之约",
+        "cover": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2933363281.jpg",
+        "rating": "7.4",
+        "isTv": false
+      },
+      {
+        "id": "37436785",
+        "title": "非常治疗师",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2935259056.jpg",
+        "rating": "6.3",
+        "isTv": false
+      },
+      {
+        "id": "37317907",
+        "title": "另一个妈妈",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2935858295.jpg",
+        "rating": "5.8",
+        "isTv": false
+      },
+      {
+        "id": "37168181",
+        "title": "峡湾",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2935830446.jpg",
+        "rating": "8.0",
+        "isTv": false
+      },
+      {
+        "id": "37148241",
+        "title": "懦夫",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2932617088.jpg",
+        "rating": "7.5",
+        "isTv": false
+      },
+      {
+        "id": "37342630",
+        "title": "突如其来",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2931445409.jpg",
+        "rating": "7.7",
+        "isTv": false
+      },
+      {
+        "id": "36882191",
+        "title": "八仙！",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2934074566.jpg",
+        "rating": "8.2",
+        "isTv": false
+      },
+      {
+        "id": "36828393",
+        "title": "野兽之心",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2933185536.jpg",
+        "rating": "7.3",
+        "isTv": false
+      },
+      {
+        "id": "37446297",
+        "title": "逃出布迪秀",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2934286660.jpg",
+        "rating": "7.3",
+        "isTv": false
+      },
+      {
+        "id": "37087760",
+        "title": "黄金时段",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2934707795.jpg",
+        "rating": "6.2",
+        "isTv": false
+      },
+      {
+        "id": "37508847",
+        "title": "空枪",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2934946788.jpg",
+        "rating": "7.1",
+        "isTv": false
+      },
+      {
+        "id": "37124892",
+        "title": "不存在的罪人",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2934844988.jpg",
+        "rating": "5.7",
+        "isTv": false
+      },
+      {
+        "id": "37134880",
+        "title": "老千4：别西卜之歌",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2935460102.jpg",
+        "rating": "6.1",
+        "isTv": false
+      },
+      {
+        "id": "37068446",
+        "title": "生化危机：爆发夜",
+        "cover": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2936442661.jpg",
+        "rating": "7.3",
+        "isTv": false
+      },
+      {
+        "id": "37107254",
+        "title": "末世行者",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2931652234.jpg",
+        "rating": "6.0",
+        "isTv": false
+      },
+      {
+        "id": "37516455",
+        "title": "杯雪·一战成名",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2936719035.jpg",
+        "rating": "7.5",
+        "isTv": false
+      },
+      {
+        "id": "35765242",
+        "title": "茫然女王",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2930593644.jpg",
+        "rating": "7.9",
+        "isTv": false
+      },
+      {
+        "id": "36159749",
+        "title": "每时每刻",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2932646643.jpg",
+        "rating": "7.4",
+        "isTv": false
+      },
+      {
+        "id": "35322132",
+        "title": "罗斯",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2935294362.jpg",
+        "rating": "8.5",
+        "isTv": false
+      },
+      {
+        "id": "35244246",
+        "title": "敦煌英雄",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2936069048.jpg",
+        "rating": "5.8",
+        "isTv": false
+      },
+      {
+        "id": "36246195",
+        "title": "蜘蛛侠：崭新之日",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2934276912.jpg",
+        "rating": "7.7",
+        "isTv": false
+      },
+      {
+        "id": "36808876",
+        "title": "奥德赛",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2933569626.jpg",
+        "rating": "8.6",
+        "isTv": false
+      },
+      {
+        "id": "37811556",
+        "title": "狗狗的完美圣诞节",
+        "cover": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2937207031.jpg",
+        "rating": "6.7",
+        "isTv": false
+      },
+      {
+        "id": "36956594",
+        "title": "穿普拉达的女王2",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2930952195.jpg",
+        "rating": "6.3",
+        "isTv": false
+      },
+      {
+        "id": "36151274",
+        "title": "吉姆皇后",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2931977249.jpg",
+        "rating": "7.5",
+        "isTv": false
+      },
+      {
+        "id": "36179101",
+        "title": "希望",
+        "cover": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2933326871.jpg",
+        "rating": "5.5",
+        "isTv": false
+      },
+      {
+        "id": "36618556",
+        "title": "编个丈夫",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2937802985.jpg",
+        "rating": "7.4",
+        "isTv": false
+      },
+      {
+        "id": "35863074",
+        "title": "复活男",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2934454757.jpg",
+        "rating": "5.4",
+        "isTv": false
+      },
+      {
+        "id": "36937765",
+        "title": "一个部门的诞生",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2933113603.jpg",
+        "rating": "7.1",
+        "isTv": false
+      },
+      {
+        "id": "36903929",
+        "title": "燃烧吧！爸爸",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2935535832.jpg",
+        "rating": "6.7",
+        "isTv": false
+      },
+      {
+        "id": "37363852",
+        "title": "入夜不再",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2935125534.jpg",
+        "rating": "6.5",
+        "isTv": false
+      },
+      {
+        "id": "35010610",
+        "title": "挽救计划",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2931370692.jpg",
+        "rating": "8.6",
+        "isTv": false
+      },
+      {
+        "id": "35209727",
+        "title": "密档",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2935700232.jpg",
+        "rating": "6.7",
+        "isTv": false
+      },
+      {
+        "id": "37871209",
+        "title": "禁忌问卷",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2931922044.jpg",
+        "rating": "6.1",
+        "isTv": false
+      },
+      {
+        "id": "38112572",
+        "title": "黑牢城",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2933331804.jpg",
+        "rating": "6.4",
+        "isTv": false
+      },
+      {
+        "id": "37269580",
+        "title": "温柔的怪物",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2935867913.jpg",
+        "rating": "5.8",
+        "isTv": false
+      },
+      {
+        "id": "36801617",
+        "title": "瘴气营地的青春性事与死亡",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2932757705.jpg",
+        "rating": "6.7",
+        "isTv": false
+      },
+      {
+        "id": "35801126",
+        "title": "激情邀约",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2932993239.jpg",
+        "rating": "7.3",
+        "isTv": false
+      },
+      {
+        "id": "36944373",
+        "title": "实习生",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2934654245.jpg",
+        "rating": "6.7",
+        "isTv": false
+      },
+      {
+        "id": "36238849",
+        "title": "玩具总动员5",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2933391462.jpg",
+        "rating": "8.0",
+        "isTv": false
+      },
+      {
+        "id": "36887293",
+        "title": "登峰传奇：丹增诺盖",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2937323988.jpg",
+        "rating": "7.8",
+        "isTv": false
+      },
+      {
+        "id": "37332150",
+        "title": "名侦探柯南：高速公路的堕天使",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2931453638.jpg",
+        "rating": "5.4",
+        "isTv": false
+      },
+      {
+        "id": "37116446",
+        "title": "给阿嬷的情书",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2931851430.jpg",
+        "rating": "9.3",
+        "isTv": false
+      },
+      {
+        "id": "36889088",
+        "title": "怒之杀",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2935069903.jpg",
+        "rating": "5.6",
+        "isTv": false
+      },
+      {
+        "id": "37317906",
+        "title": "忘却之岛",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2931045520.jpg",
+        "rating": "7.5",
+        "isTv": false
+      },
+      {
+        "id": "37487816",
+        "title": "故土",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2935691855.jpg",
+        "rating": "7.7",
+        "isTv": false
+      },
+      {
+        "id": "37247236",
+        "title": "理智与情感",
+        "cover": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2936957901.jpg",
+        "rating": "6.5",
+        "isTv": false
+      }
+    ],
+    "tv:热门": [
+      {
+        "id": "35235320",
+        "title": "两京十五日",
+        "cover": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2937593221.jpg",
+        "isTv": true
+      },
+      {
+        "id": "37806882",
+        "title": "我的有罪之人",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2935797899.jpg",
+        "rating": "8.7",
+        "isTv": true
+      },
+      {
+        "id": "37457082",
+        "title": "凡人修仙传 年番4",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2937733578.jpg",
+        "rating": "7.7",
+        "isTv": true
+      },
+      {
+        "id": "36689621",
+        "title": "今天是太阳雨",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2935903589.jpg",
+        "rating": "8.0",
+        "isTv": true
+      },
+      {
+        "id": "37100984",
+        "title": "后会友期",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2936933522.jpg",
+        "rating": "8.7",
+        "isTv": true
+      },
+      {
+        "id": "36675942",
+        "title": "小城良方",
+        "cover": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2936709341.jpg",
+        "rating": "8.1",
+        "isTv": true
+      },
+      {
+        "id": "38356260",
+        "title": "宝珠",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2937533554.jpg",
+        "isTv": true
+      },
+      {
+        "id": "30145677",
+        "title": "青春共体",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2937427662.jpg",
+        "rating": "7.4",
+        "isTv": true
+      },
+      {
+        "id": "36155236",
+        "title": "伟大的长征",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2936465959.jpg",
+        "rating": "8.8",
+        "isTv": true
+      },
+      {
+        "id": "37109676",
+        "title": "谷雨",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2936897680.jpg",
+        "rating": "6.3",
+        "isTv": true
+      },
+      {
+        "id": "36977822",
+        "title": "十万狂花入梦来",
+        "cover": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2935866961.jpg",
+        "isTv": true
+      },
+      {
+        "id": "37191789",
+        "title": "嫁金钗",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2936594583.jpg",
+        "rating": "6.7",
+        "isTv": true
+      },
+      {
+        "id": "37296949",
+        "title": "蒸蒸日上",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2936476679.jpg",
+        "rating": "7.8",
+        "isTv": true
+      },
+      {
+        "id": "37816990",
+        "title": "现在就出发 第四季",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2936261227.jpg",
+        "rating": "8.0",
+        "isTv": true
+      },
+      {
+        "id": "36618936",
+        "title": "无声的回响",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2908208835.jpg",
+        "isTv": true
+      },
+      {
+        "id": "37235560",
+        "title": "Doctor X：白色黑手党时代",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2935916102.jpg",
+        "rating": "8.0",
+        "isTv": true
+      },
+      {
+        "id": "37172429",
+        "title": "罪蓝之路",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2937233193.jpg",
+        "isTv": true
+      },
+      {
+        "id": "36449295",
+        "title": "兰香如故",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2933527614.jpg",
+        "rating": "7.6",
+        "isTv": true
+      },
+      {
+        "id": "37218278",
+        "title": "翠鸟谋杀案",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2935049923.jpg",
+        "rating": "8.3",
+        "isTv": true
+      },
+      {
+        "id": "39018014",
+        "title": "午夜规则",
+        "cover": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2937159421.jpg",
+        "rating": "7.7",
+        "isTv": true
+      },
+      {
+        "id": "35674172",
+        "title": "银翼杀手2099",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2936992833.jpg",
+        "isTv": true
+      },
+      {
+        "id": "36155994",
+        "title": "多喜一家人",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2937033477.jpg",
+        "isTv": true
+      },
+      {
+        "id": "38422419",
+        "title": "扯淡电影史",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2937460613.jpg",
+        "rating": "8.5",
+        "isTv": true
+      },
+      {
+        "id": "37070530",
+        "title": "玫瑰战争",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2937183448.jpg",
+        "rating": "7.0",
+        "isTv": true
+      },
+      {
+        "id": "36137784",
+        "title": "幻视任务",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2934961457.jpg",
+        "rating": "8.6",
+        "isTv": true
+      },
+      {
+        "id": "37156504",
+        "title": "凡人修仙传：重返天南",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2924351735.jpg",
+        "rating": "9.6",
+        "isTv": true
+      },
+      {
+        "id": "35861007",
+        "title": "尚公主",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2936873942.jpg",
+        "rating": "6.5",
+        "isTv": true
+      },
+      {
+        "id": "36942992",
+        "title": "走马上任",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2922760095.jpg",
+        "rating": "6.6",
+        "isTv": true
+      },
+      {
+        "id": "37069670",
+        "title": "百日谎言",
+        "cover": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2935670701.jpg",
+        "rating": "8.0",
+        "isTv": true
+      },
+      {
+        "id": "37560173",
+        "title": "余红旧事",
+        "cover": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2936223841.jpg",
+        "rating": "7.8",
+        "isTv": true
+      },
+      {
+        "id": "38530785",
+        "title": "你却爱着一个他",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2936267468.jpg",
+        "rating": "8.2",
+        "isTv": true
+      },
+      {
+        "id": "37501131",
+        "title": "现在不是出轨的问题",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2934748119.jpg",
+        "rating": "8.7",
+        "isTv": true
+      },
+      {
+        "id": "36961929",
+        "title": "有人刚好提起我吗？",
+        "cover": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2936110521.jpg",
+        "rating": "8.3",
+        "isTv": true
+      },
+      {
+        "id": "37370438",
+        "title": "绝望写手 第五季",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2930970048.jpg",
+        "rating": "9.7",
+        "isTv": true
+      },
+      {
+        "id": "35154761",
+        "title": "喜鹊谋杀案",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2868014363.jpg",
+        "rating": "8.4",
+        "isTv": true
+      },
+      {
+        "id": "36283032",
+        "title": "蓝色星球 第三季",
+        "cover": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2937188571.jpg",
+        "rating": "9.5",
+        "isTv": true
+      },
+      {
+        "id": "37210712",
+        "title": "末路兼职",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2936279046.jpg",
+        "rating": "6.5",
+        "isTv": true
+      },
+      {
+        "id": "2210001",
+        "title": "大明王朝1566",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2444453078.jpg",
+        "rating": "9.8",
+        "isTv": true
+      },
+      {
+        "id": "37042229",
+        "title": "醉梦",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2936594830.jpg",
+        "rating": "7.4",
+        "isTv": true
+      },
+      {
+        "id": "37071110",
+        "title": "再婚皇后",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2935889112.jpg",
+        "rating": "6.0",
+        "isTv": true
+      },
+      {
+        "id": "37441663",
+        "title": "代考风暴",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2937343317.jpg",
+        "isTv": true
+      },
+      {
+        "id": "37662385",
+        "title": "魔鬼的计谋：死亡重启",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2936626237.jpg",
+        "rating": "8.5",
+        "isTv": true
+      },
+      {
+        "id": "37480076",
+        "title": "仙逆 年番3",
+        "cover": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2934641141.jpg",
+        "rating": "8.4",
+        "isTv": true
+      },
+      {
+        "id": "35857367",
+        "title": "蜜谍",
+        "cover": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2937411391.jpg",
+        "isTv": true
+      },
+      {
+        "id": "37172392",
+        "title": "好搭档2",
+        "cover": "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2937370941.jpg",
+        "isTv": true
+      },
+      {
+        "id": "37297001",
+        "title": "我不是大师",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2935858538.jpg",
+        "rating": "7.3",
+        "isTv": true
+      },
+      {
+        "id": "10477598",
+        "title": "罗小黑战记",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2496903956.jpg",
+        "rating": "9.5",
+        "isTv": true
+      },
+      {
+        "id": "37816820",
+        "title": "声生不息·天涯共此时",
+        "cover": "https://img9.doubanio.com/view/photo/s_ratio_poster/public/p2937660164.jpg",
+        "isTv": true
+      },
+      {
+        "id": "2150220",
+        "title": "白色巨塔",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2892515613.jpg",
+        "rating": "9.7",
+        "isTv": true
+      },
+      {
+        "id": "36363991",
+        "title": "爱情怎么翻译？",
+        "cover": "https://img3.doubanio.com/view/photo/s_ratio_poster/public/p2928736672.jpg",
+        "rating": "8.3",
+        "isTv": true
+      }
+    ]
+  },
   "defaultRecommendSource": "douban",
   "defaultImageMode": null
 }

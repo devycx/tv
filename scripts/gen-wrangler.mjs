@@ -113,6 +113,46 @@ const liveSources = [
   { name: 'zbds 央视/卫视', url: 'https://live.zbds.top/tv/iptv4.m3u' },
 ];
 
+/**
+ * 首屏推荐种子：热门标签对所有用户一样，构建期抓一次内联进 bootstrap，
+ * 首屏 0 请求直接出真实封面。失败或非 2xx 时留空，绝不阻断构建。
+ */
+async function fetchRecommendSeed() {
+  const pairs = [
+    ['movie', '热门'],
+    ['tv', '热门'],
+  ];
+  const UA =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
+  const results = await Promise.all(
+    pairs.map(async ([type, tag]) => {
+      const target = `https://movie.douban.com/j/search_subjects?type=${type}&tag=${encodeURIComponent(tag)}&sort=recommend&page_limit=50&page_start=0`;
+      try {
+        const r = await fetch(target, {
+          headers: { 'User-Agent': UA, Referer: 'https://movie.douban.com/', Accept: 'application/json' },
+          signal: AbortSignal.timeout(6000),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        const items = (data.subjects ?? []).map((s) => ({
+          id: String(s.id),
+          title: String(s.title ?? ''),
+          cover: String(s.cover ?? ''),
+          ...(s.rate && s.rate !== '0' ? { rating: String(s.rate) } : {}),
+          isTv: type === 'tv',
+        }));
+        return items.length ? [`${type}:${tag}`, items] : null;
+      } catch (err) {
+        console.warn(`[夜幕影视] 推荐种子 ${type}:${tag} 抓取失败，首屏将走网络：`, err instanceof Error ? err.message : err);
+        return null;
+      }
+    })
+  );
+  return Object.fromEntries(results.filter(Boolean));
+}
+
+const recommendSeed = await fetchRecommendSeed();
+
 const config = {
   $schema: 'node_modules/wrangler/config-schema.json',
   name: 'tv',
@@ -179,6 +219,8 @@ const bootstrap = {
     ...(s.epg ? { epg: s.epg } : {}),
   })),
   defaultSubscriptions: [],
+  recommendSeedAt: new Date().toISOString(),
+  recommendSeed,
   // 首页推荐默认豆瓣（未显式配置 DEFAULT_RECOMMEND_SOURCE 时）
   defaultRecommendSource: ['douban', 'bangumi', 'hot-list'].includes(
     process.env.DEFAULT_RECOMMEND_SOURCE?.trim().toLowerCase() ?? ''

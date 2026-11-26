@@ -11,6 +11,8 @@ interface SmartImageProps {
   alt: string;
   className?: string;
   loading?: 'lazy' | 'eager';
+  /** 首屏关键图给 high，其余 auto；仅影响浏览器下载优先级 */
+  fetchPriority?: 'high' | 'low' | 'auto';
   /** 候选链耗尽后回调，调用方切换占位图等兜底 UI */
   onExhausted?: () => void;
   /** 当前候选图真正解码成功；cacheHit=true 表示浏览器缓存命中，可直接显示、跳过淡入 */
@@ -32,6 +34,7 @@ export function SmartImage({
   alt,
   className,
   loading = 'lazy',
+  fetchPriority = 'auto',
   onExhausted,
   onLoad,
 }: SmartImageProps) {
@@ -79,6 +82,7 @@ export function SmartImage({
       alt={alt}
       className={className}
       loading={loading}
+      fetchPriority={fetchPriority}
       decoding="async"
       referrerPolicy="no-referrer"
       onLoad={() => onLoadRef.current?.(false)}

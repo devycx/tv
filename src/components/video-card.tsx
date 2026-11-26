@@ -13,12 +13,9 @@ import { QualityBadge } from './quality-badge';
 import { useQualityProbe } from './use-quality-probe';
 import { useInView } from './use-in-view';
 
-/** 首页豆瓣榜单的封面兜底；搜索结果卡不再删卡或等待固定超时。 */
-const DOUBAN_COVER_LOAD_TIMEOUT_MS = 7000;
-
 /**
  * 聚合影片卡片：
- * - 点击封面图 → 立即播放（播放页会挑画质最好的源、剧集默认最新一集）；
+ * - 点击封面图 → 立即播放（播放页会挑画质最好的源、剧集默认第一集）；
  * - 点击文字区 → 打开详情（看简介 / 选集）；
  * - 多源：底部显示「N 个来源」，展开后可选择具体源；
  * - 封面不压暗、不叠「N 源」角标：海报本身就是要看的内容，图上的角标还会挡住
@@ -378,7 +375,16 @@ export const AggregatedCard = memo(function AggregatedCard({
 });
 
 /** 豆瓣推荐卡片（无来源徽章，点击直接搜索） */
-export function DoubanCard({ item, onClick }: { item: { title: string; cover: string; rating?: string }; onClick: () => void }) {
+export function DoubanCard({
+  item,
+  onClick,
+  priority = false,
+}: {
+  item: { title: string; cover: string; rating?: string };
+  onClick: () => void;
+  /** 首屏前 16 张：立即加载并高优先级，避免整屏灰底 */
+  priority?: boolean;
+}) {
   const imageProxyMode = useAppStore((s) => s.imageProxyMode);
   const customImageProxy = useAppStore((s) => s.customImageProxy);
   const [imgFailed, setImgFailed] = useState(false);
@@ -388,13 +394,8 @@ export function DoubanCard({ item, onClick }: { item: { title: string; cover: st
     setImgFailed(false);
     setCoverReady(false);
   }, [item.cover]);
-  // 图床挂住时同样会一直停在 opacity-0：到点按失败处理，露出胶片图标兜底。
-  useEffect(() => {
-    if (coverReady || imgFailed || !item.cover) return;
-    const timer = window.setTimeout(() => setImgFailed(true), DOUBAN_COVER_LOAD_TIMEOUT_MS);
-    return () => window.clearTimeout(timer);
-  }, [coverReady, imgFailed, item.cover]);
-
+  // 慢网只保留 shimmer，不再用固定超时把封面永久换成胶片图标；
+  // 真正的兜底只在候选链全部失败（onExhausted）时触发。
   return (
     <div
       className="card cursor-pointer hover:scale-[1.03] hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
@@ -410,14 +411,17 @@ export function DoubanCard({ item, onClick }: { item: { title: string; cover: st
       }}
     >
       <div className="relative aspect-[2/3]">
+        {!coverReady && !imgFailed && <div className="absolute inset-0 rounded-lg bg-chip animate-pulse" />}
         {item.cover && !imgFailed ? (
           <SmartImage
             url={item.cover}
             mode={imageProxyMode}
             customProxy={customImageProxy}
             alt={item.title}
+            loading={priority ? 'eager' : 'lazy'}
+            fetchPriority={priority ? 'high' : 'auto'}
             className={cn(
-              'w-full h-full object-cover transition-opacity duration-200',
+              'relative w-full h-full object-cover transition-opacity duration-150',
               coverReady ? 'opacity-100' : 'opacity-0'
             )}
             onLoad={() => setCoverReady(true)}

@@ -1,4 +1,4 @@
-import type { LiveSourceConfig, SourceConfig } from './types';
+import type { DoubanItem, LiveSourceConfig, SourceConfig } from './types';
 
 /**
  * 首屏引导数据：部署者预置源等静态配置。
@@ -25,6 +25,10 @@ export interface BootstrapConfig {
   defaultLiveSources: LiveSourceConfig[];
   /** 部署者通过 DEFAULT_SUBSCRIPTIONS 预置的 SourceList 订阅链接 */
   defaultSubscriptions: { url: string; name?: string; refreshDays?: number }[];
+  /** 构建期抓取的热门标签首屏种子（key = `${type}:${tag}`）；空对象表示未预热成功 */
+  recommendSeed: Record<string, DoubanItem[]>;
+  /** 种子抓取时间，用作 React Query initialDataUpdatedAt */
+  recommendSeedAt: string;
   /** 部署者通过 DEFAULT_RECOMMEND_SOURCE 指定的首页推荐数据源默认值（未配置为 null） */
   defaultRecommendSource: 'douban' | 'bangumi' | 'hot-list' | null;
   /** 部署者通过 DEFAULT_IMAGE_MODE 指定的封面图加载方式默认值（未配置为 null） */
