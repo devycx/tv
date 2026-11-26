@@ -4,7 +4,6 @@ import Link from 'next/link';
 import { useState, type ReactNode } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { ThemeToggle } from './theme';
-import { SourceManagerDrawer } from './source-manager';
 import { HistoryPanel } from './history-panel';
 import { requestShowDownloadManager } from './download-manager';
 import { Icon, type IconName } from './icon';
@@ -13,7 +12,7 @@ import { useScrolled } from './use-scrolled';
 import { cn } from '@/lib/utils';
 
 /**
- * 顶部导航：Logo、搜索框（直播页）、历史、设置。
+ * 顶部导航：Logo、搜索框（直播页）、历史、下载、主题。
  * 播放页复用同一个顶栏、只额外给一个返回按钮（leading 插槽）；
  * 标题、下载、切源都属于页面内容，不放回顶栏——否则手机上一行挤不下。
  */
@@ -30,7 +29,6 @@ export function Header({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   /** 移动端（<sm）折叠菜单：窄屏放不下 5 个导航项 + 3 个图标按钮 */
   const [menuOpen, setMenuOpen] = useState(false);
@@ -131,16 +129,12 @@ export function Header({
             </form>
           )}
 
-          {/* 窄屏占位：始终把右侧图标推到视口右端（直播页 showSearch 时表单在 <sm 是隐藏的，
+          {/* 窄屏占位：始终把右侧图标推到视口右端（showSearch 时表单在 <sm 是隐藏的，
               以前这里不渲染占位，导致图标紧跟在品牌后面，没有两端对齐） */}
           <div className="flex-1 sm:hidden" />
 
           {/* 桌面 / 平板：完整导航 */}
           <nav className="hidden sm:flex items-center gap-1 ml-auto">
-            <HeaderLink href="/live" active={pathname === '/live'}>
-              <Icon name="tv" className="w-4 h-4" />
-              直播
-            </HeaderLink>
             <HeaderLink href="/about" active={pathname === '/about'}>
               关于
             </HeaderLink>
@@ -151,37 +145,11 @@ export function Header({
               <Icon name="download" />
             </IconButton>
             <ThemeToggle />
-            <IconButton label="设置" onClick={() => setSettingsOpen(true)}>
-              <Icon name="gear" />
-            </IconButton>
           </nav>
 
-          {/* 手机：直播 + 主题 + 设置直接露出（最常用），其余收进汉堡菜单 */}
+          {/* 手机：主题直接露出，其余收进汉堡菜单 */}
           <div className="sm:hidden flex items-center gap-1 shrink-0">
-            <Link
-              href="/live"
-              aria-label="直播"
-              title="直播"
-              className={cn(
-                'p-2 rounded-md transition-colors',
-                pathname === '/live'
-                  ? 'text-accent bg-hover'
-                  : 'text-muted hover:text-content hover:bg-hover'
-              )}
-            >
-              <Icon name="tv" />
-            </Link>
             <ThemeToggle />
-            {/* 与菜单项一致：打开抽屉前先收起菜单，否则关掉设置后汉堡菜单还摊在那儿 */}
-            <IconButton
-              label="设置"
-              onClick={() => {
-                closeMenu();
-                setSettingsOpen(true);
-              }}
-            >
-              <Icon name="gear" />
-            </IconButton>
             <IconButton
               label={menuOpen ? '关闭菜单' : '打开菜单'}
               expanded={menuOpen}
@@ -198,7 +166,7 @@ export function Header({
             aria-label="主菜单"
             className="sm:hidden border-t border-line bg-surface/95 backdrop-blur px-3 py-2 pb-[calc(0.5rem_+_env(safe-area-inset-bottom))] animate-fade-in"
           >
-            {/* 直播已在顶栏直接露出；这里只留首页 / 关于 / 历史 / 下载 */}
+            {/* 这里留首页 / 关于 / 历史 / 下载 */}
             <div className="grid grid-cols-2 gap-1.5">
               <MenuRow href="/" active={pathname === '/'} icon="home" onNavigate={closeMenu}>
                 首页
@@ -231,7 +199,6 @@ export function Header({
         )}
       </header>
 
-      <SourceManagerDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <HistoryPanel open={historyOpen} onClose={() => setHistoryOpen(false)} />
     </>
   );

@@ -249,13 +249,6 @@ function HomeContent() {
     [filteredGroups]
   );
   /**
-   * 本次搜索里被「成人内容过滤」隐藏的相关条数。
-   * 原来被过滤的结果静默消失，用户只看到空态，容易误判成「没有片源」。
-   */
-  const filteredAdultCount =
-    (searchQuery.data?.filteredAdultCount ?? 0) + (expandedQuery.data?.filteredAdultCount ?? 0);
-
-  /**
    * 翻过页之后冻结当前顺序：扩搜或筛选更新时，正在看的卡片不被顶走。
    * 扩搜本身已经在 mergeExpandedGroups 里冻结旧组，这里再兜住分页边界。
    */
@@ -454,7 +447,6 @@ function HomeContent() {
               onToggleAdult={() => setFilters((prev) => ({ ...prev, adultOnly: !prev.adultOnly }))}
             />
           )}
-          {/* 成人内容过滤只在「设置 → 首页与内容过滤」里统一开关，首页不再放行内开关 */}
         </section>
 
         {/* 搜索结果 */}
@@ -489,14 +481,6 @@ function HomeContent() {
                 </button>
               )}
             </div>
-
-            {/* 过滤提示条：被隐藏的条数要说出来，否则用户只会看到「没找到」 */}
-            {yellowFilter && filteredAdultCount > 0 && (
-              <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-chip px-3 py-2 text-xs">
-                <span className="text-muted">已按「成人内容过滤」隐藏 {filteredAdultCount} 条相关结果</span>
-                <span className="text-faint">需要查看可在「设置 → 首页与内容过滤」中关闭</span>
-              </div>
-            )}
 
             {selectedSources.length === 0 ? (
               <NoSourceGuide hasSources={customAPIs.length > 0 || envSources.length > 0} />
