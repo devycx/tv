@@ -731,7 +731,7 @@ export function PlayerShell({
             void togglePlayerFullscreen(
               artRef.current,
               () => showHint('当前浏览器不支持全屏，已切换网页全屏'),
-              () => showHint('已横屏，再点一次退出')
+              () => showHint('浏览器限制，已旋转横屏（再点一次退出）')
             );
           },
         },

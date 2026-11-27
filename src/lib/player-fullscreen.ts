@@ -5,9 +5,9 @@
  * 两条路，国产内核（X5）两条都挂时点了没反应 → 这里接管为
  * 「容器原生全屏 → iOS video 原生全屏 → 网页全屏」降级链。
  *
- * 手机：系统旋转锁开启时原生全屏仍可能保持竖屏，所以「全屏」直接走 CSS 旋转横屏
- * （播放器 fixed 铺满视口 + rotate(90deg)），不依赖 Screen Orientation API，
- * iOS Safari / 微信 WKWebView / X5 全都有效；视口变化（横竖屏切换）自动重算尺寸。
+ * 手机：优先走浏览器原生全屏（吞掉地址栏/状态栏，YouTube 同款）+ Screen Orientation
+ * 锁横屏（系统旋转锁开启时也能横屏）；iOS 走 video 原生全屏。两者都不可用时才
+ * 退化到 CSS 旋转横屏（只能覆盖网页视口，但至少能横屏看片）。
  */
 
 import { prefersTouchPointer } from '@/lib/touch-pointer';
@@ -25,7 +25,7 @@ type WebkitDocument = Document & {
 };
 
 type WebkitPlayerElement = HTMLDivElement & {
-  webkitRequestFullscreen?: () => Promise<void> | void;
+  webkitRequestFullscreen?: (options?: FullscreenOptions) => Promise<void> | void;
 };
 
 /** 全屏链路需要的最小播放器面：ArtPlayer 实例天然满足 */
@@ -145,7 +145,7 @@ export function isContainerFullscreen(): boolean {
   return Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
 }
 
-/** 播放器此刻是否处于任一形态的全屏（容器 / iOS video / 网页全屏） */
+/** 播放器此刻是否处于任一形态的全屏（容器 / iOS video / 网页全屏 / CSS 旋转） */
 export function isPlayerFullscreen(art?: FullscreenPlayerLike | null): boolean {
   return (
     isContainerFullscreen() ||
@@ -156,10 +156,44 @@ export function isPlayerFullscreen(art?: FullscreenPlayerLike | null): boolean {
 }
 
 /**
+ * 原生全屏后锁横屏：Chrome Android 上 Screen Orientation API 只在全屏态生效，
+ * 且能盖过系统旋转锁；iOS 没有该 API，video 原生全屏自己会横过来。
+ * 失败不致命——全屏本身已经生效，只是方向跟随系统。
+ */
+const lockLandscape = async () => {
+  try {
+    const orientation = screen.orientation as
+      | (ScreenOrientation & { lock?: (value: string) => Promise<void> })
+      | undefined;
+    if (!orientation?.lock) return;
+    try {
+      await orientation.lock('landscape');
+    } catch {
+      try {
+        await orientation.lock('landscape-primary');
+      } catch {
+        /* 浏览器不允许锁方向时忽略 */
+      }
+    }
+  } catch {
+    /* 忽略 */
+  }
+};
+
+/** 退出全屏时解除方向锁，让页面恢复跟随系统 */
+const unlockOrientation = () => {
+  try {
+    void screen.orientation?.unlock?.();
+  } catch {
+    /* 忽略 */
+  }
+};
+
+/**
  * 全屏切换降级链。
  *
- * @param onFallbackToWeb 容器与 iOS video 全屏都不可用、被迫降级到网页全屏时回调
- *   （组件用来给一句「当前浏览器不支持全屏，已切换网页全屏」的提示）
+ * @param onFallbackToWeb 桌面容器与 iOS video 全屏都不可用、被迫降级到网页全屏时回调
+ * @param onRotatedEnter 手机连原生全屏都没有、退化到 CSS 旋转横屏时回调
  */
 export async function togglePlayerFullscreen(
   art: FullscreenPlayerLike,
@@ -169,15 +203,16 @@ export async function togglePlayerFullscreen(
   const video = art.video as WebkitVideo | null;
   const $player = art.template?.$player as WebkitPlayerElement | null | undefined;
 
-  // —— 手机：全屏 = 强制横屏（CSS 旋转），与系统旋转锁无关 ——
+  // —— 手机：原生全屏（YouTube 同款，覆盖地址栏/状态栏）优先，锁横屏 ——
   if (isMobilePlayer()) {
+    // 退出：CSS 旋转态 / iOS video 原生全屏 / 容器原生全屏，各走各的退出路径
     if (isRotatedFullscreen(art)) {
       exitRotatedFullscreen(art);
       return;
     }
-    // 从原生全屏形态切过来时先收掉，避免两层全屏叠在一起
     if (isVideoNativeFullscreen(video)) {
       try { video?.webkitExitFullscreen?.(); } catch { /* 忽略 */ }
+      return;
     }
     if (isContainerFullscreen()) {
       try {
@@ -185,8 +220,40 @@ export async function togglePlayerFullscreen(
         if (doc.exitFullscreen) await doc.exitFullscreen();
         else await doc.webkitExitFullscreen?.();
       } catch { /* 忽略 */ }
+      unlockOrientation();
+      return;
     }
-    if (art.fullscreenWeb) art.fullscreenWeb = false;
+    if (art.fullscreenWeb) {
+      art.fullscreenWeb = false;
+      return;
+    }
+
+    // 进入 1) 容器原生全屏：Chrome/Android 上会隐藏地址栏与状态栏；
+    //       navigationUI:hide 让支持该选项的浏览器连导航条一起收起。
+    const requestFullscreenFn =
+      $player?.requestFullscreen ?? $player?.webkitRequestFullscreen;
+    if (requestFullscreenFn) {
+      try {
+        await requestFullscreenFn.call($player, { navigationUI: 'hide' });
+        void lockLandscape();
+        return;
+      } catch { /* 继续降级 */ }
+    }
+    // 进入 2) video 元素的原生全屏：iOS Safari / WKWebView 上这才是真全屏
+    if (video && typeof video.requestFullscreen === 'function') {
+      try {
+        await video.requestFullscreen({ navigationUI: 'hide' });
+        void lockLandscape();
+        return;
+      } catch { /* 继续降级 */ }
+    }
+    if (typeof video?.webkitEnterFullscreen === 'function') {
+      try {
+        video.webkitEnterFullscreen();
+        return;
+      } catch { /* 继续降级 */ }
+    }
+    // 进入 3) 最后的兜底：CSS 旋转横屏（无法隐藏浏览器 UI，但至少能横着看）
     enterRotatedFullscreen(art);
     onRotatedEnter?.();
     return;

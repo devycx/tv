@@ -127,9 +127,9 @@ artplayer 内部有大量绝对定位层，z-index 从 40 到 120：
 
 浏览器网页全屏自测：点 `.art-control-fullscreenWeb` 后，`.art-video-player.parentElement` 应为 `BODY`，屏幕顶部 `elementFromPoint(innerWidth/2, 4)` 应落在播放器/`VIDEO` 上，而不是 `HEADER`。
 
-### 手机全屏 = 旋转横屏（2026-11-27）
+### 手机全屏 = 原生全屏 + 锁横屏（2026-11-27）
 
-手机（粗指针）点 `.art-control-fullscreen` 不再走浏览器原生全屏：系统开启旋转锁时原生全屏仍可能是竖屏。现在由 `lib/player-fullscreen.ts` 用 CSS 方案接管——把播放器挂到 `<body>`，`fixed` + `rotate(90deg)`（`art-rotate-fullscreen` 类），视口变化（横竖屏切换）自动重算宽高与旋转方向，与系统旋转锁无关。桌面维持原生全屏 → iOS video 全屏 → 网页全屏降级链。
+手机（粗指针）点 `.art-control-fullscreen` 优先走**浏览器原生全屏**：Chrome/Android 上会隐藏地址栏与状态栏（YouTube 同款），随后调 `screen.orientation.lock('landscape')` 强制横屏——系统旋转锁开启时也有效。iOS 没有容器 Fullscreen API，走 `video.webkitEnterFullscreen()`（系统级视频全屏，同样覆盖整屏并自动横屏）。连原生全屏都不可用的内核才退化成 CSS 旋转横屏（`art-rotate-fullscreen` 类，只能覆盖网页视口，无法隐藏浏览器 UI），此时给「浏览器限制」提示。桌面维持原生全屏 → iOS video 全屏 → 网页全屏降级链。
 
 自测（390×844 触屏视口，shot 会自动开触摸模拟）：
 
@@ -138,17 +138,16 @@ artplayer 内部有大量绝对定位层，z-index 从 40 到 120：
   const p = document.querySelector('.art-video-player');
   const r = p.getBoundingClientRect();
   return {
-    inBody: p.parentElement === document.body,
-    rotateClass: p.classList.contains('art-rotate-fullscreen'),
-    transform: p.style.transform,           // 竖屏应为 rotate(90deg)
+    nativeFullscreen: document.fullscreenElement === p, // 首选，Chrome/Android
+    cssRotateFallback: p.classList.contains('art-rotate-fullscreen'), // 仅在原生全屏挂掉时
+    rotateClassInBody: p.parentElement === document.body,
     coversViewport: Math.round(r.width) === innerWidth && Math.round(r.height) === innerHeight,
-    bodyLocked: document.body.style.overflow === 'hidden',
     pipVisible: getComputedStyle(document.querySelector('.art-control-pip')).display !== 'none',
   };
 })()
 ```
 
-再点一次应完全还原：类移除、节点回到原容器、`style.cssText` 与 `body.style.overflow` 恢复。小窗按钮（`.art-control-pip`）手机上保留：ArtPlayer 的 pipMix 自带标准 PiP 与 iOS `webkitSetPresentationMode` 两条路，不支持时由自定义按钮给中文提示。
+原生全屏再点一次应 `document.fullscreenElement === null` 且方向锁已解除；CSS 旋转兜底退出时应类移除、节点回到原容器、`style.cssText` 与 `body.style.overflow` 恢复。小窗按钮（`.art-control-pip`）手机上保留：ArtPlayer 的 pipMix 自带标准 PiP 与 iOS `webkitSetPresentationMode` 两条路，不支持时由自定义按钮给中文提示。
 
 ## 截图与 DOM 的分工
 
