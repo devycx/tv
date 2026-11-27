@@ -179,20 +179,20 @@ body {
 /*
  * 触屏全屏：控制条贴着屏幕底边与四角，拇指不好点、还容易被圆角裁掉。
  * 三种全屏形态统一加大左右与底部留白，并叠加刘海/手势条安全区；
- * 全屏下 env() 常返回 0，所以用固定值兜底（22px/20px 约等于一个拇指宽）。
+ * 全屏下 env() 常返回 0，所以用固定值兜底（36px/30px，离圆角更远）。
  */
 @media (pointer: coarse) {
   .art-video-player.art-fullscreen,
   .art-video-player.art-fullscreen-web,
   .art-video-player.art-rotate-fullscreen {
-    --art-padding: 22px;
+    --art-padding: 36px;
   }
   .art-video-player.art-fullscreen .art-bottom,
   .art-video-player.art-fullscreen-web .art-bottom,
   .art-video-player.art-rotate-fullscreen .art-bottom {
-    padding-left: max(22px, env(safe-area-inset-left));
-    padding-right: max(22px, env(safe-area-inset-right));
-    padding-bottom: calc(20px + env(safe-area-inset-bottom));
+    padding-left: max(36px, env(safe-area-inset-left));
+    padding-right: max(36px, env(safe-area-inset-right));
+    padding-bottom: calc(30px + env(safe-area-inset-bottom));
   }
   /* 库在 .art-mobile 下给左右控件组加了 -padding 的负 margin，让按钮贴边；
      全屏态必须归零，否则上面加的左右留白只对进度条生效、按钮仍贴四角。

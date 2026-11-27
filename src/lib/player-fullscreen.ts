@@ -324,10 +324,13 @@ export async function togglePlayerFullscreen(
   onFallbackToWeb?.();
 }
 
-/** 全屏按钮 html：进入态图标在前、退出态图标在后（初始隐藏），与库内置按钮结构一致 */
+/**
+ * 全屏按钮 html：进入态图标在前、退出态图标在后（初始隐藏），与库内置按钮结构一致。
+ * 用 ArtPlayer 原生实心图标而非细线四角——后者在圆角屏上容易被看成「被削掉一块」。
+ */
 export const fullscreenButtonHtml = [
-  '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>',
-  '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" style="fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;display:none"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 0-2-2h3M3 16h3a2 2 0 0 0 2 2v3"/></svg>',
+  `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 1024 1024" style="fill:currentColor;overflow:visible"><path d="M625.777778 256h142.222222V398.222222h113.777778V142.222222H625.777778v113.777778zM256 398.222222V256H398.222222v-113.777778H142.222222V398.222222h113.777778zM768 625.777778v142.222222H625.777778v113.777778h256V625.777778h-113.777778zM398.222222 768H256V625.777778h-113.777778v256H398.222222v-113.777778z"/></svg>`,
+  `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 1024 1024" style="fill:currentColor;overflow:visible;display:none"><path d="M768 298.666667h170.666667v85.333333h-256V128h85.333333v170.666667zM341.333333 384H85.333333V298.666667h170.666667V128h85.333333v256z m426.666667 341.333333v170.666667h-85.333333v-256h256v85.333333h-170.666667zM341.333333 640v256H256v-170.666667H85.333333v-85.333333h256z"/></svg>`,
 ].join('');
 
 /** 全屏按钮图标随状态切换：控件重建（resize）后也由调用方补一次同步 */

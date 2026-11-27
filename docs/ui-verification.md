@@ -149,7 +149,7 @@ artplayer 内部有大量绝对定位层，z-index 从 40 到 120：
 
 原生全屏再点一次应 `document.fullscreenElement === null` 且方向锁已解除；CSS 旋转兜底退出时应类移除、节点回到原容器、`style.cssText` 与 `body.style.overflow` 恢复。小窗按钮（`.art-control-pip`）手机上保留：ArtPlayer 的 pipMix 自带标准 PiP 与 iOS `webkitSetPresentationMode` 两条路，不支持时由自定义按钮给中文提示。
 
-**控件贴边回归点**：ArtPlayer 在 `.art-mobile` 下给 `.art-controls-left/right` 加了 `-var(--art-padding)` 的负 margin，只改 `.art-bottom` 的 padding 只会让进度条内缩、按钮仍贴四角。`globals.css` 的 `(pointer: coarse)` 全屏规则同时把左右负 margin 归零，并给底部叠加 `env(safe-area-inset-bottom)`。自测：390×844 全屏后，`.art-control-playAndPause` 左边 ≥ 20px、`.art-control-fullscreen` 右边 `innerWidth - right` ≥ 20px、控件 bottom 距视口底 ≥ 20px，且右侧控件不得 `right > innerWidth`（溢出）。
+**控件贴边回归点**：ArtPlayer 在 `.art-mobile` 下给 `.art-controls-left/right` 加了 `-var(--art-padding)` 的负 margin，只改 `.art-bottom` 的 padding 只会让进度条内缩、按钮仍贴四角。`globals.css` 的 `(pointer: coarse)` 全屏规则同时把左右负 margin 归零，并给底部叠加 `env(safe-area-inset-bottom)`。自测：390×844 全屏后，`.art-control-playAndPause` 左边 ≥ 30px、`.art-control-fullscreen` 右边 `innerWidth - right` ≥ 30px、控件 bottom 距视口底 ≥ 30px，且右侧控件不得 `right > innerWidth`（溢出）。图标用 ArtPlayer 原生实心全屏图标（细线四角在圆角屏上容易被误看成「被削掉一块」）。
 
 ## 截图与 DOM 的分工
 
