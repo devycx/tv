@@ -106,7 +106,7 @@ artplayer 内部有大量绝对定位层，z-index 从 40 到 120：
 
 修法：给播放器外壳 `.player-stage` 加 `isolation: isolate`（见 `globals.css`），把内部层级收进局部上下文。
 
-**网页全屏不要加例外规则。** artplayer 的 `FULLSCREEN_WEB_IN_BODY = true`，进入网页全屏时会把 `.art-video-player` 直接 `append(document.body, ...)`，它会自然脱离 `.player-stage` 的隔离，继续以 `z-index: 9999` 盖住 `z-40` 顶栏和 `z-50` 抽屉。不要写 `.player-stage:has(.art-fullscreen-web)` 去“放开隔离”——全屏时节点已经不在 stage 里，这个选择器永远不匹配（这是实际踩过的坑）。
+**程序化网页全屏兜底不要加例外规则。** artplayer 的 `FULLSCREEN_WEB_IN_BODY = true`，自动降级到网页全屏时会把 `.art-video-player` 直接 `append(document.body, ...)`，它会自然脱离 `.player-stage` 的隔离，继续以 `z-index: 9999` 盖住 `z-40` 顶栏和 `z-50` 抽屉。不要写 `.player-stage:has(.art-fullscreen-web)` 去“放开隔离”——全屏时节点已经不在 stage 里，这个选择器永远不匹配（这是实际踩过的坑）。按钮本身已从控制条移除，这里只针对极端环境的自动降级形态。
 
 层级自测：
 
@@ -125,7 +125,7 @@ artplayer 内部有大量绝对定位层，z-index 从 40 到 120：
 })()
 ```
 
-浏览器网页全屏自测：点 `.art-control-fullscreenWeb` 后，`.art-video-player.parentElement` 应为 `BODY`，屏幕顶部 `elementFromPoint(innerWidth/2, 4)` 应落在播放器/`VIDEO` 上，而不是 `HEADER`。
+**网页全屏按钮已移除**（鸡肋，控制条不再暴露入口）；程序化兜底形态的自测方式：在控制台把 `art.fullscreenWeb = true` 后，`.art-video-player.parentElement` 应为 `BODY`，屏幕顶部 `elementFromPoint(innerWidth/2, 4)` 应落在播放器/`VIDEO` 上，而不是 `HEADER`。
 
 ### 手机全屏 = 原生全屏 + 锁横屏（2026-11-27）
 
@@ -233,7 +233,7 @@ npm run shot -- --url "http://localhost:8080/live?url=https%3A%2F%2Ftest-streams
 
 - 提交 `ffcbd5a`：顶栏复用、标题上移、下载进控制条、切源与跳过标记并列、自动连播进齿轮菜单、`.player-stage` 隔离。
 - CI `43605020218`、部署 `43605085303` 成功；线上用《庆余年》魔都资源第 46 集实测通过。
-- 关键回归点：手机设置抽屉打开时，播放器控制条不得再浮在抽屉正文上；网页全屏仍要能盖住顶栏。
+- 关键回归点：手机设置抽屉打开时，播放器控制条不得再浮在抽屉正文上；程序化网页全屏兜底仍要能盖住顶栏（按钮本身已移除）。
 
 ## 详情弹窗简介：服务端洗成纯文本 + 展开（2026-11-15）
 

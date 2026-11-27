@@ -407,7 +407,8 @@ export function LivePlayer({
       playbackRate: false,
       aspectRatio: false,
       // 「全屏」改用上面的自定义按钮（fullscreen 降级链），不用库内置按钮
-      fullscreenWeb: true,
+      // 网页全屏按钮已移除（鸡肋）：只保留程序化兜底能力，不向用户暴露入口
+      fullscreenWeb: false,
       miniProgressBar: false,
       hotkey: false,
       mutex: true,

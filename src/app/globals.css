@@ -151,8 +151,9 @@ body {
  * （手机上表现为控制条和进度条浮在抽屉正文上，抽屉被切了一块）。
  *
  * isolate 把播放器内部层级收进一个局部上下文。
- * 网页全屏不需要特殊处理：artplayer 在 fullscreenWeb 时会把根节点移到 <body>
- * （FULLSCREEN_WEB_IN_BODY 默认 true），自然脱离这里，仍然能盖住顶栏。
+ * 程序化兜底的网页全屏不需要特殊处理：artplayer 在 fullscreenWeb 时把根节点
+ * 移到 <body>（FULLSCREEN_WEB_IN_BODY 默认 true），自然脱离这里，仍能盖住顶栏。
+ * （该按钮已从控制条移除，这里说的是极端环境下的自动降级形态。）
  */
 .player-stage {
   isolation: isolate;
@@ -267,13 +268,12 @@ body {
  */
 @media (max-width: 640px) {
   /* 竖屏空间只够放「播放 + 时间 + 设置 + 小窗 + 全屏」：
-     音量交给系统按键，截图与上/下集在手机上很少用，一并收起；
-     网页全屏按钮也收起——手机「全屏」就是旋转横屏，两个按钮重复且挤宽度 */
+     音量交给系统按键，截图与上/下集在手机上很少用，一并收起。
+     网页全屏按钮已从播放器中移除，无需再为它腾空间 */
   .art-control-prev-episode,
   .art-control-next-episode,
   .art-control-volume,
-  .art-control-screenshot,
-  .art-control-fullscreenWeb {
+  .art-control-screenshot {
     display: none !important;
   }
 
@@ -288,7 +288,6 @@ body {
   .art-control-download,
   .art-control-setting,
   .art-control-pip,
-  .art-control-fullscreenWeb,
   .art-control-fullscreen {
     width: 40px !important;
     min-width: 40px !important;

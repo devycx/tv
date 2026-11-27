@@ -3,7 +3,8 @@
  *
  * 桌面：ArtPlayer 内置按钮只有容器 Fullscreen API 与 iOS webkitEnterFullscreen
  * 两条路，国产内核（X5）两条都挂时点了没反应 → 这里接管为
- * 「容器原生全屏 → iOS video 原生全屏 → 网页全屏」降级链。
+ * 「容器原生全屏 → iOS video 原生全屏 → 网页全屏」降级链（网页全屏仅作程序化
+ * 兜底，控制条按钮已移除，用户点「全屏」只会进入前两种或 CSS 旋转横屏）。
  *
  * 手机：优先走浏览器原生全屏（吞掉地址栏/状态栏，YouTube 同款）+ Screen Orientation
  * 锁横屏（系统旋转锁开启时也能横屏）；iOS 走 video 原生全屏。两者都不可用时才

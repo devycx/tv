@@ -660,7 +660,8 @@ export function PlayerShell({
       aspectRatio: true,
       // 「全屏」改用自定义按钮（见 controls）：库内置按钮只有容器 Fullscreen API 与
       // iOS video 全屏两条路，国产内核（微信 X5 等）上两条都挂，点了没反应
-      fullscreenWeb: true,
+      // 网页全屏按钮已移除（鸡肋）：只保留程序化兜底能力，不向用户暴露入口
+      fullscreenWeb: false,
       // 恒传 true，不跟设置项走：库的 miniProgressBar 插件只在构造时注册、运行时不可换，
       // 而它正是「控制栏显示时摘掉 art-mini-progress-bar」的唯一维护者。设置项只负责
       // 「关掉时不保留类名」（见下方 control 监听 + 开关变化的 useEffect）。
