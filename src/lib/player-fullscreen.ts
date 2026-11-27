@@ -1,15 +1,16 @@
 /**
- * 播放器全屏降级链（点播 player-shell 与直播 live-player 共用）。
+ * 播放器全屏按钮（点播 player-shell 与直播 live-player 共用）。
  *
- * ArtPlayer 自带的 `fullscreen` 按钮只有两条路：
- *  1. 容器 Fullscreen API（screenfull.isEnabled：桌面 / Android Chrome / iPad）；
- *  2. iOS 的 `video.webkitEnterFullscreen()`（`webkitSupportsFullscreen`）。
- * 两条路都不可用或失败时（微信/QQ 等国产内核、部分 WKWebView 与 iOS + MSE 场景），
- * 点击「全屏」毫无反应，也不会自动降级。
+ * 桌面：ArtPlayer 内置按钮只有容器 Fullscreen API 与 iOS webkitEnterFullscreen
+ * 两条路，国产内核（X5）两条都挂时点了没反应 → 这里接管为
+ * 「容器原生全屏 → iOS video 原生全屏 → 网页全屏」降级链。
  *
- * 这里统一接管全屏切换，按「容器原生全屏 → iOS video 原生全屏 → 网页全屏」降级，
- * 保证按钮在任何手机浏览器上都有响应；图标随三种形态同步。
+ * 手机：系统旋转锁开启时原生全屏仍可能保持竖屏，所以「全屏」直接走 CSS 旋转横屏
+ * （播放器 fixed 铺满视口 + rotate(90deg)），不依赖 Screen Orientation API，
+ * iOS Safari / 微信 WKWebView / X5 全都有效；视口变化（横竖屏切换）自动重算尺寸。
  */
+
+import { prefersTouchPointer } from '@/lib/touch-pointer';
 
 type WebkitVideo = HTMLVideoElement & {
   webkitEnterFullscreen?: () => void;
@@ -42,6 +43,96 @@ interface EventfulPlayer {
   off(name: string, fn: (...args: unknown[]) => unknown): unknown;
 }
 
+/** 手机 CSS 旋转横屏的现场：退出时要把节点与样式原样还回去 */
+interface RotatedState {
+  parent: HTMLElement | null;
+  nextSibling: Node | null;
+  cssText: string;
+  bodyOverflow: string;
+  onViewportChange: () => void;
+}
+
+/** 每个播放器实例的旋转态（实例卸载时随 cleanup 一并退出） */
+const rotatedStates = new WeakMap<object, RotatedState>();
+
+/** 触屏设备（手机 / 平板）：全屏按钮走旋转横屏而不是浏览器原生全屏 */
+export function isMobilePlayer(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  // 以粗指针为准：触屏笔记本 / Windows 触屏桌面的 maxTouchPoints 也 > 0，
+  // 但它们是鼠标操作，原生全屏更好，不能被误判成手机
+  if (prefersTouchPointer()) return true;
+  // 只在窄视口下用触控点数兜底（媒体查询在个别内嵌 WebView 里不可靠）
+  return (
+    typeof window !== 'undefined' &&
+    window.innerWidth < 640 &&
+    (navigator.maxTouchPoints ?? 0) > 0
+  );
+}
+
+/** 播放器此刻是否处于 CSS 旋转横屏 */
+export function isRotatedFullscreen(art?: object | null): boolean {
+  return Boolean(art && rotatedStates.has(art));
+}
+
+/** 视口尺寸 / 方向变化时重算旋转布局：竖屏转 90°，横屏直接铺满 */
+const applyRotatedLayout = ($player: HTMLDivElement) => {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const portrait = h > w;
+  $player.style.width = `${portrait ? h : w}px`;
+  $player.style.height = `${portrait ? w : h}px`;
+  $player.style.left = portrait ? `${w}px` : '0';
+  $player.style.top = '0';
+  $player.style.transformOrigin = '0 0';
+  $player.style.transform = portrait ? 'rotate(90deg)' : 'none';
+};
+
+/** 进入旋转横屏：脱离原容器挂到 body，fixed 铺满视口并按需旋转 */
+export function enterRotatedFullscreen(art: FullscreenPlayerLike): void {
+  const $player = art.template?.$player;
+  if (!$player || rotatedStates.has(art)) return;
+
+  const state: RotatedState = {
+    parent: $player.parentElement,
+    nextSibling: $player.nextSibling,
+    cssText: $player.style.cssText,
+    bodyOverflow: document.body.style.overflow,
+    onViewportChange: () => applyRotatedLayout($player),
+  };
+  document.body.appendChild($player);
+  $player.style.position = 'fixed';
+  $player.style.zIndex = '9999';
+  $player.style.margin = '0';
+  $player.classList.add('art-rotate-fullscreen');
+  applyRotatedLayout($player);
+  document.body.style.overflow = 'hidden';
+  window.addEventListener('resize', state.onViewportChange);
+  window.addEventListener('orientationchange', state.onViewportChange);
+  rotatedStates.set(art, state);
+  // 控件在 resize 后会重建，让上层补一次图标同步
+  (art as unknown as { emit?: (name: string) => void }).emit?.('resize');
+  syncFullscreenButtonIcon(true);
+}
+
+/** 退出旋转横屏：恢复节点位置、行内样式与页面滚动 */
+export function exitRotatedFullscreen(art: FullscreenPlayerLike): void {
+  const state = rotatedStates.get(art);
+  if (!state) return;
+  rotatedStates.delete(art);
+  window.removeEventListener('resize', state.onViewportChange);
+  window.removeEventListener('orientationchange', state.onViewportChange);
+  const $player = art.template?.$player;
+  if ($player) {
+    $player.classList.remove('art-rotate-fullscreen');
+    $player.style.cssText = state.cssText;
+    if (state.parent) state.parent.insertBefore($player, state.nextSibling);
+    else document.body.appendChild($player);
+  }
+  document.body.style.overflow = state.bodyOverflow;
+  (art as unknown as { emit?: (name: string) => void }).emit?.('resize');
+  syncFullscreenButtonIcon(false);
+}
+
 /** iOS：video 元素正在原生全屏 */
 export function isVideoNativeFullscreen(video?: HTMLVideoElement | null): boolean {
   const v = video as WebkitVideo | null | undefined;
@@ -59,7 +150,8 @@ export function isPlayerFullscreen(art?: FullscreenPlayerLike | null): boolean {
   return (
     isContainerFullscreen() ||
     isVideoNativeFullscreen(art?.video) ||
-    Boolean(art?.fullscreenWeb)
+    Boolean(art?.fullscreenWeb) ||
+    isRotatedFullscreen(art)
   );
 }
 
@@ -71,12 +163,36 @@ export function isPlayerFullscreen(art?: FullscreenPlayerLike | null): boolean {
  */
 export async function togglePlayerFullscreen(
   art: FullscreenPlayerLike,
-  onFallbackToWeb?: () => void
+  onFallbackToWeb?: () => void,
+  onRotatedEnter?: () => void
 ): Promise<void> {
   const video = art.video as WebkitVideo | null;
   const $player = art.template?.$player as WebkitPlayerElement | null | undefined;
 
-  // —— 退出 ——
+  // —— 手机：全屏 = 强制横屏（CSS 旋转），与系统旋转锁无关 ——
+  if (isMobilePlayer()) {
+    if (isRotatedFullscreen(art)) {
+      exitRotatedFullscreen(art);
+      return;
+    }
+    // 从原生全屏形态切过来时先收掉，避免两层全屏叠在一起
+    if (isVideoNativeFullscreen(video)) {
+      try { video?.webkitExitFullscreen?.(); } catch { /* 忽略 */ }
+    }
+    if (isContainerFullscreen()) {
+      try {
+        const doc = document as WebkitDocument;
+        if (doc.exitFullscreen) await doc.exitFullscreen();
+        else await doc.webkitExitFullscreen?.();
+      } catch { /* 忽略 */ }
+    }
+    if (art.fullscreenWeb) art.fullscreenWeb = false;
+    enterRotatedFullscreen(art);
+    onRotatedEnter?.();
+    return;
+  }
+
+  // —— 桌面：容器原生全屏 → iOS video 全屏 → 网页全屏 ——
   if (isVideoNativeFullscreen(video)) {
     try {
       video?.webkitExitFullscreen?.();
@@ -178,5 +294,7 @@ export function bindFullscreenIconSync(
     art.off('resize', sync);
     video?.removeEventListener('webkitbeginfullscreen', sync);
     video?.removeEventListener('webkitendfullscreen', sync);
+    // 组件卸载时若仍在旋转横屏，把播放器节点与样式还回原处再交给 art.destroy
+    exitRotatedFullscreen(art);
   };
 }

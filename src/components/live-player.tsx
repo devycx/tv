@@ -14,6 +14,11 @@ import {
   fullscreenButtonHtml,
   togglePlayerFullscreen,
 } from '@/lib/player-fullscreen';
+import {
+  bindPipIconSync,
+  pipButtonHtml,
+  togglePictureInPicture,
+} from '@/lib/player-picture-in-picture';
 import { GmFetchHlsLoader } from '@/lib/gm-hls-loader';
 import { hasGmFetch } from '@/lib/gm-fetch';
 
@@ -351,8 +356,21 @@ export function LivePlayer({
         click: () => onNextChannel(),
       });
     }
+    // 小窗播放：自定义按钮（不支持时给中文提示，手机上保持可见）
+    controls.push({
+      name: 'pip',
+      position: 'right',
+      index: 40,
+      html: pipButtonHtml,
+      tooltip: '小窗播放',
+      click: () => {
+        togglePictureInPicture(artRef.current, () =>
+          showHint('当前浏览器不支持小窗播放，请用系统浏览器打开')
+        );
+      },
+    });
     // 全屏降级链（lib/player-fullscreen，与点播 player-shell 同一套）：
-    // 库内置按钮只有容器 Fullscreen API 与 iOS video 全屏两条路，国产内核上点了没反应
+    // 手机走 CSS 旋转横屏，桌面走容器全屏 → video 全屏 → 网页全屏
     controls.push({
       name: 'fullscreen',
       position: 'right',
@@ -360,8 +378,10 @@ export function LivePlayer({
       html: fullscreenButtonHtml,
       tooltip: '全屏',
       click: () => {
-        void togglePlayerFullscreen(artRef.current, () =>
-          showHint('当前浏览器不支持全屏，已切换网页全屏')
+        void togglePlayerFullscreen(
+          artRef.current,
+          () => showHint('当前浏览器不支持全屏，已切换网页全屏'),
+          () => showHint('已横屏，再点一次退出')
         );
       },
     });
@@ -380,7 +400,8 @@ export function LivePlayer({
       // 直播态：ArtPlayer 原生 isLive 会不创建进度条/时间控件，并禁用移动端拖进度手势
       isLive: true,
       // —— 直播态：关闭点播专属能力 ——
-      pip: true,
+      // 小窗按钮用自定义控件（见 controls），手机上也可见
+      pip: false,
       screenshot: false,
       setting: false,
       playbackRate: false,
@@ -412,6 +433,7 @@ export function LivePlayer({
     artRef.current = art;
     // 全屏按钮图标随状态同步（容器全屏 / iOS video 全屏 / 网页全屏三种形态都覆盖）
     const unbindFullscreenIcon = bindFullscreenIconSync(art);
+    const unbindPipIcon = bindPipIconSync(art);
     art.on('video:loadedmetadata', () => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -450,6 +472,7 @@ export function LivePlayer({
       disposed = true;
       clearTimeout(startTimer);
       unbindFullscreenIcon();
+      unbindPipIcon();
       if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
       cleanupEngines();
       volumeBoostRef.current?.dispose();

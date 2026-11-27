@@ -158,6 +158,23 @@ body {
   isolation: isolate;
 }
 
+/*
+ * 手机「全屏」= 旋转横屏（lib/player-fullscreen）：播放器被移到 <body> 下，
+ * 用 fixed + rotate(90deg) 铺满视口，绕开系统旋转锁。
+ * 画面按 contain 自适应：不同宽高比的片源留黑边而不是拉伸变形。
+ */
+.art-video-player.art-rotate-fullscreen {
+  z-index: 9999;
+  --art-progress-height: 8px;
+  --art-indicator-size: 20px;
+  --art-control-height: 60px;
+  --art-control-icon-scale: 1.3;
+}
+.art-video-player.art-rotate-fullscreen .art-video,
+.art-video-player.art-rotate-fullscreen[data-aspect-ratio] .art-video {
+  object-fit: contain !important;
+}
+
 /* 品牌渐变字（沿用旧版 LibreTV 的霓虹蓝→霓虹粉） */
 .brand-gradient {
   background: linear-gradient(to right, #00ccff, #ff3c78);
@@ -212,19 +229,19 @@ body {
 
 /*
  * 播放器控制条在窄屏没有多余横向空间：
- * 上/下集控件会把右侧的「网页全屏」「全屏」挤出可视区（手机上表现为图标显示不全）。
+ * 上/下集控件会把右侧的「小窗」「全屏」挤出可视区（手机上表现为图标显示不全）。
  * 只在窄于 640px 时收起这两个控件——手机横屏、平板仍有空间，可以保留。
  * 切集在任何情况下都还能用播放器下方的按钮。
  */
 @media (max-width: 640px) {
-  /* 竖屏空间只够放「播放 + 时间 + 设置 + 网页全屏 + 全屏」：
-     音量交给系统按键，截图与画中画在手机上很少用，一并收起，
-     保证最右侧的全屏按钮完整可见 */
+  /* 竖屏空间只够放「播放 + 时间 + 设置 + 小窗 + 全屏」：
+     音量交给系统按键，截图与上/下集在手机上很少用，一并收起；
+     网页全屏按钮也收起——手机「全屏」就是旋转横屏，两个按钮重复且挤宽度 */
   .art-control-prev-episode,
   .art-control-next-episode,
   .art-control-volume,
   .art-control-screenshot,
-  .art-control-pip {
+  .art-control-fullscreenWeb {
     display: none !important;
   }
 
@@ -238,6 +255,7 @@ body {
   .art-control-playAndPause,
   .art-control-download,
   .art-control-setting,
+  .art-control-pip,
   .art-control-fullscreenWeb,
   .art-control-fullscreen {
     width: 40px !important;

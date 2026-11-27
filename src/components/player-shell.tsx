@@ -23,6 +23,11 @@ import {
   fullscreenButtonHtml,
   togglePlayerFullscreen,
 } from '@/lib/player-fullscreen';
+import {
+  bindPipIconSync,
+  pipButtonHtml,
+  togglePictureInPicture,
+} from '@/lib/player-picture-in-picture';
 import { isConstrainedCacheProfile, loadCacheSettings } from '@/lib/video-cache';
 import { formatTime } from '@/lib/utils';
 import { prefersTouchPointer } from '@/lib/touch-pointer';
@@ -645,7 +650,9 @@ export function PlayerShell({
       type: 'm3u8',
       volume: 0.8,
       autoplay: true,
-      pip: true,
+      // 小窗按钮换成自定义控件：ArtPlayer 内置按钮在不支持时只弹英文 notice，
+      // 且窄屏被 CSS 隐藏；自定义版给中文提示并在手机上显示（见 controls）
+      pip: false,
       autoMini: true,
       screenshot: true,
       setting: true,
@@ -700,16 +707,31 @@ export function PlayerShell({
           click: () => propsRef.current.onDownload?.(),
         },
         {
-          // 全屏降级链（lib/player-fullscreen）：容器原生全屏 → iOS video 全屏 → 网页全屏，
-          // 保证任何手机浏览器点「全屏」都有响应
+          // 小窗播放：手机横屏/竖屏都能把视频挂在屏幕上，边看边做别的事
+          name: 'pip',
+          index: 40,
+          position: 'right',
+          html: pipButtonHtml,
+          tooltip: '小窗播放',
+          click: () => {
+            togglePictureInPicture(artRef.current, () =>
+              showHint('当前浏览器不支持小窗播放，请用系统浏览器打开')
+            );
+          },
+        },
+        {
+          // 全屏降级链（lib/player-fullscreen）：手机 = CSS 旋转横屏（绕开系统旋转锁），
+          // 桌面 = 容器原生全屏 → iOS video 全屏 → 网页全屏，任何浏览器点「全屏」都有响应
           name: 'fullscreen',
           index: 70,
           position: 'right',
           html: fullscreenButtonHtml,
           tooltip: '全屏',
           click: () => {
-            void togglePlayerFullscreen(artRef.current, () =>
-              showHint('当前浏览器不支持全屏，已切换网页全屏')
+            void togglePlayerFullscreen(
+              artRef.current,
+              () => showHint('当前浏览器不支持全屏，已切换网页全屏'),
+              () => showHint('已横屏，再点一次退出')
             );
           },
         },
@@ -742,6 +764,7 @@ export function PlayerShell({
 
     // 全屏按钮图标随状态同步（容器全屏 / iOS video 全屏 / 网页全屏三种形态都覆盖）
     const unbindFullscreenIcon = bindFullscreenIconSync(art);
+    const unbindPipIcon = bindPipIconSync(art);
 
     // 音量放大：起播后（src 已就绪）才挂 Web Audio 增益图，避免空 src / CORS 误判。
     // 默认关闭（设置项 volumeBoost）：不接入时完全不碰音频链路。
@@ -1119,6 +1142,7 @@ export function PlayerShell({
       document.removeEventListener('keydown', shortcuts);
       document.removeEventListener('visibilitychange', saveOnHide);
       unbindFullscreenIcon();
+      unbindPipIcon();
       volumeBoostRef.current?.dispose();
       volumeBoostRef.current = null;
       if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
