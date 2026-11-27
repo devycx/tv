@@ -18,6 +18,11 @@ import {
 } from '@/lib/video-prefetcher';
 import { attachVolumeBoost, type VolumeBoostHandle } from '@/lib/volume-boost';
 import { CONTROL_SHOW_CLASS, syncMiniProgressBar } from '@/lib/mini-progress-bar';
+import {
+  bindFullscreenIconSync,
+  fullscreenButtonHtml,
+  togglePlayerFullscreen,
+} from '@/lib/player-fullscreen';
 import { isConstrainedCacheProfile, loadCacheSettings } from '@/lib/video-cache';
 import { formatTime } from '@/lib/utils';
 import { prefersTouchPointer } from '@/lib/touch-pointer';
@@ -646,7 +651,8 @@ export function PlayerShell({
       setting: true,
       playbackRate: true,
       aspectRatio: true,
-      fullscreen: true,
+      // 「全屏」改用自定义按钮（见 controls）：库内置按钮只有容器 Fullscreen API 与
+      // iOS video 全屏两条路，国产内核（微信 X5 等）上两条都挂，点了没反应
       fullscreenWeb: true,
       // 恒传 true，不跟设置项走：库的 miniProgressBar 插件只在构造时注册、运行时不可换，
       // 而它正是「控制栏显示时摘掉 art-mini-progress-bar」的唯一维护者。设置项只负责
@@ -693,6 +699,20 @@ export function PlayerShell({
           tooltip: '下载本集',
           click: () => propsRef.current.onDownload?.(),
         },
+        {
+          // 全屏降级链（lib/player-fullscreen）：容器原生全屏 → iOS video 全屏 → 网页全屏，
+          // 保证任何手机浏览器点「全屏」都有响应
+          name: 'fullscreen',
+          index: 70,
+          position: 'right',
+          html: fullscreenButtonHtml,
+          tooltip: '全屏',
+          click: () => {
+            void togglePlayerFullscreen(artRef.current, () =>
+              showHint('当前浏览器不支持全屏，已切换网页全屏')
+            );
+          },
+        },
       ],
       // 播放器齿轮菜单里的「自动连播」：artplayer 原生 switch 设置项，
       // 与设置抽屉里的同名开关共用同一份 store 状态（双向同步见下方 effect）。
@@ -719,6 +739,9 @@ export function PlayerShell({
       },
     });
     artRef.current = art;
+
+    // 全屏按钮图标随状态同步（容器全屏 / iOS video 全屏 / 网页全屏三种形态都覆盖）
+    const unbindFullscreenIcon = bindFullscreenIconSync(art);
 
     // 音量放大：起播后（src 已就绪）才挂 Web Audio 增益图，避免空 src / CORS 误判。
     // 默认关闭（设置项 volumeBoost）：不接入时完全不碰音频链路。
@@ -966,7 +989,8 @@ export function PlayerShell({
           current.toggle(); showHint('播放/暂停'); e.preventDefault();
           break;
         case 'f': case 'F':
-          current.fullscreen = !current.fullscreen; e.preventDefault();
+          // 与控制条按钮同一条降级链：容器全屏失败时也能落到 video/网页全屏
+          void togglePlayerFullscreen(current); e.preventDefault();
           break;
         // 标记类快捷键一律要求 Shift：这几键会直接写盘并影响整部剧，
         // 单键太容易误触（误记片头 = 之后每集都被跳过一大段）
@@ -1094,6 +1118,7 @@ export function PlayerShell({
       }
       document.removeEventListener('keydown', shortcuts);
       document.removeEventListener('visibilitychange', saveOnHide);
+      unbindFullscreenIcon();
       volumeBoostRef.current?.dispose();
       volumeBoostRef.current = null;
       if (hintTimerRef.current) clearTimeout(hintTimerRef.current);

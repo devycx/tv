@@ -9,6 +9,11 @@ import { buildMediaInfo, type MediaArtwork } from '@/lib/media-session';
 import { prefersTouchPointer } from '@/lib/touch-pointer';
 import { ART_DEFAULT_CONTROL_HIDE_MS, TOUCH_CONTROL_HIDE_MS } from '@/lib/control-hide';
 import { attachVolumeBoost, type VolumeBoostHandle } from '@/lib/volume-boost';
+import {
+  bindFullscreenIconSync,
+  fullscreenButtonHtml,
+  togglePlayerFullscreen,
+} from '@/lib/player-fullscreen';
 import { GmFetchHlsLoader } from '@/lib/gm-hls-loader';
 import { hasGmFetch } from '@/lib/gm-fetch';
 
@@ -346,6 +351,20 @@ export function LivePlayer({
         click: () => onNextChannel(),
       });
     }
+    // 全屏降级链（lib/player-fullscreen，与点播 player-shell 同一套）：
+    // 库内置按钮只有容器 Fullscreen API 与 iOS video 全屏两条路，国产内核上点了没反应
+    controls.push({
+      name: 'fullscreen',
+      position: 'right',
+      index: 70,
+      html: fullscreenButtonHtml,
+      tooltip: '全屏',
+      click: () => {
+        void togglePlayerFullscreen(artRef.current, () =>
+          showHint('当前浏览器不支持全屏，已切换网页全屏')
+        );
+      },
+    });
     // 触屏没有 hover，原生 3 秒自动隐藏会让直播控制栏（上一台/下一台）点不到
     // （issue #937）：触屏常驻、由点按视频 toggle 收起；桌面行为不变
     const touchPointer = prefersTouchPointer();
@@ -366,7 +385,7 @@ export function LivePlayer({
       setting: false,
       playbackRate: false,
       aspectRatio: false,
-      fullscreen: true,
+      // 「全屏」改用上面的自定义按钮（fullscreen 降级链），不用库内置按钮
       fullscreenWeb: true,
       miniProgressBar: false,
       hotkey: false,
@@ -391,6 +410,8 @@ export function LivePlayer({
       },
     });
     artRef.current = art;
+    // 全屏按钮图标随状态同步（容器全屏 / iOS video 全屏 / 网页全屏三种形态都覆盖）
+    const unbindFullscreenIcon = bindFullscreenIconSync(art);
     art.on('video:loadedmetadata', () => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -428,6 +449,7 @@ export function LivePlayer({
     return () => {
       disposed = true;
       clearTimeout(startTimer);
+      unbindFullscreenIcon();
       if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
       cleanupEngines();
       volumeBoostRef.current?.dispose();
